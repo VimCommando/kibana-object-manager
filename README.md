@@ -18,7 +18,7 @@ $ ln -s ~/github/kibana-object-manager/src/kibob.js ~/bin/kibob
 
 ## Usage
 
-#### Import saved objects into Kibana
+### Import saved objects into Kibana
 
 Take the `saved_objects.ndjson` file and import it through Kibana's [saved objects API](https://www.elastic.co/guide/en/kibana/master/saved-objects-api-import.html)
 
@@ -32,7 +32,7 @@ kibob import -u <kibana_url> -f <saved_objects.ndjson>
 - `-o | --overwrite` - clobber any existing saved objects.
 - `-u | --url` - Kibana URL, default: `http://localhost:5601`
 
-#### Export saved objects from Kibana
+### Export saved objects from Kibana
 
 Use Kibana's [find API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-find.html) to search for objects to export.
 
@@ -47,7 +47,7 @@ kibob export -u <kibana_url> -s <search_term>
 - `-f | --file` - filename to write to, default: `saved_objects.ndjson`
 - `-u | --url` - Kibana URL, default: `http://localhost:5601`
 
-#### Bundle directory of files into a single .ndjson file
+### Bundle directory of files into a single .ndjson file
 
 Read in a directory full of `.json` files and bundle it into a single `.ndjson` file.
 
@@ -60,7 +60,7 @@ kibob bundle -d <dir> -f <bundle.ndjson>
 - `-d | --dir` - Directory to bundle into a single file
 - `-f | --file` - filename to write to, default: `saved_objects.ndjson`
 
-#### Unbundle saved objects into individual files
+### Unbundle saved objects into individual files
 
 Take the single `.ndjson` file and split it into pretty-printed `.json` files.
 
