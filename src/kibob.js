@@ -36,8 +36,8 @@ const argv = yargs
         description: 'Array of types to export',
         type: 'string',
         array: true,
-        default: ['index-pattern','visualization','lens','dashboard'],
-      }
+        default: ['index-pattern', 'visualization', 'lens', 'dashboard'],
+      },
     },
     async (argv) => {
       setLogger(argv);
@@ -61,8 +61,7 @@ const argv = yargs
       },
       overwrite: {
         alias: 'o',
-        description:
-          'forces overwrite of existing objects',
+        description: 'forces overwrite of existing objects',
         type: 'boolean',
         default: false,
       },
@@ -75,7 +74,7 @@ const argv = yargs
     },
     (argv) => {
       setLogger(argv);
-      importObjects(argv)
+      importObjects(argv);
     }
   )
   .command(
@@ -189,9 +188,8 @@ async function findObjects(argv) {
   const url = new URL(argv.url);
   url.pathname = '/api/saved_objects/_find';
   url.search = '?per_page=1000';
-  for (const type of argv.types)
-    url.search += `&type=${type}`
-  url.search
+  for (const type of argv.types) url.search += `&type=${type}`;
+  url.search;
   url.search += argv.search ? `&search=${argv.search}` : '';
 
   logger.verbose('url.search: ' + url.search);
@@ -207,7 +205,9 @@ async function findObjects(argv) {
     const res = await fetch(url, { ...options });
     body = await res.json();
     if (res.status === 200) {
-      logger.info(`${res.status} ${res.statusText} Found: ${body.saved_objects.length} objects`);
+      logger.info(
+        `${res.status} ${res.statusText} Found: ${body.saved_objects.length} objects`
+      );
     } else {
       logger.error(`${res.status} ${res.statusText} Error: ${body}`);
     }
@@ -220,9 +220,9 @@ async function findObjects(argv) {
 // Write an array of JSON objects into an .ndjson file
 async function saveObjects(filename, saved_objects) {
   let text = '';
-  saved_objects.forEach(obj => {
+  saved_objects.forEach((obj) => {
     text += JSON.stringify(obj) + '\n';
-  })
+  });
   try {
     const data = new Uint8Array(Buffer.from(text));
     await fs.writeFile(filename, data);
@@ -266,18 +266,20 @@ async function unbundleObjects(argv) {
   try {
     const buffer = await fs.readFile(argv.file, 'binary');
     await fs.mkdir(path);
-    
+
     buffer.split('\n').forEach(async (obj) => {
       try {
         const json = obj && JSON.parse(obj);
-        if(json.type) {
+        if (json.type) {
           const filename = `${json.attributes.title}.${json.type}.json`;
           logger.debug(filename);
-          const data = new Uint8Array(Buffer.from(JSON.stringify(json, null, 2)));
+          const data = new Uint8Array(
+            Buffer.from(JSON.stringify(json, null, 2))
+          );
           await fs.writeFile(`${path}/${filename}`, data);
         }
       } catch (SyntaxError) {
-        console.log(SyntaxError)
+        console.log(SyntaxError);
         logger.debug(`Failed to parse: ${SyntaxError}`);
       }
     });

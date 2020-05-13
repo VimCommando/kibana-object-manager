@@ -6,7 +6,17 @@ These objects can be unbundled into individual `.json` files for easy version tr
 
 Or bundled from multiple files into a single `.ndjson` for easy distribution or import.
 
-### Usage
+## Installation
+
+1. Clone this repository to your local machine
+2. Run `npm install` from the `/src` directory
+3. Symlink the `kibob.js` file into your executable path:
+
+```
+$ ln -s ~/github/kibana-object-manager/src/kibob.js ~/bin/kibob
+```
+
+## Usage
 
 #### Import saved objects into Kibana
 
