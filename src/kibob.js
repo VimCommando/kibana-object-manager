@@ -265,7 +265,7 @@ async function unbundleObjects(argv) {
   const path = argv.dir;
   try {
     const buffer = await fs.readFile(argv.file, 'binary');
-    await fs.mkdir(path);
+    await fs.mkdir(path, {recursive: true});
 
     buffer.split('\n').forEach(async (obj) => {
       try {
