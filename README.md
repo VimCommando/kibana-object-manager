@@ -36,6 +36,8 @@ kibob import -u <kibana_url> -f <saved_objects.ndjson>
 
 Use Kibana's [find API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-find.html) to search for objects to export.
 
+The saved object will strip the `updated_at` and `version` fields; as this causes conflicts with your source control versioning.
+
 ```
 kibob export -u <kibana_url> -s <search_term>
 ```

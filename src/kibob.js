@@ -36,7 +36,7 @@ const argv = yargs
         description: 'Array of types to export',
         type: 'string',
         array: true,
-        default: ['index-pattern', 'visualization', 'lens', 'dashboard'],
+        default: ['index-pattern', 'visualization', 'lens', 'dashboard', 'canvas-workpad'],
       },
     },
     async (argv) => {
@@ -219,9 +219,11 @@ async function findObjects(argv) {
 
 // Write an array of JSON objects into an .ndjson file
 async function saveObjects(filename, saved_objects) {
+  const withoutVersion = R.omit(['version', 'updated_at']);
   let text = '';
+
   saved_objects.forEach((obj) => {
-    text += JSON.stringify(obj) + '\n';
+    text += JSON.stringify(withoutVersion(obj)) + '\n';
   });
   try {
     const data = new Uint8Array(Buffer.from(text));
@@ -265,7 +267,7 @@ async function unbundleObjects(argv) {
   const path = argv.dir;
   try {
     const buffer = await fs.readFile(argv.file, 'binary');
-    await fs.mkdir(path, {recursive: true});
+    await fs.mkdir(path, { recursive: true });
 
     buffer.split('\n').forEach(async (obj) => {
       try {
