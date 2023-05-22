@@ -1,3 +1,6 @@
+> ⚠️ NOTICE ⚠️ \
+> This project is deprecated. All of the useful JSON processing is now handled by [`json-remix`](https://github.com/VimCommando/json-remix). So you can pull the saved objects from Kibana (either the UI or API) and post-process them with `json-remix` instead.
+
 # Kibana Object Manager
 
 A small utility to import and export Kibana saved objects through the Kibana [import object API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-import.html) and [export objects API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-export.html)
