@@ -3,7 +3,7 @@ const R = require('ramda');
 const fs = require('fs').promises;
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const path = require('path');
+// const path = require('path');
 const yargs = require('yargs');
 
 const logger = require('./logger.js').label('kibob');
@@ -30,6 +30,10 @@ const argv = yargs
       search: {
         alias: 's',
         description: 'Search term to find objects by',
+      },
+      tagId: {
+        alias: 'ti',
+        description: 'Tag ID to filter by',
       },
       types: {
         alias: 't',
@@ -186,13 +190,18 @@ async function importObjects(argv) {
 async function findObjects(argv) {
   let body = {};
   const url = new URL(argv.url);
-  url.pathname = '/api/saved_objects/_find';
-  url.search = '?per_page=1000';
+  url.pathname = '/api/kibana/management/saved_objects/_find';
+  url.search = '?perPage=1000';
+  // I don't understand why this doesn't work with or without URI encoding ¯\_(ツ)_/¯
+  // url.search += argv.types ? `&type=${encodeURIComponent(argv.types)}` : '';
+  // So we do the ugly multi-'&type' instead
   for (const type of argv.types) url.search += `&type=${type}`;
-  url.search;
   url.search += argv.search ? `&search=${argv.search}` : '';
+  if (argv.tagId) {
+    url.search += '&hasReference=' + encodeURIComponent(`[{"type":"tag","id":"${argv.tagId}"}]`);
+  }
 
-  logger.verbose('url.search: ' + url.search);
+  logger.verbose('url: ' + url);
 
   const options = {
     method: 'GET',
@@ -209,7 +218,7 @@ async function findObjects(argv) {
         `${res.status} ${res.statusText} Found: ${body.saved_objects.length} objects`
       );
     } else {
-      logger.error(`${res.status} ${res.statusText} Error: ${body}`);
+      logger.error(`${res.status} ${res.statusText} Error: ${JSON.stringify(body)}`);
     }
   } catch (FetchError) {
     logger.error(`${FetchError.message}`);
@@ -219,11 +228,14 @@ async function findObjects(argv) {
 
 // Write an array of JSON objects into an .ndjson file
 async function saveObjects(filename, saved_objects) {
-  const withoutVersion = R.omit(['version', 'updated_at']);
+  const omitVersion = R.omit(['version', 'updated_at']);
+  const omitEmptyAttributes = json => {
+    return R.isEmpty(json.attributes) ? R.omit(['attributes'])(json) : json;
+  }
   let text = '';
 
   saved_objects.forEach((obj) => {
-    text += JSON.stringify(withoutVersion(obj)) + '\n';
+    text += JSON.stringify(omitVersion(obj)) + '\n';
   });
   try {
     const data = new Uint8Array(Buffer.from(text));
@@ -265,6 +277,7 @@ async function exportObjects(argv) {
 // Convert .ndjson file into separate .json files
 async function unbundleObjects(argv) {
   const path = argv.dir;
+  logger.debug(`Unbundling to ${argv.dir}`);
   try {
     const buffer = await fs.readFile(argv.file, 'binary');
     await fs.mkdir(path, { recursive: true });
@@ -272,9 +285,11 @@ async function unbundleObjects(argv) {
     buffer.split('\n').forEach(async (obj) => {
       try {
         const json = obj && JSON.parse(obj);
+        logger.debug(`unbundle: ${JSON.stringify(json,null,2)}`);
         if (json.type) {
-          const filename = `${json.attributes.title}.${json.type}.json`;
-          logger.debug(filename);
+          const name = json.attributes ? json.attributes.title || json.attributes.name : json.meta && json.meta.title
+          const filename = `${name}.${json.type}.json`;
+          logger.verbose(filename);
           const data = new Uint8Array(
             Buffer.from(JSON.stringify(json, null, 2))
           );
@@ -282,7 +297,7 @@ async function unbundleObjects(argv) {
         }
       } catch (SyntaxError) {
         console.log(SyntaxError);
-        logger.debug(`Failed to parse: ${SyntaxError}`);
+        logger.warn(`Failed to parse: ${SyntaxError}`);
       }
     });
   } catch (err) {
