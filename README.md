@@ -1,89 +1,147 @@
-> ⚠️ NOTICE ⚠️ \
-> This project is deprecated. All of the useful JSON processing is now handled by [`json-remix`](https://github.com/VimCommando/json-remix). So you can pull the saved objects from Kibana (either the UI or API) and post-process them with `json-remix` instead.
+# Kibana Object Manager CLI Documentation
 
-# Kibana Object Manager
+A complete _revival_ and **rewrite** of the Kibana Object Manager plugin.
 
-A small utility to import and export Kibana saved objects through the Kibana [import object API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-import.html) and [export objects API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-export.html)
+## Quick Start
+The intent of `kibob` is to provide a Git-inspired interface for managing Kibana saved objects.
 
-These objects can be unbundled into individual `.json` files for easy version tracking in a git repository.
+### Dependencies
+This script depends on a few other command-line utilities:
+1. `jsrmx` - bundle and unbundle NDJSON: https://github.com/elastic/jsrmx
+2. `curl` - make HTTP requests to Kibana: https://curl.se/
+3. `jq` - format, parse, and update JSON: https://stedolan.github.io/jq/
+4. `grep` - filtering and searching text: https://www.gnu.org/software/grep/
 
-Or bundled from multiple files into a single `.ndjson` for easy distribution or import.
+Almost every modern unix-based system has `grep` and `curl` installed. You'll find `jq` in every package repo. For `jsrmx` the easiest way is through Rust's `cargo` package manager at [https://doc.rust-lang.org/cargo/getting-started/installation.html](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
-## Installation
+### Initial Repository Setup
+1. Clone this repository
+2. Symlink `kibob` to your `$PATH`
+3. Download an `export.ndjson` from Kibana into a new folder
+4. In the new folder, run `git init` to initialize a new Git repository
+5. Now run `kibob init` to slice up the `export.ndjson` into separate files with a `manifest.json`
+6. Use `git add .` and `git commit -m "Initial commit"`
 
-1. Clone this repository to your local machine
-2. Run `npm install` from the `/src` directory
-3. Symlink the `kibob.js` file into your executable path:
+You're now tracking your Kibana objects with source control!
 
-```
-$ ln -s ~/github/kibana-object-manager/src/kibob.js ~/bin/kibob
-```
+### Pull changes directly from Kibana
+1. Copy the `dotenv/localhost` to a `.env` file in your new repo
+2. Update with your Kibana URL and credentials
+3. Use `kibob pull` to fetch updates to any objects listed in the `manifest.json`
 
-## Usage
+Now use your favorite Git client to review the changes, add and commit as normal.
 
-### Import saved objects into Kibana
+### Push changes back to Kibana
+Any changes made in the repository can be pushed back to Kibana using `kibob push`. Where this is most useful is across different environments, such as development and production. Simply make a different `.env` file for each environment.
 
-Take the `saved_objects.ndjson` file and import it through Kibana's [saved objects API](https://www.elastic.co/guide/en/kibana/master/saved-objects-api-import.html)
+For example use the default `.env` for your development environment, and create an `.env-prod` for your production environment.
 
-```
-kibob import -u <kibana_url> -f <saved_objects.ndjson>
-```
-
-**Options**
-
-- `-f | --file` - filename to load
-- `-o | --overwrite` - clobber any existing saved objects.
-- `-u | --url` - Kibana URL, default: `http://localhost:5601`
-
-### Export saved objects from Kibana
-
-Use Kibana's [find API](https://www.elastic.co/guide/en/kibana/current/saved-objects-api-find.html) to search for objects to export.
-
-The saved object will strip the `updated_at` and `version` fields; as this causes conflicts with your source control versioning.
-
-```
-kibob export -u <kibana_url> -s <search_term>
+```sh
+kibob pull
+kibob push --env .env-prod
 ```
 
-**Options**
+This will pull all the objects listed in the `manifest.json` from your dev cluster and push them to your prod cluster! By default all objects are imported with the `managed: true` flag set, so no changes can be made directoy in production.
 
-- `-s | --search` - Query term to filter objects (tip: prefix your objects!)
-- `-t | --types` - Array of object types to export, default: `index-pattern visualization lens dashboard`
-- `-f | --file` - filename to write to, default: `saved_objects.ndjson`
-- `-u | --url` - Kibana URL, default: `http://localhost:5601`
+## CLI Reference
+Kibana Object Manager: `--{kibob}->` is the Git-flavored side dish to prepare Kibana saved objects for version control!
 
-### Bundle directory of files into a single .ndjson file
-
-Read in a directory full of `.json` files and bundle it into a single `.ndjson` file.
-
+### Usage
 ```
-kibob bundle -d <dir> -f <bundle.ndjson>
+kibob <command> [options] <arguments>
 ```
 
-**Options**
+### Commands
+- `init`    Slice up an `export.ndjson` into objects files and create a `manifest.json`
+- `auth`    Test authorization to a Kibana remote
+- `pull`    Fetch saved objects from a Kibana remote
+- `push`    Update saved objects in a Kibana remote
+- `add`     Add saved objects to the manifest
+- `togo`    Order your Kibana objects to go! (bundle an NDJSON for distribution)
+- `help`    Get detailed help, use a command name as the argument
 
-- `-d | --dir` - Directory to bundle into a single file
-- `-f | --file` - filename to write to, default: `saved_objects.ndjson`
+### Global Options
+- `-e, --env <ENV>` - The dotenv file to source credentials from (default `.env`)
+- `--debug` - More verbose logging and retention of temporary files
 
-### Unbundle saved objects into individual files
-
-Take the single `.ndjson` file and split it into pretty-printed `.json` files.
+## Add Command
 
 ```
-kibob unbundle -f <saved_objects.ndjson> -d <dir>
+kibob add [output_dir]
 ```
 
-Output files will be named:
+Add an object to the menu, err, repository. Exports saved objects by ID, including related objects. Adds entries to the `[output_dir]/manifest.json` and moves objects into `<output_dir>/objects/*.json`
 
+**Options:**
+- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
+- `-o, --objects <IDS>` - Comma-separated list of `"type=uuid"` objects to export from Kibana
+- `-f, --file <FILE>`   - Filename of an `export.ndjson` to merge into existing manifest
+
+**Arguments:**
+- `[output_dir]`        - Directory to save the exported objects to. Must contain a `manifest.json` file. (default `.`)
+
+## Auth command
 ```
-${dir}/${object.title}.${object.type}.json
+kibob auth
 ```
 
-**Options**
+Tests the Kibana authorization configuration
 
-- `-d | --dir` - Directory to write individual `.json` files to
-- `-f | --file` - filename to read from, default: `saved_objects.ndjson`
+**Options:**
+- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
 
-## Compatibility
+## Init command
+```
+kibob init [export] [manifest_file]
+```
 
-This has only been tested against Kibana 7.6
+Initializes a Kibana object repository from an `export.ndjson`.
+
+**Options:**
+- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
+
+**Arguments:**
+- `[export]`            - An NDJSON file or directory with an `export.ndjson` to build a manifest file from (default: `export.ndjson`)
+- `[manifest_file]`     - The manifest file to generate (default: `manifest.json`)
+
+## Pull Command
+```
+kibob pull [output_dir]
+```
+
+Export and unbundle the Kibana saved objects listed in `[output_dir]/manifest.json` into `[output_dir]/objects/*.json` objects.
+
+**Options:**
+- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
+
+**Arguments:**
+- `[output_dir]`        - Directory to save exported objects to. Must contain a `manifest.json` file.
+
+### Push Command
+```
+kibob push [input_dir]
+```
+
+Bundle up the `[input_dir]/objects/*.json` objects to go and deliver them to Kibana!
+
+**Options:**
+- `-e, --env <ENV>`       - The dotenv file to source credentials from (default `.env`)
+- `-c, --clean <bool>`    - Keep the temporary files and directories. (default: `true`)
+- `-m, --managed <bool>`  - Set `"managed: false"` to allow direct editing in Kibana. (Default: `true`)
+
+**Arguments:**
+- `[input_dir]`           - A directory containing the `manifest.json` file to import. (default: `.`)
+
+### Togo Command
+```
+kibob togo [input_dir]
+```
+
+Bundle up the `[input_dir]/objects/*.json` objects into a distributable NDJSON file named `${input_dir}.ndjson`
+
+**Options:**
+- `-e, --env <ENV>`      - The dotenv file to source credentials from (default `.env`)
+- `-m, --managed <bool>` - Set `"managed: false"` to allow direct editing in Kibana. (Default: `true`)
+
+**Arguments:**
+- `[input_dir]`         - Directory containing the objects to bundle (default: `.`)
