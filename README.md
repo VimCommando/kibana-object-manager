@@ -7,7 +7,7 @@ The intent of `kibob` is to provide a Git-inspired interface for managing Kibana
 
 ### Dependencies
 This script depends on a few other command-line utilities:
-1. `jsrmx` - bundle and unbundle NDJSON: https://github.com/elastic/jsrmx
+1. `jsrmx` - bundle and unbundle NDJSON: https://github.com/VimCommando/jsrmx
 2. `curl` - make HTTP requests to Kibana: https://curl.se/
 3. `jq` - format, parse, and update JSON: https://stedolan.github.io/jq/
 4. `grep` - filtering and searching text: https://www.gnu.org/software/grep/
