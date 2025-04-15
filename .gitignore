@@ -1,2 +1,9 @@
+# Added by cargo
+/target
+# Added by --{kibob}-> (Kibana Object Manager)
 .env*
-target/
+export.ndjson
+import.ndjson
+import/
+response.json
+manifest_patch.json
