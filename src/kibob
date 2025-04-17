@@ -143,7 +143,6 @@ function source_env_file() {
         log_debug "Sourcing $(gray "${env_file}")"
         source "${env_file}"
     fi
-    export managed=${managed_arg:-${managed:-true}}
 }
 
 # ----- Command: Add -----
@@ -338,7 +337,7 @@ function update_gitignore() {
         echo ".env*" >> .gitignore
         echo "export.ndjson" >> .gitignore
         echo "import.ndjson" >> .gitignore
-        echo "import/" >> .gitignore
+        echo ".import/" >> .gitignore
         echo "response.json" >> .gitignore
         echo "manifest_patch.json" >> .gitignore
         echo "${end_comment}" >> .gitignore
@@ -492,16 +491,18 @@ function validate_import_directories() {
     fi
 }
 
-# Checks ${managed}, reads from ${objects_dir} and writes files to ${import_dir}
+# Checks ${managed_arg}, reads from ${objects_dir} and writes files to ${import_dir}
 function pre_process_objects() {
+    local managed=${managed_arg:-${managed:-true}}
     log_info "Setting saved objects as $(cyan managed=${managed})."
     if [ "${managed}" = true ]; then
         log_debug "Setting files in $(gray "${import_dir}") as $(cyan 'managed: true')"
-        for file in "${objects_dir}"/*.json; do
+        for file in "${objects_dir}"/.*.json "${objects_dir}"/*.json; do
             jq '. + { "managed": true }' "${file}" > "${import_dir}/$(basename "${file}")"
         done
     else
         log_debug "Copying files from $(gray "${objects_dir}") to $(gray "${import_dir}")"
+        cp "${objects_dir}"/.*.json "${import_dir}/"
         cp "${objects_dir}"/*.json "${import_dir}/"
     fi
 }
@@ -541,7 +542,7 @@ function import_saved_objects() {
 # Uses ${manifest_dir}
 function command_push() {
     declare manifest_file="${manifest_dir}/manifest.json"
-    declare import_dir="${manifest_dir}/import"
+    declare import_dir="${manifest_dir}/.import"
     declare import_file="${manifest_dir}/import.ndjson"
     declare objects_dir="${manifest_dir}/objects"
     declare response_file="${manifest_dir}/response.json"
@@ -575,7 +576,7 @@ function print_help_togo() {
 # Uses ${manifest_dir} and ${import_file}
 function command_togo() {
     declare manifest_file="${manifest_dir}/manifest.json"
-    declare import_dir="${manifest_dir}/import"
+    declare import_dir="${manifest_dir}/.import"
     declare objects_dir="${manifest_dir}/objects"
 
     validate_import_directories \
