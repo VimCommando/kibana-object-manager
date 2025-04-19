@@ -76,8 +76,8 @@ function print_help_main() {
     echo "    $(green help)    Get detailed help, use a command name as the <argument>"
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>   - The dotenv file to source credentials from (default $(gray ".env"))"
-    echo "        --debug       - More verbose logging and retention of temporary files"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
+    echo "        --debug            - More verbose logging and retention of temporary files"
 }
 
 # Checks if required CLI tools are executable
@@ -154,9 +154,9 @@ function print_help_add () {
     echo "    Adds entries to the $(gray '[output_dir]/manifest.json') and moves objects into $(gray "<output_dir>/objects/*.json")"
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>     - The dotenv file to source credentials from (default $(gray ".env"))"
-    echo "    -o, --objects <IDS> - Comma-separated list of $(gray '"type=uuid"') objects to export from Kibana"
-    echo "    -f, --file <FILE>   - Filename of an $(gray export.ndjson) to merge into existing manifest"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") to source credentials from (default $(gray ".env"))"
+    echo "    -o, --objects <IDS>    - Comma-separated list of $(gray '"type=uuid"') objects to export from Kibana"
+    echo "    -f, --file <FILE>      - Filename of an $(gray export.ndjson) to merge into existing manifest"
     echo
     echo "$(white "Arguments:")"
     echo "    [output_dir]        - Directory to save the exported objects to. Must contain a $(gray "manifest.json") file. (default $(gray "."))"
@@ -252,7 +252,7 @@ function print_help_auth () {
     echo "    Tests the Kibana authorization configuration"
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>     - The dotenv file to source credentials from (default $(gray ".env"))"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
     echo
 }
 
@@ -287,7 +287,7 @@ function print_help_init () {
     echo "    Initializes a Kibana object repository from an $(gray "export.ndjson")."
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>     - The dotenv file to source credentials from (default $(gray ".env"))"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
     echo
     echo "$(white "Arguments:")"
     echo "    [export]            - An NDJSON file or directory with an $(gray export.ndjson) to build a manifest file from (default: $(gray "export.ndjson"))"
@@ -363,7 +363,7 @@ function print_help_pull () {
     echo "    Export and unbundle the Kibana saved objects listed in $(gray '[output_dir]/manifest.json') into $(gray '[output_dir]/objects/*.json') objects."
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>     - The dotenv file to source credentials from (default $(gray ".env"))"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
     echo
     echo "$(white "Arguments:")"
     echo "    [output_dir]        - Directory to save exported objects to. Must contain a $(gray 'manifest.json') file."
@@ -434,7 +434,7 @@ function unbundle_saved_objects() {
 # Drop fields in ${export_file} we don't want tracked in version control
 function drop_fields() {
     log_info "Dropping untracked fields"
-    jq -c 'del(.created_at, .created_by, .managed, .updated_at, .updated_by, .version)' "${export_file}" > "${export_file}.tmp"
+    jq -c 'del(.created_at, .created_by, .count, .managed, .updated_at, .updated_by, .version)' "${export_file}" > "${export_file}.tmp"
     mv "${export_file}.tmp" "${export_file}"
 }
 
@@ -461,9 +461,9 @@ function print_help_push() {
     echo "    Bundle up the $(gray '[input_dir]/objects/*.json') objects to go and deliver them to Kibana!"
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>       - The dotenv file to source credentials from (default $(gray ".env"))"
-    echo "    -c, --clean <bool>    - Keep the temporary files and directories. (default: $(gray "true"))"
-    echo "    -m, --managed <bool>  - Set $(gray '"managed: false"') to allow direct editing in Kibana. (Default: $(gray "true"))"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
+    echo "    -c, --clean <bool>     - Keep the temporary files and directories. (default: $(gray "true"))"
+    echo "    -m, --managed <bool>   - Set $(gray '"managed: false"') to allow direct editing in Kibana. (Default: $(gray "true"))"
     echo
     echo "$(white "Arguments:")"
     echo "    [input_dir]           - A directory containing the $(gray manifest.json) file to import. (default: $(gray "."))"
@@ -494,16 +494,19 @@ function validate_import_directories() {
 # Checks ${managed_arg}, reads from ${objects_dir} and writes files to ${import_dir}
 function pre_process_objects() {
     local managed=${managed_arg:-${managed:-true}}
+    local IFS=$'\n';
+    local files=($(ls -A objects/ | grep -e ".json$"))
     log_info "Setting saved objects as $(cyan managed=${managed})."
     if [ "${managed}" = true ]; then
         log_debug "Setting files in $(gray "${import_dir}") as $(cyan 'managed: true')"
-        for file in "${objects_dir}"/.*.json "${objects_dir}"/*.json; do
-            jq '. + { "managed": true }' "${file}" > "${import_dir}/$(basename "${file}")"
+        for file in "${files[@]}"; do
+            jq '. + { "managed": true }' "${objects_dir}/${file}" > "${import_dir}/$(basename "${file}")"
         done
     else
         log_debug "Copying files from $(gray "${objects_dir}") to $(gray "${import_dir}")"
-        cp "${objects_dir}"/.*.json "${import_dir}/"
-        cp "${objects_dir}"/*.json "${import_dir}/"
+        for file in "${files[@]}"; do
+            cp "${objects_dir}/${file}" "${import_dir}/"
+        done
     fi
 }
 
@@ -554,7 +557,7 @@ function command_push() {
     && import_saved_objects \
     && cleanup "${import_dir}" "${import_file}" "${manifest_dir}/response.json"
 
-    log_info "Imported $(cyan ${success_count}) of $(cyan ${count}) saved objects to ${env_file}"
+    log_info "Imported $(cyan ${success_count}) of $(cyan ${count}) saved objects to $(gray ${env_file})"
 }
 
 # ----- Command: Togo -----
@@ -565,8 +568,8 @@ function print_help_togo() {
     echo "    Bundle up the $(gray '[input_dir]/objects/*.json') objects into a distributable NDJSON file named $(gray '${input_dir}.ndjson')"
     echo
     echo "$(white "Options:")"
-    echo "    -e, --env <ENV>      - The dotenv file to source credentials from (default $(gray ".env"))"
-    echo "    -m, --managed <bool> - Set $(cyan '"managed: false"') to allow direct editing in Kibana. (Default: $(gray "true"))"
+    echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") to source credentials from (default $(gray ".env"))"
+    echo "    -m, --managed <bool>   - Set $(cyan '"managed: false"') to allow direct editing in Kibana. (Default: $(gray "true"))"
     echo
     echo "$(white "Arguments:")"
     echo "    [input_dir]         - Directory containing the objects to bundle (default: $(gray "."))"
@@ -613,7 +616,11 @@ while [[ $# -gt 0 ]]; do
         -e|--env)
             shift
             if [[ $# -gt 0 ]]; then
-                env_file="${1}"
+                if [[ "$1" =~ ^\.env.* ]]; then
+                    env_file="${1}"
+                else
+                    env_file=".env.${1}"
+                fi
             else
                 log_error "missing environment file"
                 exit 1

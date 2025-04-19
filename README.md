@@ -34,11 +34,11 @@ Now use your favorite Git client to review the changes, add and commit as normal
 ### Push changes back to Kibana
 Any changes made in the repository can be pushed back to Kibana using `kibob push`. Where this is most useful is across different environments, such as development and production. Simply make a different `.env` file for each environment.
 
-For example use the default `.env` for your development environment, and create an `.env-prod` for your production environment.
+For example use the default `.env` for your development environment, and create an `.env.prod` for your production environment.
 
 ```sh
 kibob pull
-kibob push --env .env-prod
+kibob push --env prod
 ```
 
 This will pull all the objects listed in the `manifest.json` from your dev cluster and push them to your prod cluster! By default all objects are imported with the `managed: true` flag set, so no changes can be made directoy in production.
@@ -61,8 +61,8 @@ kibob <command> [options] <arguments>
 - `help`    Get detailed help, use a command name as the argument
 
 ### Global Options
-- `-e, --env <ENV>` - The dotenv file to source credentials from (default `.env`)
-- `--debug` - More verbose logging and retention of temporary files
+- `-e, --env <NAME|FILE>` - The `.env.NAME` or `FILE` file to source credentials from (default `.env`)
+- `--debug`               - More verbose logging and retention of temporary files
 
 ## Add Command
 
@@ -73,7 +73,6 @@ kibob add [output_dir]
 Add an object to the menu, err, repository. Exports saved objects by ID, including related objects. Adds entries to the `[output_dir]/manifest.json` and moves objects into `<output_dir>/objects/*.json`
 
 **Options:**
-- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
 - `-o, --objects <IDS>` - Comma-separated list of `"type=uuid"` objects to export from Kibana
 - `-f, --file <FILE>`   - Filename of an `export.ndjson` to merge into existing manifest
 
@@ -87,18 +86,12 @@ kibob auth
 
 Tests the Kibana authorization configuration
 
-**Options:**
-- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
-
 ## Init command
 ```
 kibob init [export] [manifest_file]
 ```
 
 Initializes a Kibana object repository from an `export.ndjson`.
-
-**Options:**
-- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
 
 **Arguments:**
 - `[export]`            - An NDJSON file or directory with an `export.ndjson` to build a manifest file from (default: `export.ndjson`)
@@ -111,9 +104,6 @@ kibob pull [output_dir]
 
 Export and unbundle the Kibana saved objects listed in `[output_dir]/manifest.json` into `[output_dir]/objects/*.json` objects.
 
-**Options:**
-- `-e, --env <ENV>`     - The dotenv file to source credentials from (default `.env`)
-
 **Arguments:**
 - `[output_dir]`        - Directory to save exported objects to. Must contain a `manifest.json` file.
 
@@ -125,7 +115,6 @@ kibob push [input_dir]
 Bundle up the `[input_dir]/objects/*.json` objects to go and deliver them to Kibana!
 
 **Options:**
-- `-e, --env <ENV>`       - The dotenv file to source credentials from (default `.env`)
 - `-c, --clean <bool>`    - Keep the temporary files and directories. (default: `true`)
 - `-m, --managed <bool>`  - Set `"managed: false"` to allow direct editing in Kibana. (Default: `true`)
 
@@ -140,8 +129,7 @@ kibob togo [input_dir]
 Bundle up the `[input_dir]/objects/*.json` objects into a distributable NDJSON file named `${input_dir}.ndjson`
 
 **Options:**
-- `-e, --env <ENV>`      - The dotenv file to source credentials from (default `.env`)
-- `-m, --managed <bool>` - Set `"managed: false"` to allow direct editing in Kibana. (Default: `true`)
+- `-m, --managed <bool>`  - Set `"managed: false"` to allow direct editing in Kibana. (Default: `true`)
 
 **Arguments:**
 - `[input_dir]`         - Directory containing the objects to bundle (default: `.`)
