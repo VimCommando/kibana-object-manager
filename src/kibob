@@ -777,7 +777,7 @@ case $command in
             print_help_togo && exit 0
         fi
         declare manifest_dir="${1:-.}"
-        declare import_file="$(basename ${1:-${PWD}}).json"
+        declare import_file="$(basename ${1:-${PWD}}).ndjson"
 
         log_info "$(green bundling) saved objects to go!"
         command_togo \
