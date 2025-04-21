@@ -35,7 +35,7 @@ function log_error() { timestamp; echo " [$(red Error)] ${1}"; }
 function log_warn()  { timestamp; echo " [$(yellow Warn)] ${1}"; }
 function log_info()  { timestamp; echo " [$(green Info)] ${1}"; }
 function log_debug() {
-    if [[ ${LOG_LEVEL} == "debug" ]]; then
+    if [[ $LOG_LEVEL == "debug" ]]; then
         timestamp; echo " [$(blue Debug)] ${1}";
     fi
 }
@@ -101,9 +101,9 @@ function verify_dependencies() {
 
 # Removes all temporary files
 function cleanup() {
-    if [ "${cleanup}" = true ]; then
+    if [[ $cleanup == "true" ]]; then
         log_debug "Removing $(cyan "${#}") temp files"
-        while [[ $# -gt 0 ]]; do
+        while [[ $# > 0 ]]; do
             log_debug "Removing temp file $(gray "${1}")"
             rm -r $1 && shift
         done
@@ -116,15 +116,15 @@ function cleanup() {
 function set_auth_header() {
     log_debug "Setting Kibana auth header"
     # Exit if Kibana URL was not defined
-    if [ -z "${kibana_url}" ]; then
+    if [[ -z $kibana_url ]]; then
         log_error "Kibana URL is not defined"
         exit 1
     fi
 
-    if [ ! -z "${kibana_apikey}" ]; then
+    if [[ ! -z $kibana_apikey ]]; then
         log_info "Using apikey authorization"
         export auth_header="Authorization: ApiKey ${kibana_apikey}"
-    elif [ ! -z "${kibana_password}" ]; then
+    elif [[ ! -z $kibana_password ]]; then
         log_info "Using basic authorization for ${kibana_username}"
         export auth_header="Authorization: Basic $(echo -n "${kibana_username}:${kibana_password}" | base64)"
     else
@@ -136,7 +136,7 @@ function set_auth_header() {
 # Reads ${env_file}
 # Exports ${kibana_url}, ${kibana_username}, ${kibana_password} and ${kibana_apikey}
 function source_env_file() {
-    if [ ! -f "${env_file}" ]; then
+    if [[ ! -f $env_file ]]; then
         log_error "Environment file $(gray "${env_file}") does not exist"
         exit 1
     else
@@ -166,7 +166,7 @@ function print_help_add () {
 # Uses ${objects}, ${export_file} and ${manifest_dir}
 # Write ${manifest_patch}
 function generate_manifest_patch() {
-    if [ ! -z "${objects}" ]; then
+    if [[ ! -z $objects ]]; then
         # Create a manifest patch from provided object ID list
         log_info "Creating manifest patch by exporting $(cyan ${#objects[@]}) objects"
         # Print full array as debug
@@ -177,7 +177,7 @@ function generate_manifest_patch() {
         for obj in "${objects[@]}"; do
             local type=${obj//=*/}
             local id=${obj//*=/}
-            if [ -z "$json_objects" ]; then
+            if [[ -z $json_objects ]]; then
                 json_objects="{\"type\":\"${type}\",\"id\":\"${id}\"}"
             else
                 json_objects="${json_objects},{\"type\":\"${type}\",\"id\":\"${id}\"}"
@@ -192,7 +192,7 @@ function generate_manifest_patch() {
         && unbundle_saved_objects \
         && log_info "Exported $(cyan "${export_count}") saved objects from $(green "${env_file}")" \
         || log_info "Saved object export from $(magenta "${env_file}") failed."
-    elif [ ! -z "${export_file}" ] && [ -f "${export_file}" ]; then
+    elif [[ ! -z $export_file ]] && [[ -f $export_file ]]; then
         # Create manifest patch from export file
         log_debug "Creating manifest patch from export file $(gray ${export_file})"
         drop_fields \
@@ -206,12 +206,12 @@ function generate_manifest_patch() {
 
 # Uses ${manifest_file} and ${manifest_patch}
 function update_manifest() {
-    if [ ! -f "${manifest_file}" ]; then
+    if [[ ! -f $manifest_file ]]; then
         log_error "Manifest file $(gray "${manifest_file}") not found"
         exit 1
     fi
 
-    if [ ! -f "${manifest_patch}" ]; then
+    if [[ ! -f $manifest_patch ]]; then
         log_error "Manifest patch file $(gray "${manifest_patch}") not found"
         exit 1
     fi
@@ -267,15 +267,16 @@ function command_auth() {
         --location "${kibana_url}/api/spaces/space?"
     )
     log_debug "Response: ${response}"
-    if [[ $(echo ${response} | jq --raw-output '(if type=="array" then "true" else .ok end)') == "false" ]]; then
-        local error=$(echo ${response} | jq --raw-output '.message')
-        log_error "Authorization failed: ${error}"
-        exit 1
-    else
+    local is_array=$(echo ${response} | jq --raw-output '(if type=="array" then "true" else .ok end)')
+    if [[ $is_array == "true" ]]; then
         local jq=$(echo ${response} | jq --raw-output '.[].name + "=" + (.[].description | if length > 30 then .[:30] + "..." else . end)')
         local name=${jq//=*/}
         local description=${jq//*=/}
         log_info "Kibana's default space is $(cyan "${name}"): $(gray "${description}")"
+    else
+        local error=$(echo ${response} | jq --raw-output '.message')
+        log_error "Authorization failed: ${error}"
+        exit 1
     fi
 }
 
@@ -329,9 +330,9 @@ function update_gitignore() {
     # Add common files to .gitignore if it exists
     local comment="# Start --{kibob}-> (Kibana Object Manager)"
     local end_comment="# End --{kibob}->"
-    if [ -f ".gitignore" ] && $(grep -q "${comment}" .gitignore); then
+    if [[ -f ".gitignore" ]] && $(grep -q "${comment}" .gitignore); then
             log_info "Skipping $(gray .gitignore) update"
-    elif [ -d ".git" ]; then
+        elif [[ -d ".git" ]]; then
         log_info "Updating $(gray .gitignore)"
         echo "${comment}" >> .gitignore
         echo ".env*" >> .gitignore
@@ -372,18 +373,18 @@ function print_help_pull () {
 
 # Checks ${manifest_dir}, ${manifest_file} and ${objects_dir}
 function validate_export_directories() {
-    if [ ! -d "${manifest_dir}" ]; then
+    if [[ ! -d $manifest_dir ]]; then
         log_error "$(magenta ${manifest_dir}) is not a directory or does not exist"
         exit 1
     fi
 
-    if [ ! -f "${manifest_file}" ]; then
+    if [[ ! -f $manifest_file ]]; then
         log_error "$(magenta ${manifest_file}) is not a file or does not exist"
         exit 1
     fi
 
     # Verify objects directory exists
-    if [ ! -d "${objects_dir}" ]; then
+    if [[ ! -d ${objects_dir} ]]; then
         log_info "Creating objects directory $(gray "${objects_dir}")"
         mkdir -p "${objects_dir}"
     fi
@@ -409,7 +410,7 @@ function export_saved_objects() {
     # Try reading the status code, it will exist on error responses only
     local status_code=$(jq -r .statusCode "${export_file}")
 
-    if [[ "${status_code}" =~ ^[0-9]+$ ]] && [ "${status_code}" -ne 200 ]; then
+    if [[ $status_code =~ ^[0-9]+$ ]] && [[ $status_code != 200 ]]; then
         local error=$(jq -r .error "${export_file}")
         local message=$(jq -r .message "${export_file}")
         log_error "Import failed with: ${status_code} - ${error}"
@@ -473,19 +474,19 @@ function print_help_push() {
 # Checks for ${manifest_file}, ${objects_dir} and ${import_dir}
 function validate_import_directories() {
     # Make sure the manifest file exists.
-    if [ ! -f "${manifest_file}" ]; then
+    if [[ ! -f $manifest_file ]]; then
         log_error "Manifest file $(gray ${manifest_file}) not found."
         exit 1
     fi
 
     # Verify objects directory exists
-    if [ ! -d "${objects_dir}" ]; then
+    if [[ ! -d $objects_dir ]]; then
         log_error "Objects directory $(gray "${objects_dir}") not found."
         exit 1
     fi
 
     # Create import directory if it doesn't exist
-    if [ ! -d "${import_dir}" ]; then
+    if [[ ! -d $import_dir ]]; then
         log_info "Creating temporary import directory $(gray "${import_dir}")"
         mkdir -p "${import_dir}"
     fi
@@ -497,7 +498,7 @@ function pre_process_objects() {
     local IFS=$'\n';
     local files=($(ls -A ${manifest_dir}/objects/ | grep -e ".json$"))
     log_info "Setting saved objects as $(cyan managed=${managed})."
-    if [ "${managed}" = true ]; then
+    if [[ $managed == "true" ]]; then
         log_debug "Setting files in $(gray "${import_dir}") as $(cyan 'managed: true')"
         for file in "${files[@]}"; do
             jq '. + { "managed": true }' "${objects_dir}/${file}" > "${import_dir}/$(basename "${file}")"
@@ -535,7 +536,7 @@ function import_saved_objects() {
         | jq > "${response_file}"
 
     local success=$(jq -r .success "${response_file}")
-    if [ "${success}" != "true" ]; then
+    if [[ $success != "true" ]]; then
         log_error "Import failed, check $(gray "${response_file}") for details."
         exit 1
     fi
@@ -595,7 +596,7 @@ verify_dependencies
 # Validate and set command
 declare command="${1}" && shift
 log_debug "Command: ${command}"
-if [[ ! "$command" =~ ^(add|auth|init|push|pull|test|togo|-?-?h(elp)?)?$ ]]; then
+if [[ ! $command =~ ^(add|auth|init|push|pull|test|togo|-?-?h(elp)?)?$ ]]; then
     log_error "Invalid command $(magenta "$command")"
     print_help_main
     exit 1
@@ -615,8 +616,8 @@ while [[ $# -gt 0 ]]; do
         ;;
         -e|--env)
             shift
-            if [[ $# -gt 0 ]]; then
-                if [[ -f "$1" ]]; then
+            if [[ $# > 0 ]]; then
+                if [[ -f $1 ]]; then
                     env_file="${1}"
                 elif [[ -f ".env.${1}" ]]; then
                     env_file=".env.${1}"
@@ -631,7 +632,7 @@ while [[ $# -gt 0 ]]; do
         ;;
         -c|--clean)
             shift
-            if [[ $# -gt 0 ]] && [[ "$1" == "true" || "$1" == "false" ]]; then
+            if [[ $# -gt 0 ]] && [[ $1 == "true" || $1 == "false" ]]; then
                 declare cleanup="${1}"
             else
                 log_error "Invalid $(gray --clean) value $(magenta ${1})"
@@ -647,7 +648,7 @@ while [[ $# -gt 0 ]]; do
         ;;
         -f|--file)
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# > 0 ]]; then
                 declare export_file=$1
             else
                 log_error "missing filename"
@@ -657,7 +658,7 @@ while [[ $# -gt 0 ]]; do
         ;;
         -m|--managed)
             shift
-            if [[ $# -gt 0 ]] && [[ "$1" == "true" || "$1" == "false" ]]; then
+            if [[ $# > 0 ]] && [[ $1 == "true" || $1 == "false" ]]; then
                 declare managed_arg=$1
             else
                 log_error "Invalid $(gray --managed) value $(magenta ${1})"
@@ -667,7 +668,7 @@ while [[ $# -gt 0 ]]; do
         ;;
         -o|--objects)
             shift
-            if [[ $# -gt 0 ]]; then
+            if [[ $# > 0 ]]; then
                 # Split comma-separated string into array
                 declare -a objects=(${1//,/ })
                 log_debug "input ${#objects[@]} objects"
@@ -689,11 +690,11 @@ done
 log_debug "Executing command $(green ${command})"
 case $command in
     "add" )
-        if [[ ${help} == true ]]; then
+        if [[ $help == true ]]; then
             print_help_add && exit 0
         fi
 
-        if [ -z "${export_file}" ] && [ -z "${objects}" ]; then
+        if [[ -z $export_file ]] && [[ -z $objects ]]; then
             log_error "$(green add) requires either a $(magenta --file) or $(magenta --objects) argument"
             exit 1
         fi
@@ -704,7 +705,7 @@ case $command in
         && log_info "$(green add) complete"
     ;;
     "auth" )
-        if [[ ${help} == true ]]; then
+        if [[ $help == "true" ]]; then
             print_help_auth && exit 0
         fi
 
@@ -731,16 +732,16 @@ case $command in
         fi
 
         declare export_file="${1:-export.ndjson}"
-        if [ -d "${export_file}" ]; then
+        if [[ -d $export_file ]]; then
             log_debug "$(gray "${export_file}") was a directory, not file"
-            if [ -f "${export_file}/export.ndjson" ]; then
+            if [[ -f "${export_file}/export.ndjson" ]]; then
                 export_file="${export_file}/export.ndjson"
                 log_debug "export file updated to $(gray "${export_file}")"
             else
                 log_error "Directory $(gray "${export_file}") does not contain an $(gray export.ndjson) file"
                 exit 1
             fi
-        elif [ ! -f "${export_file}" ]; then
+        elif [[ ! -f $export_file ]]; then
             log_error "File $(magenta ${export_file}) not found"
             exit 1
         fi
@@ -751,7 +752,7 @@ case $command in
         && log_info "$(green init) complete"
     ;;
     "push" )
-        if [[ ${help} == true ]]; then
+        if [[ $help == "true" ]]; then
             print_help_push && exit 0
         fi
 
@@ -761,7 +762,7 @@ case $command in
         && log_info "$(green push) complete"
     ;;
     "pull" )
-        if [[ ${help} == true ]]; then
+        if [[ $help == "true" ]]; then
             print_help_pull && exit 0
         fi
         declare manifest_dir="${1:-.}"
@@ -775,7 +776,7 @@ case $command in
         && log_info "$(green test) complete"
     ;;
     "togo" )
-        if [[ ${help} == true ]]; then
+        if [[ $help == "true" ]]; then
             print_help_togo && exit 0
         fi
         declare manifest_dir="${1:-.}"
@@ -786,7 +787,7 @@ case $command in
         && log_info "$(green togo) complete"
     ;;
     * )
-        if [[ ${#} -eq 0 ]]; then
+        if [[ $# == 0 ]]; then
             print_help_main
             exit 1
         else
