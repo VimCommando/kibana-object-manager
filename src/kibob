@@ -495,7 +495,7 @@ function validate_import_directories() {
 function pre_process_objects() {
     local managed=${managed_arg:-${managed:-true}}
     local IFS=$'\n';
-    local files=($(ls -A objects/ | grep -e ".json$"))
+    local files=($(ls -A ${manifest_dir}/objects/ | grep -e ".json$"))
     log_info "Setting saved objects as $(cyan managed=${managed})."
     if [ "${managed}" = true ]; then
         log_debug "Setting files in $(gray "${import_dir}") as $(cyan 'managed: true')"
@@ -616,10 +616,12 @@ while [[ $# -gt 0 ]]; do
         -e|--env)
             shift
             if [[ $# -gt 0 ]]; then
-                if [[ "$1" =~ ^\.env.* ]]; then
+                if [[ -f "$1" ]]; then
                     env_file="${1}"
-                else
+                elif [[ -f ".env.${1}" ]]; then
                     env_file=".env.${1}"
+                else
+                    log_error "Environment file $(magenta "$1") not found"
                 fi
             else
                 log_error "missing environment file"
@@ -754,7 +756,7 @@ case $command in
         fi
 
         declare manifest_dir="${1:-.}"
-        log_info "$(green pushing) saved objects to Kibana"
+        log_info "$(green pushing) saved objects from $(gray "${manifest_dir}") to Kibana"
         command_push \
         && log_info "$(green push) complete"
     ;;
