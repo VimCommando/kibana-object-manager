@@ -308,7 +308,7 @@ function generate_manifest() {
     # 5. Remove the trailing comma from the last object.
 
     local objects=$(
-        jq -c "[.type, .id]" ${export_file} \
+        jq -c "[.type, (.originId // .id)]" ${export_file} \
         | grep -v null \
         | sed 's/\["\([^"]*\)","\([^"]*\)"\]/{"type":"\1","id":"\2" },/' \
         | sort \
