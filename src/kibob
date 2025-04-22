@@ -624,9 +624,10 @@ while [[ $# -gt 0 ]]; do
                     env_file=".env.${1}"
                 else
                     log_error "Environment file $(magenta "$1") not found"
+                    exit 1
                 fi
             else
-                log_error "missing environment file"
+                log_error "missing environment filename"
                 exit 1
             fi
             shift
