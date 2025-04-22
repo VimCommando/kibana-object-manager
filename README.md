@@ -64,6 +64,7 @@ kibob <command> [options] <arguments>
 
 ### Global Options
 - `-e, --env <NAME|FILE>` - The `.env.NAME` or `FILE` file to source credentials from (default `.env`)
+- `-s, --space <ID>`      - Kibana space id to use (default `default`)
 - `--debug`               - More verbose logging and retention of temporary files
 
 ## Add Command
