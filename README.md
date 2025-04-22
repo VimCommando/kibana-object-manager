@@ -17,12 +17,14 @@ Almost every modern unix-based system has `grep` and `curl` installed. You'll fi
 ### Initial Repository Setup
 1. Clone this repository
 2. Symlink `kibob` to your `$PATH`
-3. Download an `export.ndjson` from Kibana into a new folder
+3. Download the `export.ndjson` from Kibana and copy it into a new folder
 4. In the new folder, run `git init` to initialize a new Git repository
-5. Now run `kibob init` to slice up the `export.ndjson` into separate files with a `manifest.json`
+5. Run `kibob init` to slice up the `export.ndjson` into separate files with a `manifest.json`
 6. Use `git add .` and `git commit -m "Initial commit"`
 
 You're now tracking your Kibana objects with source control!
+
+> ⚠️ This script will modify the `export.ndjson` file. Make sure you made a copy in step 3.
 
 ### Pull changes directly from Kibana
 1. Copy the `dotenv/localhost` to a `.env` file in your new repo
