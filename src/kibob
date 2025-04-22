@@ -77,6 +77,7 @@ function print_help_main() {
     echo
     echo "$(white "Options:")"
     echo "    -e, --env <NAME|FILE>  - The $(gray ".env.NAME") or $(gray "FILE") file to source credentials from (default $(gray ".env"))"
+    echo "    -s, --space <NAME>     - Kibana space id to use (default $(gray "default"))"
     echo "        --debug            - More verbose logging and retention of temporary files"
 }
 
@@ -134,15 +135,19 @@ function set_auth_header() {
 }
 
 # Reads ${env_file}
-# Exports ${kibana_url}, ${kibana_username}, ${kibana_password} and ${kibana_apikey}
+# Exports ${kibana_space}, ${kibana_url}, ${kibana_username}, ${kibana_password} and ${kibana_apikey}
 function source_env_file() {
     if [[ ! -f $env_file ]]; then
         log_error "Environment file $(gray "${env_file}") does not exist"
         exit 1
-    else
-        log_debug "Sourcing $(gray "${env_file}")"
-        source "${env_file}"
     fi
+
+    log_debug "Sourcing $(gray "${env_file}")"
+    source "${env_file}"
+
+    # Set default space
+    export kibana_space=${kibana_space_arg:-${kibana_space:-default}}
+    log_info "Using space $(cyan "${kibana_space}")"
 }
 
 # ----- Command: Add -----
@@ -259,24 +264,26 @@ function print_help_auth () {
 function command_auth() {
     source_env_file
     set_auth_header
-    log_info "Testing auth to $(blue "${kibana_url}")"
+    log_info "Testing auth"
     local response=$(curl --silent \
         --header "${auth_header}" \
         --header "elastic-api-version: 2023-10-31" \
-        --location "${kibana_url}/api/spaces/space?"
+        --location "${kibana_url}/api/spaces/space/${kibana_space}"
     )
     log_debug "Response: ${response}"
-    local is_array=$(echo ${response} | jq --raw-output '(if type=="array" then "true" else .ok end)')
-    if [[ $is_array == "true" ]]; then
-        local jq=$(echo ${response} | jq --raw-output '.[].name + "=" + (.[].description | if length > 30 then .[:30] + "..." else . end)')
-        local name=${jq//=*/}
-        local description=${jq//*=/}
-        log_info "Kibana's default space is $(cyan "${name}"): $(gray "${description}")"
-    else
-        local error=$(echo ${response} | jq --raw-output '.message')
-        log_error "Authorization failed: ${error}"
+    local status_code=$(echo ${response} | jq --raw-output '.statusCode')
+    if [[ $status_code != "null" ]]; then
+        local error=$(echo ${response} | jq --raw-output '.error')
+        local message=$(echo ${response} | jq --raw-output '.message')
+        log_error "Request to space $(magenta "${kibana_space}") failed: ${status_code} - ${error}"
+        log_error "${message}"
         exit 1
     fi
+
+    local jq=$(echo ${response} | jq --raw-output '.name + "=" + (.description | if length > 30 then .[:30] + "..." else . end)')
+    local name=${jq//=*/}
+    local description=${jq//*=/}
+    log_info "Kibana space $(cyan "${name}"): $(gray "${description}")"
 }
 
 # ----- Command: Init -----
@@ -612,8 +619,20 @@ declare cleanup="true"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help)
-            declare help=true
+        -c|--clean)
+            shift
+            if [[ $# -gt 0 ]] && [[ $1 == "true" || $1 == "false" ]]; then
+                declare cleanup="${1}"
+            else
+                log_error "Invalid $(gray --clean) value $(magenta ${1})"
+                exit 1
+            fi
+            shift
+        ;;
+        -d|--debug)
+            declare LOG_LEVEL="debug"
+            declare cleanup=false
+            log_debug "Turning on debug logging and skipping temp file cleanup"
             shift
         ;;
         -e|--env)
@@ -633,22 +652,6 @@ while [[ $# -gt 0 ]]; do
             fi
             shift
         ;;
-        -c|--clean)
-            shift
-            if [[ $# -gt 0 ]] && [[ $1 == "true" || $1 == "false" ]]; then
-                declare cleanup="${1}"
-            else
-                log_error "Invalid $(gray --clean) value $(magenta ${1})"
-                exit 1
-            fi
-            shift
-        ;;
-        -d|--debug)
-            declare LOG_LEVEL="debug"
-            declare cleanup=false
-            log_debug "Turning on debug logging and skipping temp file cleanup"
-            shift
-        ;;
         -f|--file)
             shift
             if [[ $# > 0 ]]; then
@@ -657,6 +660,10 @@ while [[ $# -gt 0 ]]; do
                 log_error "missing filename"
                 exit 1
             fi
+            shift
+        ;;
+        -h|--help)
+            declare help=true
             shift
         ;;
         -m|--managed)
@@ -677,6 +684,16 @@ while [[ $# -gt 0 ]]; do
                 log_debug "input ${#objects[@]} objects"
             else
                 log_error "Missing $(gray --objects) value"
+                exit 1
+            fi
+            shift
+        ;;
+        -s|--space)
+            shift
+            if [[ $# > 0 ]]; then
+                declare kibana_space_arg="${1}"
+            else
+                log_error "Missing $(gray --space) value"
                 exit 1
             fi
             shift
