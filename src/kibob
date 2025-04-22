@@ -122,13 +122,13 @@ function set_auth_header() {
     fi
 
     if [[ ! -z $kibana_apikey ]]; then
-        log_info "Using apikey authorization"
+        log_info "Using apikey authorization to: $(blue "${kibana_url}")"
         export auth_header="Authorization: ApiKey ${kibana_apikey}"
     elif [[ ! -z $kibana_password ]]; then
-        log_info "Using basic authorization for ${kibana_username}"
+        log_info "Using basic authorization for ${kibana_username} to: $(blue "${kibana_url}")"
         export auth_header="Authorization: Basic $(echo -n "${kibana_username}:${kibana_password}" | base64)"
     else
-        log_info "Using Authorization: None"
+        log_info "Using no authorization to: $(blue "${kibana_url}")"
         export auth_header="Authorization: None"
     fi
 }
@@ -186,7 +186,6 @@ function generate_manifest_patch() {
 
         # Create the manifest patch file
         declare manifest_override="{\"objects\":[${json_objects}],\"excludeExportDetails\":true,\"includeReferencesDeep\":true}"
-        # command_pull # ${manifest_dir}
         export_saved_objects \
         && drop_fields \
         && unbundle_saved_objects \
@@ -443,14 +442,16 @@ function drop_fields() {
 # Uses ${manifest_dir}
 function command_pull() {
     local manifest_file="${manifest_dir}/manifest.json"
+    local manifest_patch="${manifest_dir}/manifest_patch.json"
     local export_file="${manifest_dir}/export.ndjson"
     local objects_dir="${manifest_dir}/objects"
 
     source_env_file \
     && validate_export_directories \
     && export_saved_objects \
-    && drop_fields \
-    && unbundle_saved_objects \
+    && generate_manifest_patch \
+    && update_manifest \
+    && cleanup "${manifest_patch}" "${export_file}" \
     && log_info "Exported $(cyan "${export_count}") saved objects from $(green "${env_file}")" \
     || log_info "Saved object export from $(magenta "${env_file}") failed."
 }
