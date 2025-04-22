@@ -2,6 +2,7 @@
 
 # Example dotenv file
 export kibana_url="http://localhost:5601"
+export kibana_space="default"
 
 # Authentication - Leave unused values as `unset`, change set values to `export`
 unset kibana_apikey

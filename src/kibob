@@ -395,11 +395,11 @@ function validate_export_directories() {
 function export_saved_objects() {
     local manifest="${manifest_override:-$(cat ${manifest_file})}"
     local count=$(jq '.objects | length' "${manifest_file}")
-    log_debug "Exporting $(cyan "${count}") saved objects from $(gray "${kibana_url}")"
+    log_debug "Exporting $(cyan "${count}") saved objects from $(gray "${kibana_url}") using the $(gray "${kibana_space}") space"
     log_info "Saving to file $(gray "${export_file}")"
     set_auth_header
 
-    curl -X POST "${kibana_url}/api/saved_objects/_export" \
+    curl -X POST "${kibana_url}/s/${kibana_space}/api/saved_objects/_export" \
         --header "${auth_header}" \
         --header "Content-Type: application/json; Elastic-Api-Version=2023-10-31" \
         --header "kbn-xsrf: string" \
@@ -521,13 +521,13 @@ function bundle_saved_objects() {
     # exports: count
 }
 
-# POST the bundled ${import_file} into Kibana at ${kibana_url} with ${auth_header}.
+# POST the bundled ${import_file} into Kibana at ${kibana_url} to the ${kibana_space} space with ${auth_header}.
 # Writes the API response to ${response_file}
 function import_saved_objects() {
-    log_info "Importing saved objects to $(gray ${kibana_url})"
+    log_info "Importing saved objects to $(gray ${kibana_url}), using the $(gray ${kibana_space}) space"
     set_auth_header
 
-    curl -X POST "${kibana_url}/api/saved_objects/_import?overwrite=true" \
+    curl -X POST "${kibana_url}/s/${kibana_space}/api/saved_objects/_import?overwrite=true" \
         --header "${auth_header}" \
         --header "kbn-xsrf: true" \
         --compressed \
