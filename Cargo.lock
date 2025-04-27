@@ -803,6 +803,7 @@ dependencies = [
  "eyre",
  "jsrmx",
  "log",
+ "owo-colors",
  "reqwest",
  "serde",
  "serde_json",
@@ -939,6 +940,12 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "owo-colors"
+version = "4.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1036865bb9422d3300cf723f657c2851d0e9ab12567854b1f4eba3d77decf564"
 
 [[package]]
 name = "percent-encoding"

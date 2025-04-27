@@ -1,10 +1,17 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling};
 use kibana_object_manager::KibanaObjectManagerBuilder;
+use owo_colors::OwoColorize;
 use std::{error::Error, path::PathBuf};
 
-/// Kibana Object Manager: Git-flavored side dish to prepare Kibana saved objects for version control
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::BrightWhite.on_default())
+    .usage(styling::AnsiColor::BrightWhite.on_default())
+    .literal(styling::AnsiColor::Green.on_default())
+    .placeholder(styling::AnsiColor::Cyan.on_default());
+
+/// Kibana Object Manager: --{kibob}-> is the Git-flavored side dish to prepare Kibana saved objects for version control
 #[derive(Parser)]
-#[command(name = "kibob", version)]
+#[command(name = "kibob", version, styles = STYLES)]
 struct Cli {
     /// The dotenv file to source credentials from
     #[arg(short, long, global = true, default_value = ".env")]
@@ -109,26 +116,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             log::info!(
                 "Initializing {} and building manifest {}",
-                export,
-                manifest_file
+                export.bright_black(),
+                manifest_file.bright_black()
             );
-            let mut kibob = kibob
+            let kibob = kibob
                 .export_path(PathBuf::from(export))
                 .manifest_file(PathBuf::from(manifest_file))
                 .build()?;
-            kibob.initialize()?
+            kibob.initialize()?;
+            log::info!("Initialization complete");
         }
         Commands::Auth => {
             let kibob = kibob.build()?;
-            log::info!("Testing authorization to {}", kibob.url());
+            log::info!("Testing authorization to {}", kibob.url().bright_blue());
             match kibob.test_authorization() {
                 Ok(msg) => log::info!("Authorization successful - {msg}"),
                 Err(e) => log::error!("{}", e),
             }
         }
         Commands::Pull { output_dir } => {
-            log::info!("Pulling objects to: {}", output_dir);
+            log::info!("Exporting objects to: {}", output_dir.bright_black());
             let kibob = kibob.export_path(PathBuf::from(output_dir)).build()?;
+            log::info!("Pulling objects from: {}", kibob.url().bright_blue());
             match kibob.pull() {
                 Ok(msg) => log::info!("Pull successful - {msg}"),
                 Err(e) => log::error!("{}", e),
