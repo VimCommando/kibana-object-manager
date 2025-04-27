@@ -8,8 +8,14 @@ use eyre::{Result, eyre};
 use init::Manifest;
 use init::{generate_manifest, update_gitignore};
 use jsrmx::{input::JsonReaderInput, output::Output, processor::NdjsonUnbundler};
-use serde_json::Value;
-use std::{fs::File, io::BufWriter, path::PathBuf, str::FromStr};
+use owo_colors::OwoColorize;
+use reqwest::StatusCode;
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    str::FromStr,
+};
 
 #[derive(Debug)]
 pub struct KibanaObjectManagerBuilder {
@@ -46,10 +52,12 @@ impl KibanaObjectManagerBuilder {
                     .to_path_buf(),
             ),
         };
-
+        let manifest_file = export_path.join("manifest.json");
+        log::debug!("Export file: {}", export_file.display().bright_black());
         Self {
             export_file: Some(export_file),
             export_path: Some(export_path),
+            manifest_file: Some(manifest_file),
             ..self
         }
     }
@@ -115,7 +123,8 @@ impl KibanaObjectManager {
     pub fn initialize(&self) -> Result<()> {
         update_gitignore()?;
         generate_manifest(&self.manifest_file, &self.export_file)?;
-        self.unbundle_objects()
+        self.unbundle_objects()?;
+        self.drop_fields()
     }
 
     fn unbundle_objects(&self) -> Result<()> {
@@ -174,7 +183,11 @@ impl KibanaObjectManager {
                 true => format!("{}...", description),
                 false => description,
             };
-            Ok(format!("Kibana's default space is {name}: {description}"))
+            Ok(format!(
+                "Kibana's default space is {}: {}",
+                name.cyan(),
+                description.bright_black()
+            ))
         } else {
             let body = response.text()?;
             log::debug!("Response body: {}", body);
@@ -182,39 +195,98 @@ impl KibanaObjectManager {
         }
     }
 
+    pub fn drop_fields(&self) -> Result<()> {
+        log::debug!("Dropping untracked fields");
+        let objects_dir = self.export_path.join("objects");
+        for entry in std::fs::read_dir(objects_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)?;
+                let mut obj: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+                file.set_len(0)?;
+                let mut writer = std::io::BufWriter::new(file);
+                if let serde_json::Value::Object(ref mut map) = obj {
+                    map.remove("created_at");
+                    map.remove("created_by");
+                    map.remove("count");
+                    map.remove("managed");
+                    map.remove("updated_at");
+                    map.remove("updated_by");
+                    map.remove("version");
+                }
+                writeln!(writer, "{}", serde_json::to_string_pretty(&obj)?)?;
+                writer.flush()?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn pull(&self) -> Result<String> {
         self.export_saved_objects()?;
+        self.unbundle_objects()?;
+        self.drop_fields()?;
         Ok(String::from("Pull"))
-        // source_env_file
-        // validate_export_directories
-        // export_saved_objects
         // drop_fields
         // unbundle_saved_objects
     }
 
     pub fn read_manifest(&self) -> Result<Manifest> {
+        log::debug!(
+            "Reading file {}",
+            self.manifest_file.display().bright_black()
+        );
         serde_json::from_reader(File::open(&self.manifest_file)?)
             .map_err(|e| eyre!("Failed to read manifest file: {}", e))
     }
 
     fn export_saved_objects(&self) -> Result<()> {
         let client = reqwest::blocking::Client::new();
+        let manifest = self.read_manifest()?;
+        let export_url = format!(
+            "{}/s/{}/api/saved_objects/_export",
+            self.kibana_url, "default"
+        );
+        log::debug!("Export URL: {}", export_url.bright_blue());
         let response = client
-            .get(format!("{}/api/saved_objects/_export", self.kibana_url))
+            .post(export_url)
             .header("Authorization", &self.auth_header)
             .header(
                 "Content-Type",
                 "application/json; Elastic-Api-Version=2023-10-31",
             )
             .header("kbn-xsrf", "string")
-            .json(&self.read_manifest()?)
+            .json(&manifest)
             .send()?;
-
-        let body: Vec<Value> = response.json()?;
-
-        let file = File::create(&self.export_file)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer(writer, &body)
-            .map_err(|e| eyre!("Failed to write export file: {}", e))
+        match response.status() {
+            StatusCode::OK => {
+                log::debug!("Export response status: {}", response.status().cyan());
+                let body = response.text()?;
+                let lines = body.lines();
+                let file = File::create(&self.export_file)?;
+                let mut writer = BufWriter::new(file);
+                let mut count = 0;
+                for line in lines {
+                    writeln!(writer, "{}", line)?;
+                    count += 1;
+                }
+                log::debug!(
+                    "Saved {} objects to file {}",
+                    count.cyan(),
+                    self.export_file.display().bright_black()
+                );
+                Ok(())
+            }
+            _ => {
+                log::debug!("Export response status: {}", response.status().magenta());
+                let body = response.text()?;
+                log::debug!("Export response body: {}", body.red());
+                return Err(eyre!("Failed to export saved objects"));
+            }
+        }
     }
 }
