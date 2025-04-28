@@ -3,6 +3,7 @@ use kibana_object_manager::KibanaObjectManagerBuilder;
 use owo_colors::OwoColorize;
 use std::{error::Error, path::PathBuf};
 
+// CLI Styling
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::BrightWhite.on_default())
     .usage(styling::AnsiColor::BrightWhite.on_default())

@@ -7,7 +7,7 @@ mod togo;
 use eyre::{Result, eyre};
 use init::Manifest;
 use init::{generate_manifest, update_gitignore};
-use jsrmx::{input::JsonReaderInput, output::Output, processor::NdjsonUnbundler};
+use jsrmx::{input::JsonReaderInput, output::JsonWritableOutput, processor::UnbundlerBuilder};
 use owo_colors::OwoColorize;
 use reqwest::StatusCode;
 use std::{
@@ -123,8 +123,7 @@ impl KibanaObjectManager {
     pub fn initialize(&self) -> Result<()> {
         update_gitignore()?;
         generate_manifest(&self.manifest_file, &self.export_file)?;
-        self.unbundle_objects()?;
-        self.drop_fields()
+        self.unbundle_objects()
     }
 
     fn unbundle_objects(&self) -> Result<()> {
@@ -137,9 +136,25 @@ impl KibanaObjectManager {
         let output_str = output_str
             .to_str()
             .expect("Failed to convert output path to string");
-        let mut output = Output::from_str(output_str).map_err(|e| eyre!(e.to_string()))?;
-        output.set_pretty();
-
+        let output = JsonWritableOutput::from_str(output_str).map_err(|e| eyre!(e.to_string()))?;
+        output
+            .write()
+            .expect("Error acquiring write lock on output")
+            .set_pretty(true);
+        let filename = Some(vec![
+            String::from("attributes.title"),
+            String::from("attributes.name"),
+        ]);
+        let type_field = Some(String::from("type"));
+        let drop_fields = Some(vec![
+            String::from("created_at"),
+            String::from("created_by"),
+            String::from("count"),
+            String::from("managed"),
+            String::from("updated_at"),
+            String::from("updated_by"),
+            String::from("version"),
+        ]);
         let unescape_fields = Some(vec![
             String::from("attributes.panelsJSON"),
             String::from("attributes.fieldFormatMap"),
@@ -150,15 +165,14 @@ impl KibanaObjectManager {
             String::from("attributes.visState"),
             String::from("attributes.fieldAttrs"),
         ]);
-        let name = Some(vec![
-            String::from("attributes.title"),
-            String::from("attributes.name"),
-        ]);
-        let type_field = Some(String::from("type"));
 
-        NdjsonUnbundler::new(input, output, unescape_fields)
-            .unbundle(name, type_field)
-            .map_err(|e| eyre!(e.to_string()))
+        UnbundlerBuilder::new(input, output)
+            .type_field(type_field)
+            .filename(filename)
+            .drop_fields(drop_fields)
+            .unescape_fields(unescape_fields)
+            .build()
+            .unbundle()
     }
 
     pub fn test_authorization(&self) -> Result<String> {
@@ -195,44 +209,10 @@ impl KibanaObjectManager {
         }
     }
 
-    pub fn drop_fields(&self) -> Result<()> {
-        log::debug!("Dropping untracked fields");
-        let objects_dir = self.export_path.join("objects");
-        for entry in std::fs::read_dir(objects_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() {
-                let file = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)?;
-                let mut obj: serde_json::Value =
-                    serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-                file.set_len(0)?;
-                let mut writer = std::io::BufWriter::new(file);
-                if let serde_json::Value::Object(ref mut map) = obj {
-                    map.remove("created_at");
-                    map.remove("created_by");
-                    map.remove("count");
-                    map.remove("managed");
-                    map.remove("updated_at");
-                    map.remove("updated_by");
-                    map.remove("version");
-                }
-                writeln!(writer, "{}", serde_json::to_string_pretty(&obj)?)?;
-                writer.flush()?;
-            }
-        }
-        Ok(())
-    }
-
     pub fn pull(&self) -> Result<String> {
         self.export_saved_objects()?;
         self.unbundle_objects()?;
-        self.drop_fields()?;
         Ok(String::from("Pull"))
-        // drop_fields
-        // unbundle_saved_objects
     }
 
     pub fn read_manifest(&self) -> Result<Manifest> {

@@ -15,7 +15,7 @@ clap = { version = "^4.5", features = ["derive"] }
 dotenvy = "^0.15"
 env_logger = "^0.11"
 eyre = "^0.6"
-jsrmx = "0.1.2"
+jsrmx = "0.2.0"
 log = "^0.4"
 owo-colors = "4.2.0"
 reqwest = { version = "^0.12", features = ["blocking", "json"] }
