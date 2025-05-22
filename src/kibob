@@ -615,8 +615,6 @@ function print_help_diff() {
     echo
 }
 
-#!/opt/homebrew/bin/bash
-
 
 command_diff() {
     source_env_file
