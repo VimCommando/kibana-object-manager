@@ -8,3 +8,10 @@ export kibana_space="default"
 unset kibana_apikey
 unset kibana_username
 unset kibana_password
+
+# Git diff enrichment
+unset AZURE_OPENAI_ENDPOINT
+unset AZURE_OPENAI_DEPLOYMENT_NAME
+unset AZURE_OPENAI_MODEL_NAME
+unset AZURE_OPENAI_API_KEY
+unset AZURE_OPENAI_API_VERSION
