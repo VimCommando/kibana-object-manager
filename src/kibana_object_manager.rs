@@ -17,19 +17,28 @@ use manifest::Manifest;
 use owo_colors::OwoColorize;
 use std::{fs::File, path::PathBuf};
 
-pub trait ObjectManager {}
+pub trait ObjectManager {
+    fn to_string(&self) -> String;
+}
 
 pub struct Kibana<O: ObjectManager> {
     objects: O,
+}
+
+impl<O: ObjectManager> Kibana<O> {
+    pub fn source(&self) -> String {
+        self.objects.to_string()
+    }
 }
 
 #[derive(Debug)]
 pub struct KibanaObjectManagerBuilder {
     apikey: Option<String>,
     file: Option<PathBuf>,
-    path: Option<PathBuf>,
+    is_managed: bool,
     manifest: Option<PathBuf>,
     password: Option<String>,
+    path: Option<PathBuf>,
     url: String,
     username: Option<String>,
 }
@@ -39,9 +48,10 @@ impl KibanaObjectManagerBuilder {
         Self {
             apikey: None,
             file: None,
-            path: None,
+            is_managed: false,
             manifest: None,
             password: None,
+            path: None,
             url: kibana_url,
             username: None,
         }
@@ -63,6 +73,7 @@ impl KibanaObjectManagerBuilder {
                 file: self.file.ok_or_eyre("Bundler file not provided")?,
                 manifest,
                 path: self.path.ok_or_eyre("Bundler path not provided")?,
+                is_managed: self.is_managed,
             },
         })
     }
@@ -130,6 +141,11 @@ impl KibanaObjectManagerBuilder {
     pub fn password(self, password: Option<String>) -> Self {
         Self { password, ..self }
     }
+
+    pub fn managed(self, is_managed: bool) -> Self {
+        Self { is_managed, ..self }
+    }
+
     pub fn export_path(self, export_path: PathBuf) -> Self {
         let (export_file, export_path) = match export_path.is_dir() {
             true => (export_path.join("export.ndjson"), export_path),
@@ -146,6 +162,27 @@ impl KibanaObjectManagerBuilder {
         Self {
             file: Some(export_file),
             path: Some(export_path),
+            manifest: Some(manifest_file),
+            ..self
+        }
+    }
+
+    pub fn import_path(self, import_path: PathBuf) -> Self {
+        let (import_file, import_path) = match import_path.is_dir() {
+            true => (import_path.join("import.ndjson"), import_path),
+            false => (
+                import_path.clone(),
+                import_path
+                    .parent()
+                    .expect("Import path must have a parent directory")
+                    .to_path_buf(),
+            ),
+        };
+        let manifest_file = import_path.join("manifest.json");
+        log::debug!("Import file: {}", import_file.display().bright_black());
+        Self {
+            file: Some(import_file),
+            path: Some(import_path),
             manifest: Some(manifest_file),
             ..self
         }

@@ -3,7 +3,11 @@ use eyre::{OptionExt, Result};
 use owo_colors::OwoColorize;
 use std::{fs::File, io::Write, path::PathBuf};
 
-impl ObjectManager for Initializer {}
+impl ObjectManager for Initializer {
+    fn to_string(&self) -> String {
+        format!("{}", self.file.display())
+    }
+}
 
 pub struct Initializer {
     pub file: PathBuf,

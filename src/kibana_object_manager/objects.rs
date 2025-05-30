@@ -1,18 +1,44 @@
-use eyre::{Result, eyre};
-use jsrmx::{input::JsonReaderInput, output::JsonWritableOutput, processor::UnbundlerBuilder};
+use eyre::{OptionExt, Result, eyre};
+use jsrmx::{
+    input::{InputDirectory, JsonReaderInput},
+    output::{JsonAppendableOutput, JsonWritableOutput},
+    processor::{BundlerBuilder, UnbundlerBuilder},
+};
 use owo_colors::OwoColorize;
 use std::{path::PathBuf, str::FromStr};
 
-pub fn bundle(file: &PathBuf, path: &PathBuf) -> Result<()> {
+fn escape_fields() -> Option<Vec<String>> {
+    Some(vec![
+        String::from("attributes.panelsJSON"),
+        String::from("attributes.fieldFormatMap"),
+        String::from("attributes.controlGroupInput.ignoreParentSettingsJSON"),
+        String::from("attributes.controlGroupInput.panelsJSON"),
+        String::from("attributes.kibanaSavedObjectMeta.searchSourceJSON"),
+        String::from("attributes.optionsJSON"),
+        String::from("attributes.visState"),
+        String::from("attributes.fieldAttrs"),
+    ])
+}
+
+pub fn bundle(file: &PathBuf, path: &PathBuf) -> Result<usize> {
     log::info!(
         "Bundling saved objects from {} into {}",
         path.display().bright_black(),
         file.display().bright_black()
     );
 
-    // jsrmx bundle "${import_dir}" "${import_file}" \
-    //   --escape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs"
-    Ok(())
+    let input = InputDirectory::new(path.clone().join("objects"));
+    let file = file.to_str().ok_or_eyre("Invalid bundler file path")?;
+    let output = JsonAppendableOutput::from_str(file)?;
+
+    BundlerBuilder::new(input, output)
+        .escape_fields(escape_fields())
+        .build()
+        .bundle()?;
+
+    let line_count = std::fs::read_to_string(file)?.lines().count();
+
+    Ok(line_count)
 }
 
 pub fn unbundle(file: &PathBuf, path: &PathBuf) -> Result<()> {
@@ -43,22 +69,12 @@ pub fn unbundle(file: &PathBuf, path: &PathBuf) -> Result<()> {
         String::from("updated_by"),
         String::from("version"),
     ]);
-    let unescape_fields = Some(vec![
-        String::from("attributes.panelsJSON"),
-        String::from("attributes.fieldFormatMap"),
-        String::from("attributes.controlGroupInput.ignoreParentSettingsJSON"),
-        String::from("attributes.controlGroupInput.panelsJSON"),
-        String::from("attributes.kibanaSavedObjectMeta.searchSourceJSON"),
-        String::from("attributes.optionsJSON"),
-        String::from("attributes.visState"),
-        String::from("attributes.fieldAttrs"),
-    ]);
 
     UnbundlerBuilder::new(input, output)
         .type_field(type_field)
         .filename(filename)
         .drop_fields(drop_fields)
-        .unescape_fields(unescape_fields)
+        .unescape_fields(escape_fields())
         .build()
         .unbundle()
 }

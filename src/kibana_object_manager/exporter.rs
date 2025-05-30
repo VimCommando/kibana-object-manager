@@ -8,7 +8,11 @@ use std::{
     path::PathBuf,
 };
 
-impl ObjectManager for Exporter {}
+impl ObjectManager for Exporter {
+    fn to_string(&self) -> String {
+        format!("{}", self.url)
+    }
+}
 
 pub struct Exporter {
     pub auth_header: String,

@@ -2,7 +2,11 @@ use super::{Kibana, ObjectManager};
 use eyre::{Result, eyre};
 use owo_colors::OwoColorize;
 
-impl ObjectManager for Authorizer {}
+impl ObjectManager for Authorizer {
+    fn to_string(&self) -> String {
+        format!("{}", self.url)
+    }
+}
 
 pub struct Authorizer {
     pub auth_header: String,

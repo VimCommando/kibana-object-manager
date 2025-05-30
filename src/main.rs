@@ -150,10 +150,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             log::info!(
                 "Pushing objects from: {}, clean: {}, managed: {}",
-                input_dir,
-                clean,
-                managed
+                input_dir.bright_black(),
+                clean.cyan(),
+                managed.cyan()
             );
+            let kibob = kibob
+                .import_path(PathBuf::from(input_dir))
+                .managed(managed)
+                .build_importer()?;
+
+            log::info!("Pushing objects to: {}", kibob.url().bright_blue());
+            match kibob.push() {
+                Ok(msg) => log::info!("Push successful: {msg}"),
+                Err(e) => log::error!("{}", e),
+            }
         }
         Commands::Add {
             output_dir,
@@ -173,6 +183,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 input_dir,
                 managed
             );
+            let kibob = kibob
+                .managed(managed)
+                .import_path(PathBuf::from(input_dir))
+                .build_bundler()?;
+
+            log::info!(
+                "Creating to-go bundle from: {}",
+                kibob.source().bright_blue()
+            );
+            match kibob.bundle() {
+                Ok(msg) => log::info!("To-go ready: {msg}"),
+                Err(e) => log::error!("{}", e),
+            }
         }
     }
     Ok(())
