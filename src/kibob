@@ -429,6 +429,21 @@ function export_saved_objects() {
     log_debug "Exported $(cyan "${export_count}") objects from $(gray ${kibana_url})"
 }
 
+# Drop fields in ${export_file} we don't want tracked in version control
+function drop_fields() {
+    log_info "Dropping untracked fields"
+    jq -c 'del(.created_at, .created_by, .count, .managed, .updated_at, .updated_by, .version)' "${export_file}" > "${export_file}.tmp" \
+    && mv "${export_file}.tmp" "${export_file}"
+}
+
+# Drops the count field from index-pattern objects
+function drop_index_pattern_count() {
+    for file in "${objects_dir}"/*; do
+        jq '. | if .type == "index-pattern" then walk(if type == "object" and has("count") then del(.count) else . end) else . end' "$file" > "$file.tmp" \
+        && mv "$file.tmp" "$file"
+    done
+}
+
 # Reads the ${export_file}, writes into the ${objects_dir}
 function unbundle_saved_objects() {
     local output_dir="$(dirname "${export_file}")/objects"
@@ -436,14 +451,8 @@ function unbundle_saved_objects() {
     jsrmx unbundle "${export_file}" "${objects_dir}" \
         --name="attributes.title,attributes.name" \
         --type="type" \
-        --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs"
-}
-
-# Drop fields in ${export_file} we don't want tracked in version control
-function drop_fields() {
-    log_info "Dropping untracked fields"
-    jq -c 'del(.created_at, .created_by, .count, .managed, .updated_at, .updated_by, .version)' "${export_file}" > "${export_file}.tmp"
-    mv "${export_file}.tmp" "${export_file}"
+        --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs" \
+    && drop_index_pattern_count
 }
 
 # Uses ${manifest_dir}
