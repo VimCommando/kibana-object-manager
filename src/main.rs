@@ -37,7 +37,7 @@ enum Commands {
 
         /// The manifest file to generate
         #[arg(default_value = "manifest.json")]
-        manifest_file: String,
+        manifest: String,
     },
 
     /// Test authorization to a Kibana remote
@@ -111,33 +111,32 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     log::debug!("{:?}", kibob);
     match cli.command {
-        Commands::Init {
-            export,
-            manifest_file,
-        } => {
+        Commands::Init { export, manifest } => {
             log::info!(
                 "Initializing {} and building manifest {}",
                 export.bright_black(),
-                manifest_file.bright_black()
+                manifest.bright_black()
             );
             let kibob = kibob
                 .export_path(PathBuf::from(export))
-                .manifest_file(PathBuf::from(manifest_file))
-                .build()?;
+                .manifest(PathBuf::from(manifest))
+                .build_initializer()?;
             kibob.initialize()?;
             log::info!("Initialization complete");
         }
         Commands::Auth => {
-            let kibob = kibob.build()?;
+            let kibob = kibob.build_authorizer()?;
             log::info!("Testing authorization to {}", kibob.url().bright_blue());
-            match kibob.test_authorization() {
+            match kibob.authorize() {
                 Ok(msg) => log::info!("Authorization successful - {msg}"),
                 Err(e) => log::error!("{}", e),
             }
         }
         Commands::Pull { output_dir } => {
             log::info!("Exporting objects to: {}", output_dir.bright_black());
-            let kibob = kibob.export_path(PathBuf::from(output_dir)).build()?;
+            let kibob = kibob
+                .export_path(PathBuf::from(output_dir))
+                .build_exporter()?;
             log::info!("Pulling objects from: {}", kibob.url().bright_blue());
             match kibob.pull() {
                 Ok(msg) => log::info!("Pull successful - {msg}"),

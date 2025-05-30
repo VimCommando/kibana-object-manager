@@ -1,0 +1,57 @@
+use super::{Kibana, ObjectManager, manifest::generate_manifest, objects};
+use eyre::{OptionExt, Result};
+use owo_colors::OwoColorize;
+use std::{fs::File, io::Write, path::PathBuf};
+
+impl ObjectManager for Initializer {}
+
+pub struct Initializer {
+    pub file: PathBuf,
+    pub manifest: PathBuf,
+}
+
+impl Kibana<Initializer> {
+    pub fn initialize(&self) -> Result<()> {
+        log::debug!(
+            "Initializing directory {} with manifest {}",
+            self.objects.file.display().bright_black(),
+            self.objects.manifest.display().bright_black()
+        );
+        update_gitignore()?;
+        generate_manifest(&self.objects.manifest, &self.objects.file)?;
+        let path = self
+            .objects
+            .file
+            .parent()
+            .ok_or_eyre("Failed to get parent directory")?
+            .to_path_buf();
+        objects::unbundle(&self.objects.file, &path)
+    }
+}
+
+pub fn update_gitignore() -> Result<()> {
+    log::info!("Updating {}", ".gitignore".bright_black());
+    let git_ignore = PathBuf::from(".gitignore");
+    let mut file = File::options()
+        .create(true)
+        .append(true)
+        .open(&git_ignore)?;
+    let lines = vec![
+        "# Added by --{kibob}-> (Kibana Object Manager)\n",
+        ".env*\n",
+        "export.ndjson\n",
+        "import.ndjson\n",
+        "import/\n",
+        "response.json\n",
+        "manifest_patch.json\n",
+    ];
+
+    let existing_content = std::fs::read_to_string(&git_ignore)?;
+
+    for line in lines {
+        if !existing_content.contains(line) {
+            write!(file, "{}", line)?;
+        }
+    }
+    Ok(())
+}
