@@ -214,7 +214,7 @@ fn main() -> Result<()> {
                 .build_bundler()?;
             log::info!(
                 "Creating to-go bundle from: {}",
-                kibob.source().bright_black()
+                kibob.to_string().bright_black()
             );
             match kibob.bundle() {
                 Ok(msg) => log::info!("To-go ready: {msg}"),

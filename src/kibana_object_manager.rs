@@ -18,20 +18,6 @@ use merger::{ExportMerger, FileMerger};
 use owo_colors::OwoColorize;
 use std::{collections::HashMap, path::PathBuf};
 
-pub trait ObjectManager {
-    fn to_string(&self) -> String;
-}
-
-pub struct Kibana<O: ObjectManager> {
-    objects: O,
-}
-
-impl<O: ObjectManager> Kibana<O> {
-    pub fn source(&self) -> String {
-        self.objects.to_string()
-    }
-}
-
 #[derive(Debug)]
 pub struct KibanaObjectManagerBuilder {
     apikey: Option<String>,
@@ -60,79 +46,65 @@ impl KibanaObjectManagerBuilder {
         }
     }
 
-    pub fn build_file_merger(self) -> Result<Kibana<FileMerger>> {
-        Ok(Kibana {
-            objects: FileMerger {
-                manifest: self.read_manifest()?,
-                file_in: self.file_in.ok_or_eyre("No merge file provided")?,
-                file_out: self.file_out.ok_or_eyre("No export file provided")?,
-            },
+    pub fn build_file_merger(self) -> Result<FileMerger> {
+        Ok(FileMerger {
+            manifest: self.read_manifest()?,
+            file_in: self.file_in.ok_or_eyre("No merge file provided")?,
+            file_out: self.file_out.ok_or_eyre("No export file provided")?,
         })
     }
 
-    pub fn build_export_merger(self) -> Result<Kibana<ExportMerger>> {
-        Ok(Kibana {
-            objects: ExportMerger {
-                auth_header: self.format_auth_header(),
-                manifest: self.read_manifest()?,
-                file_in: self.file_in.ok_or_eyre("Merge file not provided")?,
-                file_out: self.file_out.ok_or_eyre("Export file not provided")?,
-                url: self.url,
-                export_list: HashMap::new(),
-            },
+    pub fn build_export_merger(self) -> Result<ExportMerger> {
+        Ok(ExportMerger {
+            auth_header: self.format_auth_header(),
+            manifest: self.read_manifest()?,
+            file_in: self.file_in.ok_or_eyre("Merge file not provided")?,
+            file_out: self.file_out.ok_or_eyre("Export file not provided")?,
+            url: self.url,
+            export_list: HashMap::new(),
         })
     }
 
-    pub fn build_authorizer(self) -> Result<Kibana<Authorizer>> {
-        Ok(Kibana {
-            objects: Authorizer {
-                auth_header: self.format_auth_header(),
-                url: self.url,
-            },
+    pub fn build_authorizer(self) -> Result<Authorizer> {
+        Ok(Authorizer {
+            auth_header: self.format_auth_header(),
+            url: self.url,
         })
     }
 
-    pub fn build_bundler(self) -> Result<Kibana<Bundler>> {
-        Ok(Kibana {
-            objects: Bundler {
-                manifest: self.read_manifest()?,
-                file: self.file_in.ok_or_eyre("Bundler file not provided")?,
-                path: self.path.ok_or_eyre("Bundler path not provided")?,
-                is_managed: self.is_managed,
-            },
+    pub fn build_bundler(self) -> Result<Bundler> {
+        Ok(Bundler {
+            manifest: self.read_manifest()?,
+            file: self.file_in.ok_or_eyre("Bundler file not provided")?,
+            path: self.path.ok_or_eyre("Bundler path not provided")?,
+            is_managed: self.is_managed,
         })
     }
 
-    pub fn build_exporter(self) -> Result<Kibana<Exporter>> {
-        Ok(Kibana {
-            objects: Exporter {
-                auth_header: self.format_auth_header(),
-                manifest: self.read_manifest()?,
-                file: self.file_out.ok_or_eyre("Export file not provided")?,
-                path: self.path.ok_or_eyre("Export path not provided")?,
-                url: self.url,
-            },
+    pub fn build_exporter(self) -> Result<Exporter> {
+        Ok(Exporter {
+            auth_header: self.format_auth_header(),
+            manifest: self.read_manifest()?,
+            file: self.file_out.ok_or_eyre("Export file not provided")?,
+            path: self.path.ok_or_eyre("Export path not provided")?,
+            url: self.url,
         })
     }
 
-    pub fn build_importer(self) -> Result<Kibana<Importer>> {
-        Ok(Kibana {
-            objects: Importer {
-                auth_header: self.format_auth_header(),
-                manifest: self.read_manifest()?,
-                file: self.file_in.ok_or_eyre("Import file not provided")?,
-                path: self.path.ok_or_eyre("Import path not provided")?,
-                url: self.url,
-            },
+    pub fn build_importer(self) -> Result<Importer> {
+        Ok(Importer {
+            auth_header: self.format_auth_header(),
+            manifest: self.read_manifest()?,
+            file: self.file_in.ok_or_eyre("Import file not provided")?,
+            path: self.path.ok_or_eyre("Import path not provided")?,
+            url: self.url,
         })
     }
 
-    pub fn build_initializer(self) -> Result<Kibana<Initializer>> {
-        Ok(Kibana {
-            objects: Initializer {
-                file: self.file_out.ok_or_eyre("No export file provided")?,
-                manifest: self.manifest.ok_or_eyre("No manifest file provided")?,
-            },
+    pub fn build_initializer(self) -> Result<Initializer> {
+        Ok(Initializer {
+            file: self.file_out.ok_or_eyre("No export file provided")?,
+            manifest: self.manifest.ok_or_eyre("No manifest file provided")?,
         })
     }
 

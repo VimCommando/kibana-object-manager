@@ -1,10 +1,10 @@
-use super::{Kibana, Manifest, ObjectManager, objects};
+use super::{Manifest, objects};
 use eyre::Result;
 use owo_colors::OwoColorize;
 use reqwest::StatusCode;
 use std::path::PathBuf;
 
-impl ObjectManager for Importer {
+impl ToString for Importer {
     fn to_string(&self) -> String {
         format!("{}", self.path.display())
     }
@@ -18,25 +18,24 @@ pub struct Importer {
     pub url: String,
 }
 
-impl Kibana<Importer> {
+impl Importer {
     pub fn push(&self) -> Result<String> {
-        let count = objects::bundle(&self.objects.file, &self.objects.path)?;
+        let count = objects::bundle(&self.file, &self.path)?;
         self.import()?;
         Ok(format!("Pushed {} objects", count.cyan()))
     }
 
     fn import(&self) -> Result<()> {
-        let importer = &self.objects;
         let client = reqwest::blocking::Client::new();
         let import_url = format!(
             "{}/s/{}/api/saved_objects/_import?overwrite=true",
-            importer.url, "default"
+            self.url, "default"
         );
         log::debug!("Import URL: {}", import_url);
-        let form = reqwest::blocking::multipart::Form::new().file("file", &importer.file)?;
+        let form = reqwest::blocking::multipart::Form::new().file("file", &self.file)?;
         let response = client
             .post(import_url)
-            .header("Authorization", &importer.auth_header)
+            .header("Authorization", &self.auth_header)
             .header("kbn-xsrf", "true")
             .multipart(form)
             .send()?;
@@ -51,6 +50,6 @@ impl Kibana<Importer> {
     }
 
     pub fn url(&self) -> &str {
-        &self.objects.url
+        &self.url
     }
 }

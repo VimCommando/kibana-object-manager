@@ -1,4 +1,4 @@
-use super::{Kibana, Manifest, ObjectManager, objects};
+use super::{Manifest, objects};
 use eyre::{Result, eyre};
 use owo_colors::OwoColorize;
 use reqwest::StatusCode;
@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
 };
 
-impl ObjectManager for Exporter {
+impl ToString for Exporter {
     fn to_string(&self) -> String {
         format!("{}", self.url)
     }
@@ -22,20 +22,15 @@ pub struct Exporter {
     pub url: String,
 }
 
-impl Kibana<Exporter> {
+impl Exporter {
     pub fn pull(&self) -> Result<String> {
-        export(
-            &self.objects.url,
-            &self.objects.auth_header,
-            &self.objects.manifest,
-            &self.objects.file,
-        )?;
-        objects::unbundle(&self.objects.file, &self.objects.path)?;
+        export(&self.url, &self.auth_header, &self.manifest, &self.file)?;
+        objects::unbundle(&self.file, &self.path)?;
         Ok(String::from("Pull"))
     }
 
     pub fn url(&self) -> &str {
-        &self.objects.url
+        &self.url
     }
 }
 

@@ -1,9 +1,9 @@
-use super::{Kibana, Manifest, ObjectManager, objects};
+use super::{Manifest, objects};
 use eyre::{OptionExt, Result};
 use owo_colors::OwoColorize;
 use std::{fs::File, io::Write, path::PathBuf};
 
-impl ObjectManager for Initializer {
+impl ToString for Initializer {
     fn to_string(&self) -> String {
         format!("{}", self.file.display())
     }
@@ -14,23 +14,22 @@ pub struct Initializer {
     pub manifest: PathBuf,
 }
 
-impl Kibana<Initializer> {
+impl Initializer {
     pub fn initialize(&self) -> Result<()> {
         log::debug!(
             "Initializing directory {} with manifest {}",
-            self.objects.file.display().bright_black(),
-            self.objects.manifest.display().bright_black()
+            self.file.display().bright_black(),
+            self.manifest.display().bright_black()
         );
         update_gitignore()?;
-        Manifest::from_export(&self.objects.file)?.write(&self.objects.manifest)?;
+        Manifest::from_export(&self.file)?.write(&self.manifest)?;
 
         let path = self
-            .objects
             .file
             .parent()
             .ok_or_eyre("Failed to get parent directory")?
             .to_path_buf();
-        objects::unbundle(&self.objects.file, &path)
+        objects::unbundle(&self.file, &path)
     }
 }
 

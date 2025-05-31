@@ -1,8 +1,7 @@
-use super::{Kibana, ObjectManager};
 use eyre::{Result, eyre};
 use owo_colors::OwoColorize;
 
-impl ObjectManager for Authorizer {
+impl ToString for Authorizer {
     fn to_string(&self) -> String {
         format!("{}", self.url)
     }
@@ -13,13 +12,12 @@ pub struct Authorizer {
     pub url: String,
 }
 
-impl Kibana<Authorizer> {
+impl Authorizer {
     pub fn authorize(&self) -> Result<String> {
-        let authorizer = &self.objects;
         let client = reqwest::blocking::Client::new();
         let response = client
-            .get(format!("{}/api/spaces/space?", authorizer.url))
-            .header("Authorization", &authorizer.auth_header)
+            .get(format!("{}/api/spaces/space?", self.url))
+            .header("Authorization", &self.auth_header)
             .send()?;
 
         if response.status().is_success() {
@@ -50,6 +48,6 @@ impl Kibana<Authorizer> {
     }
 
     pub fn url(&self) -> &str {
-        &self.objects.url
+        &self.url
     }
 }
