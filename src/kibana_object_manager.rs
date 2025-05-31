@@ -1,10 +1,10 @@
-mod adder;
 mod authorizer;
 mod bundler;
 mod exporter;
 mod importer;
 mod initializer;
 mod manifest;
+mod merger;
 mod objects;
 
 use authorizer::Authorizer;
@@ -14,8 +14,9 @@ use eyre::{OptionExt, Result, eyre};
 use importer::Importer;
 use initializer::Initializer;
 use manifest::Manifest;
+use merger::{ExportMerger, FileMerger};
 use owo_colors::OwoColorize;
-use std::{fs::File, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
 pub trait ObjectManager {
     fn to_string(&self) -> String;
@@ -34,7 +35,8 @@ impl<O: ObjectManager> Kibana<O> {
 #[derive(Debug)]
 pub struct KibanaObjectManagerBuilder {
     apikey: Option<String>,
-    file: Option<PathBuf>,
+    file_in: Option<PathBuf>,
+    file_out: Option<PathBuf>,
     is_managed: bool,
     manifest: Option<PathBuf>,
     password: Option<String>,
@@ -47,7 +49,8 @@ impl KibanaObjectManagerBuilder {
     pub fn new(kibana_url: String) -> Self {
         Self {
             apikey: None,
-            file: None,
+            file_in: None,
+            file_out: None,
             is_managed: false,
             manifest: None,
             password: None,
@@ -55,6 +58,29 @@ impl KibanaObjectManagerBuilder {
             url: kibana_url,
             username: None,
         }
+    }
+
+    pub fn build_file_merger(self) -> Result<Kibana<FileMerger>> {
+        Ok(Kibana {
+            objects: FileMerger {
+                manifest: self.read_manifest()?,
+                file_in: self.file_in.ok_or_eyre("No merge file provided")?,
+                file_out: self.file_out.ok_or_eyre("No export file provided")?,
+            },
+        })
+    }
+
+    pub fn build_export_merger(self) -> Result<Kibana<ExportMerger>> {
+        Ok(Kibana {
+            objects: ExportMerger {
+                auth_header: self.format_auth_header(),
+                manifest: self.read_manifest()?,
+                file_in: self.file_in.ok_or_eyre("Merge file not provided")?,
+                file_out: self.file_out.ok_or_eyre("Export file not provided")?,
+                url: self.url,
+                export_list: HashMap::new(),
+            },
+        })
     }
 
     pub fn build_authorizer(self) -> Result<Kibana<Authorizer>> {
@@ -67,11 +93,10 @@ impl KibanaObjectManagerBuilder {
     }
 
     pub fn build_bundler(self) -> Result<Kibana<Bundler>> {
-        let manifest = self.read_manifest()?;
         Ok(Kibana {
             objects: Bundler {
-                file: self.file.ok_or_eyre("Bundler file not provided")?,
-                manifest,
+                manifest: self.read_manifest()?,
+                file: self.file_in.ok_or_eyre("Bundler file not provided")?,
                 path: self.path.ok_or_eyre("Bundler path not provided")?,
                 is_managed: self.is_managed,
             },
@@ -79,12 +104,11 @@ impl KibanaObjectManagerBuilder {
     }
 
     pub fn build_exporter(self) -> Result<Kibana<Exporter>> {
-        let manifest = self.read_manifest()?;
         Ok(Kibana {
             objects: Exporter {
                 auth_header: self.format_auth_header(),
-                file: self.file.ok_or_eyre("Export file not provided")?,
-                manifest,
+                manifest: self.read_manifest()?,
+                file: self.file_out.ok_or_eyre("Export file not provided")?,
                 path: self.path.ok_or_eyre("Export path not provided")?,
                 url: self.url,
             },
@@ -92,12 +116,11 @@ impl KibanaObjectManagerBuilder {
     }
 
     pub fn build_importer(self) -> Result<Kibana<Importer>> {
-        let manifest = self.read_manifest()?;
         Ok(Kibana {
             objects: Importer {
                 auth_header: self.format_auth_header(),
-                file: self.file.ok_or_eyre("Import file not provided")?,
-                manifest,
+                manifest: self.read_manifest()?,
+                file: self.file_in.ok_or_eyre("Import file not provided")?,
                 path: self.path.ok_or_eyre("Import path not provided")?,
                 url: self.url,
             },
@@ -107,27 +130,10 @@ impl KibanaObjectManagerBuilder {
     pub fn build_initializer(self) -> Result<Kibana<Initializer>> {
         Ok(Kibana {
             objects: Initializer {
-                file: self.file.ok_or_eyre("Init file not provided")?,
-                manifest: self.manifest.ok_or_eyre("Init manifest not provided")?,
+                file: self.file_out.ok_or_eyre("No export file provided")?,
+                manifest: self.manifest.ok_or_eyre("No manifest file provided")?,
             },
         })
-    }
-
-    pub fn manifest(self, path: PathBuf) -> Self {
-        log::debug!("Self manifest {:?}", &self.manifest.bright_black());
-        let manifest_path = match self.manifest {
-            Some(_) if path.is_file() => path,
-            Some(manifest) if path.is_dir() => path.join(manifest),
-            Some(manifest) => manifest,
-            None if path.is_dir() => path.join("manifest.json"),
-            None if path.is_file() => path,
-            None => path,
-        };
-
-        Self {
-            manifest: Some(manifest_path),
-            ..self
-        }
     }
 
     pub fn username(self, username: Option<String>) -> Self {
@@ -157,12 +163,24 @@ impl KibanaObjectManagerBuilder {
                     .to_path_buf(),
             ),
         };
-        let manifest_file = export_path.join("manifest.json");
         log::debug!("Export file: {}", export_file.display().bright_black());
         Self {
-            file: Some(export_file),
+            file_out: Some(export_file),
             path: Some(export_path),
-            manifest: Some(manifest_file),
+            ..self
+        }
+    }
+
+    pub fn manifest(self, manifest: PathBuf) -> Self {
+        log::debug!("Self manifest {:?}", &self.manifest.bright_black());
+        let manifest_path = match &self.path {
+            _ if manifest.is_dir() => manifest.join("manifest.json"),
+            Some(path) => path.join("manifest.json"),
+            None => manifest,
+        };
+
+        Self {
+            manifest: Some(manifest_path),
             ..self
         }
     }
@@ -181,7 +199,7 @@ impl KibanaObjectManagerBuilder {
         let manifest_file = import_path.join("manifest.json");
         log::debug!("Import file: {}", import_file.display().bright_black());
         Self {
-            file: Some(import_file),
+            file_in: Some(import_file),
             path: Some(import_path),
             manifest: Some(manifest_file),
             ..self
@@ -201,15 +219,9 @@ impl KibanaObjectManagerBuilder {
     }
 
     fn read_manifest(&self) -> Result<Manifest> {
-        let manifest = match &self.manifest {
-            Some(manifest) => {
-                log::debug!("Reading file {}", manifest.display().bright_black());
-                serde_json::from_reader(File::open(&manifest)?)
-                    .map_err(|e| eyre!("Failed to read manifest file: {}", e))
-            }
-            None => Err(eyre!("Manifest file not given")),
-        }?;
-
-        Ok(manifest)
+        match self.manifest {
+            Some(ref manifest) => Manifest::read(&manifest),
+            None => Err(eyre!("Missing manifest file path")),
+        }
     }
 }

@@ -1,4 +1,4 @@
-use super::{Kibana, ObjectManager, manifest::generate_manifest, objects};
+use super::{Kibana, Manifest, ObjectManager, objects};
 use eyre::{OptionExt, Result};
 use owo_colors::OwoColorize;
 use std::{fs::File, io::Write, path::PathBuf};
@@ -22,7 +22,8 @@ impl Kibana<Initializer> {
             self.objects.manifest.display().bright_black()
         );
         update_gitignore()?;
-        generate_manifest(&self.objects.manifest, &self.objects.file)?;
+        Manifest::from_export(&self.objects.file)?.write(&self.objects.manifest)?;
+
         let path = self
             .objects
             .file

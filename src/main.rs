@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand, builder::styling};
+use eyre::Result;
 use kibana_object_manager::KibanaObjectManagerBuilder;
 use owo_colors::OwoColorize;
-use std::{error::Error, path::PathBuf};
+use std::path::PathBuf;
 
 // CLI Styling
 const STYLES: styling::Styles = styling::Styles::styled()
@@ -56,10 +57,9 @@ enum Commands {
         #[arg(default_value = ".")]
         input_dir: String,
 
-        /// Keep the temporary files and directories
-        #[arg(short, long, default_value_t = true)]
-        clean: bool,
-
+        ///// Keep the temporary files and directories
+        //#[arg(short, long, default_value_t = true)]
+        //clean: bool,
         /// Set "managed: false" to allow direct editing in Kibana
         #[arg(short, long, default_value_t = true)]
         managed: bool,
@@ -72,7 +72,7 @@ enum Commands {
         output_dir: String,
 
         /// Comma-separated list of "type=uuid" objects to export from Kibana
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "file")]
         objects: Option<String>,
 
         /// Filename of an export.ndjson to merge into existing manifest
@@ -92,7 +92,7 @@ enum Commands {
     },
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     dotenvy::from_filename(&cli.env)?;
     let log_level = match cli.debug {
@@ -117,11 +117,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 export.bright_black(),
                 manifest.bright_black()
             );
-            let kibob = kibob
+            kibob
                 .export_path(PathBuf::from(export))
                 .manifest(PathBuf::from(manifest))
-                .build_initializer()?;
-            kibob.initialize()?;
+                .build_initializer()?
+                .initialize()?;
             log::info!("Initialization complete");
         }
         Commands::Auth => {
@@ -134,8 +134,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Commands::Pull { output_dir } => {
             log::info!("Exporting objects to: {}", output_dir.bright_black());
+            let output_path = PathBuf::from(output_dir);
             let kibob = kibob
-                .export_path(PathBuf::from(output_dir))
+                .export_path(output_path.clone())
+                .manifest(output_path)
                 .build_exporter()?;
             log::info!("Pulling objects from: {}", kibob.url().bright_blue());
             match kibob.pull() {
@@ -143,22 +145,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Err(e) => log::error!("{}", e),
             }
         }
-        Commands::Push {
-            input_dir,
-            clean,
-            managed,
-        } => {
+        Commands::Push { input_dir, managed } => {
             log::info!(
-                "Pushing objects from: {}, clean: {}, managed: {}",
+                "Pushing {} objects from: {}",
+                match managed {
+                    true => "managed",
+                    false => "unmanaged",
+                }
+                .cyan(),
                 input_dir.bright_black(),
-                clean.cyan(),
-                managed.cyan()
             );
             let kibob = kibob
                 .import_path(PathBuf::from(input_dir))
                 .managed(managed)
                 .build_importer()?;
-
             log::info!("Pushing objects to: {}", kibob.url().bright_blue());
             match kibob.push() {
                 Ok(msg) => log::info!("Push successful: {msg}"),
@@ -170,27 +170,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             objects,
             file,
         } => {
-            log::info!(
-                "Adding objects to: {}, objects: {:?}, file: {:?}",
-                output_dir,
-                objects,
-                file
-            );
+            let output_path = PathBuf::from(output_dir);
+            match (objects, file) {
+                (Some(objects), None) => {
+                    log::info!(
+                        "Adding {} to {}",
+                        objects.cyan(),
+                        output_path.display().bright_black(),
+                    );
+                    kibob
+                        .export_path(output_path)
+                        .build_export_merger()?
+                        .merge()?;
+                }
+                (None, Some(file)) => {
+                    log::info!(
+                        "Adding {} contents to {}",
+                        file.bright_black(),
+                        output_path.display().bright_black(),
+                    );
+                    kibob
+                        .export_path(output_path)
+                        .build_file_merger()?
+                        .merge()?;
+                }
+                _ => log::error!(
+                    "Invalid {} arguments, must specify either {} or {}",
+                    "Add".magenta(),
+                    "--objects".cyan(),
+                    "--file".cyan()
+                ),
+            }
         }
         Commands::Togo { input_dir, managed } => {
             log::info!(
                 "Creating to-go bundle from: {}, managed: {}",
-                input_dir,
-                managed
+                input_dir.bright_black(),
+                managed.cyan()
             );
             let kibob = kibob
                 .managed(managed)
                 .import_path(PathBuf::from(input_dir))
                 .build_bundler()?;
-
             log::info!(
                 "Creating to-go bundle from: {}",
-                kibob.source().bright_blue()
+                kibob.source().bright_black()
             );
             match kibob.bundle() {
                 Ok(msg) => log::info!("To-go ready: {msg}"),
