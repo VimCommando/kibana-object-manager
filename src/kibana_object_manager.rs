@@ -14,7 +14,7 @@ use eyre::{OptionExt, Result, eyre};
 use importer::Importer;
 use initializer::Initializer;
 use manifest::Manifest;
-use merger::{ExportMerger, FileMerger};
+use merger::Merger;
 use owo_colors::OwoColorize;
 use std::{collections::HashMap, path::PathBuf};
 
@@ -23,6 +23,7 @@ pub struct KibanaObjectManagerBuilder {
     apikey: Option<String>,
     file_in: Option<PathBuf>,
     file_out: Option<PathBuf>,
+    export_list: HashMap<String, String>,
     is_managed: bool,
     manifest: Option<PathBuf>,
     password: Option<String>,
@@ -35,6 +36,7 @@ impl KibanaObjectManagerBuilder {
     pub fn new(kibana_url: String) -> Self {
         Self {
             apikey: None,
+            export_list: HashMap::new(),
             file_in: None,
             file_out: None,
             is_managed: false,
@@ -46,22 +48,25 @@ impl KibanaObjectManagerBuilder {
         }
     }
 
-    pub fn build_file_merger(self) -> Result<FileMerger> {
-        Ok(FileMerger {
+    pub fn build_file_merger(self) -> Result<Merger<merger::Ndjson>> {
+        Ok(Merger {
             manifest: self.read_manifest()?,
-            file_in: self.file_in.ok_or_eyre("No merge file provided")?,
-            file_out: self.file_out.ok_or_eyre("No export file provided")?,
+            export_ndjson: self.file_out.ok_or_eyre("No export file provided")?,
+            data: merger::Ndjson {
+                merge_ndjson: self.file_in.ok_or_eyre("No merge file provided")?,
+            },
         })
     }
 
-    pub fn build_export_merger(self) -> Result<ExportMerger> {
-        Ok(ExportMerger {
-            auth_header: self.format_auth_header(),
+    pub fn build_kibana_merger(self) -> Result<Merger<merger::Kibana>> {
+        Ok(Merger {
             manifest: self.read_manifest()?,
-            file_in: self.file_in.ok_or_eyre("Merge file not provided")?,
-            file_out: self.file_out.ok_or_eyre("Export file not provided")?,
-            url: self.url,
-            export_list: HashMap::new(),
+            data: merger::Kibana {
+                auth_header: self.format_auth_header(),
+                url: self.url,
+                manifest: Manifest::from_export_list(self.export_list)?,
+            },
+            export_ndjson: self.file_out.ok_or_eyre("No export file provided")?,
         })
     }
 
@@ -124,6 +129,22 @@ impl KibanaObjectManagerBuilder {
         Self { is_managed, ..self }
     }
 
+    pub fn export_list(self, object_list: Vec<String>) -> Result<Self> {
+        let mut export_list = HashMap::new();
+        for entry in object_list {
+            let parts: Vec<&str> = entry.split('=').collect();
+            if parts.len() == 2 {
+                export_list.insert(parts[0].to_string(), parts[1].to_string());
+            } else {
+                log::warn!("Invalid export_list entry: {}", entry);
+            }
+        }
+        Ok(Self {
+            export_list,
+            ..self
+        })
+    }
+
     pub fn export_path(self, export_path: PathBuf) -> Self {
         let (export_file, export_path) = match export_path.is_dir() {
             true => (export_path.join("export.ndjson"), export_path),
@@ -143,12 +164,12 @@ impl KibanaObjectManagerBuilder {
         }
     }
 
-    pub fn manifest(self, manifest: PathBuf) -> Self {
+    pub fn manifest(self, manifest: &PathBuf) -> Self {
         log::debug!("Self manifest {:?}", &self.manifest.bright_black());
         let manifest_path = match &self.path {
             _ if manifest.is_dir() => manifest.join("manifest.json"),
             Some(path) => path.join("manifest.json"),
-            None => manifest,
+            None => manifest.clone(),
         };
 
         Self {
@@ -174,6 +195,13 @@ impl KibanaObjectManagerBuilder {
             file_in: Some(import_file),
             path: Some(import_path),
             manifest: Some(manifest_file),
+            ..self
+        }
+    }
+
+    pub fn merge_path(self, merge_path: PathBuf) -> Self {
+        Self {
+            file_in: Some(merge_path),
             ..self
         }
     }

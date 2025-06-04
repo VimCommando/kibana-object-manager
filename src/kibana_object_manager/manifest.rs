@@ -2,7 +2,7 @@ use eyre::{Result, eyre};
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs::File, path::PathBuf};
+use std::{collections::HashMap, fs::File, path::PathBuf};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +10,12 @@ pub struct Manifest {
     objects: Vec<Object>,
     exclude_export_details: bool,
     include_references_deep: bool,
+}
+
+impl Manifest {
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -58,6 +64,23 @@ impl Manifest {
         Ok(manifest)
     }
 
+    pub fn from_export_list(export_list: HashMap<String, String>) -> Result<Self> {
+        let mut manifest = Manifest::new();
+        for (object_type, id) in export_list {
+            manifest.push(Object { object_type, id });
+        }
+        manifest.sort();
+        Ok(manifest)
+    }
+
+    pub fn merge(mut self, other: Self) -> Result<Self> {
+        self.objects.extend(other.objects);
+        self.objects
+            .dedup_by(|a, b| a.object_type == b.object_type && a.id == b.id);
+        self.sort();
+        Ok(self)
+    }
+
     /// Reads a manifest file from the given path.
     pub fn read(path: &PathBuf) -> Result<Self> {
         log::debug!("Reading manifest file: {}", path.display().bright_black());
@@ -67,7 +90,11 @@ impl Manifest {
 
     /// Writes the manifest to the given path.
     pub fn write(&self, path: &PathBuf) -> Result<()> {
-        log::debug!("Writing manifest file: {}", path.display().bright_black());
+        log::debug!(
+            "Writing {} entries to manifest file: {}",
+            self.objects.len().cyan(),
+            path.display().bright_black()
+        );
         let file = File::create(&path)?;
         let mut file = std::io::BufWriter::new(file);
         serde_json::to_writer_pretty(&mut file, self)

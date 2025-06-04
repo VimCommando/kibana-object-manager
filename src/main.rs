@@ -73,7 +73,7 @@ enum Commands {
 
         /// Comma-separated list of "type=uuid" objects to export from Kibana
         #[arg(short, long, conflicts_with = "file")]
-        objects: Option<String>,
+        objects: Option<Vec<String>>,
 
         /// Filename of an export.ndjson to merge into existing manifest
         #[arg(short, long)]
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
             );
             kibob
                 .export_path(PathBuf::from(export))
-                .manifest(PathBuf::from(manifest))
+                .manifest(&PathBuf::from(manifest))
                 .build_initializer()?
                 .initialize()?;
             log::info!("Initialization complete");
@@ -136,8 +136,8 @@ fn main() -> Result<()> {
             log::info!("Exporting objects to: {}", output_dir.bright_black());
             let output_path = PathBuf::from(output_dir);
             let kibob = kibob
-                .export_path(output_path.clone())
-                .manifest(output_path)
+                .manifest(&output_path)
+                .export_path(output_path)
                 .build_exporter()?;
             log::info!("Pulling objects from: {}", kibob.url().bright_blue());
             match kibob.pull() {
@@ -175,12 +175,15 @@ fn main() -> Result<()> {
                 (Some(objects), None) => {
                     log::info!(
                         "Adding {} to {}",
-                        objects.cyan(),
+                        "objects".cyan(),
                         output_path.display().bright_black(),
                     );
                     kibob
-                        .export_path(output_path)
-                        .build_export_merger()?
+                        .manifest(&output_path)
+                        .export_path(output_path.join("merge.ndjson"))
+                        .export_list(objects)?
+                        .build_kibana_merger()?
+                        .read()?
                         .merge()?;
                 }
                 (None, Some(file)) => {
@@ -190,8 +193,11 @@ fn main() -> Result<()> {
                         output_path.display().bright_black(),
                     );
                     kibob
+                        .manifest(&output_path)
                         .export_path(output_path)
+                        .merge_path(PathBuf::from(file))
                         .build_file_merger()?
+                        .read()?
                         .merge()?;
                 }
                 _ => log::error!(
