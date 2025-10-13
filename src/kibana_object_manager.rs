@@ -1,20 +1,11 @@
-mod authorizer;
-mod bundler;
-mod exporter;
-mod importer;
-mod initializer;
-mod manifest;
-mod merger;
-mod objects;
-
-use authorizer::Authorizer;
-use bundler::Bundler;
-use exporter::Exporter;
+use super::authorizer::Authorizer;
+use super::bundler::Bundler;
+use super::exporter::Exporter;
+use super::importer::Importer;
+use super::initializer::Initializer;
+use super::manifest::Manifest;
+use super::merger::{self, Merger};
 use eyre::{OptionExt, Result, eyre};
-use importer::Importer;
-use initializer::Initializer;
-use manifest::Manifest;
-use merger::Merger;
 use owo_colors::OwoColorize;
 use std::{collections::HashMap, path::PathBuf};
 

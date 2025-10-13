@@ -57,9 +57,6 @@ enum Commands {
         #[arg(default_value = ".")]
         input_dir: String,
 
-        ///// Keep the temporary files and directories
-        //#[arg(short, long, default_value_t = true)]
-        //clean: bool,
         /// Set "managed: false" to allow direct editing in Kibana
         #[arg(short, long, default_value_t = true)]
         managed: bool,

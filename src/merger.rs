@@ -1,5 +1,4 @@
-use crate::kibana_object_manager::objects;
-
+use super::objects;
 use super::{Manifest, exporter};
 use eyre::{OptionExt, Result};
 use owo_colors::OwoColorize;

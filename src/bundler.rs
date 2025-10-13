@@ -1,6 +1,5 @@
-use crate::kibana_object_manager::objects;
-
 use super::Manifest;
+use super::objects;
 use eyre::Result;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
