@@ -465,14 +465,40 @@ function unbundle_saved_objects() {
     if [[ $created_count -eq $expected_count ]]; then
         log_debug "Successfully created all ${created_count} files with meaningful names"
     else
-        log_warn "Only created ${created_count} of ${expected_count} files - some object names contain invalid filename characters"
-        log_info "Falling back to sequential numbering..."
-        # Clear any partially created files and retry without --name parameter
-        rm -f "${objects_dir}"/*.json 2>/dev/null
-        jsrmx unbundle "${export_file}" "${objects_dir}" \
-            --type="type" \
-            --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs"
-        log_info "Successfully created files using sequential numbering"
+        log_warn "Created ${created_count} of ${expected_count} files with meaningful names"
+        log_info "Processing failed objects with sequential numbering..."
+        
+        # Create a list of successfully created object IDs
+        local temp_success_ids="${objects_dir}/.success_ids.tmp"
+        for file in "${objects_dir}"/*.json; do
+            [[ -f "$file" ]] && jq -r '.id // empty' "$file" 2>/dev/null >> "$temp_success_ids"
+        done
+        
+        # Extract failed objects to temporary file
+        local temp_failed="${objects_dir}/.failed_objects.ndjson"
+        local line_num=0
+        while IFS= read -r line; do
+            line_num=$((line_num + 1))
+            local obj_id=$(echo "$line" | jq -r '.id // empty' 2>/dev/null)
+            if [[ -n "$obj_id" ]] && ! grep -Fxq "$obj_id" "$temp_success_ids" 2>/dev/null; then
+                echo "$line" >> "$temp_failed"
+            fi
+        done < "${export_file}"
+        
+        # Process only the failed objects with sequential numbering
+        if [[ -f "$temp_failed" ]]; then
+            local failed_count=$(wc -l < "$temp_failed" | tr -d '[:space:]')
+            log_debug "Processing ${failed_count} failed objects with sequential numbering..."
+            
+            jsrmx unbundle "$temp_failed" "${objects_dir}" \
+                --type="type" \
+                --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs"
+            
+            log_info "Successfully processed all objects: ${created_count} with meaningful names, ${failed_count} with sequential numbering"
+        fi
+        
+        # Cleanup temporary files
+        rm -f "$temp_success_ids" "$temp_failed" 2>/dev/null
     fi
     
     drop_index_pattern_count
