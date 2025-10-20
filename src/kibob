@@ -449,11 +449,33 @@ function drop_index_pattern_count() {
 function unbundle_saved_objects() {
     local output_dir="$(dirname "${export_file}")/objects"
     log_info "Unbundling $(gray "${export_file}") to $(gray "${objects_dir}")"
+    
+    # First try with meaningful filenames based on object names/titles
+    log_debug "Attempting to use meaningful filenames..."
+    local expected_count=$(wc -l < "${export_file}" | tr -d '[:space:]')
+    
     jsrmx unbundle "${export_file}" "${objects_dir}" \
         --name="attributes.title,attributes.name" \
         --type="type" \
         --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs" \
-    && drop_index_pattern_count
+        2>/dev/null
+    
+    local created_count=$(ls -1 "${objects_dir}"/*.json 2>/dev/null | wc -l | tr -d '[:space:]')
+    
+    if [[ $created_count -eq $expected_count ]]; then
+        log_debug "Successfully created all ${created_count} files with meaningful names"
+    else
+        log_warn "Only created ${created_count} of ${expected_count} files - some object names contain invalid filename characters"
+        log_info "Falling back to sequential numbering..."
+        # Clear any partially created files and retry without --name parameter
+        rm -f "${objects_dir}"/*.json 2>/dev/null
+        jsrmx unbundle "${export_file}" "${objects_dir}" \
+            --type="type" \
+            --unescape="attributes.panelsJSON,attributes.fieldFormatMap,attributes.controlGroupInput.ignoreParentSettingsJSON,attributes.controlGroupInput.panelsJSON,attributes.kibanaSavedObjectMeta.searchSourceJSON,attributes.optionsJSON,attributes.visState,attributes.fieldAttrs"
+        log_info "Successfully created files using sequential numbering"
+    fi
+    
+    drop_index_pattern_count
 }
 
 # Uses ${manifest_dir}
