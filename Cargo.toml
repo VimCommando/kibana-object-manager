@@ -10,6 +10,7 @@ name = "kibob"
 path = "src/main.rs"
 
 [dependencies]
+# Existing dependencies
 base64 = "^0.22"
 clap = { version = "^4.5", features = ["derive"] }
 dotenvy = "^0.15"
@@ -18,6 +19,17 @@ eyre = "^0.6"
 jsrmx = "0.2.0"
 log = "^0.4"
 owo-colors = "4.2.0"
-reqwest = { version = "^0.12", features = ["blocking", "json", "multipart"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+url = "^2.5.0"
+
+# Updated dependencies - removed "blocking" feature
+reqwest = { version = "^0.12", features = ["json", "multipart"] }
+
+# New dependencies for async ETL
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = "3"

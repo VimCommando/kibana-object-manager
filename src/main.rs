@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand, builder::styling};
 use eyre::Result;
-use kibana_object_manager::KibanaObjectManagerBuilder;
 use owo_colors::OwoColorize;
-use std::path::PathBuf;
 
 // CLI Styling
 const STYLES: styling::Styles = styling::Styles::styled()
@@ -89,9 +87,11 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     dotenvy::from_filename(&cli.env)?;
+
     let log_level = match cli.debug {
         true => "debug",
         false => "info",
@@ -101,12 +101,8 @@ fn main() -> Result<()> {
         .format_timestamp_millis()
         .init();
 
-    let kibob = KibanaObjectManagerBuilder::new(std::env::var("KIBANA_URL")?)
-        .username(std::env::var("KIBANA_USERNAME").ok())
-        .apikey(std::env::var("KIBANA_APIKEY").ok())
-        .password(std::env::var("KIBANA_PASSWORD").ok());
+    log::info!("Kibana Object Manager - Phase 1 (ETL Framework)");
 
-    log::debug!("{:?}", kibob);
     match cli.command {
         Commands::Init { export, manifest } => {
             log::info!(
@@ -114,33 +110,15 @@ fn main() -> Result<()> {
                 export.bright_black(),
                 manifest.bright_black()
             );
-            kibob
-                .export_path(PathBuf::from(export))
-                .manifest(&PathBuf::from(manifest))
-                .build_initializer()?
-                .initialize()?;
-            log::info!("Initialization complete");
+            log::warn!("Init command - Phase 2 implementation");
         }
         Commands::Auth => {
-            let kibob = kibob.build_authorizer()?;
-            log::info!("Testing authorization to {}", kibob.url().bright_blue());
-            match kibob.authorize() {
-                Ok(msg) => log::info!("Authorization successful - {msg}"),
-                Err(e) => log::error!("{}", e),
-            }
+            log::info!("Testing authorization");
+            log::warn!("Auth command - Phase 2 implementation");
         }
         Commands::Pull { output_dir } => {
-            log::info!("Exporting objects to: {}", output_dir.bright_black());
-            let output_path = PathBuf::from(output_dir);
-            let kibob = kibob
-                .manifest(&output_path)
-                .export_path(output_path)
-                .build_exporter()?;
-            log::info!("Pulling objects from: {}", kibob.url().bright_blue());
-            match kibob.pull() {
-                Ok(msg) => log::info!("Pull successful - {msg}"),
-                Err(e) => log::error!("{}", e),
-            }
+            log::info!("Pulling objects to: {}", output_dir.bright_black());
+            log::warn!("Pull command - Phase 2 implementation");
         }
         Commands::Push { input_dir, managed } => {
             log::info!(
@@ -152,58 +130,15 @@ fn main() -> Result<()> {
                 .cyan(),
                 input_dir.bright_black(),
             );
-            let kibob = kibob
-                .import_path(PathBuf::from(input_dir))
-                .managed(managed)
-                .build_importer()?;
-            log::info!("Pushing objects to: {}", kibob.url().bright_blue());
-            match kibob.push() {
-                Ok(msg) => log::info!("Push successful: {msg}"),
-                Err(e) => log::error!("{}", e),
-            }
+            log::warn!("Push command - Phase 2 implementation");
         }
         Commands::Add {
             output_dir,
-            objects,
-            file,
+            objects: _,
+            file: _,
         } => {
-            let output_path = PathBuf::from(output_dir);
-            match (objects, file) {
-                (Some(objects), None) => {
-                    log::info!(
-                        "Adding {} to {}",
-                        "objects".cyan(),
-                        output_path.display().bright_black(),
-                    );
-                    kibob
-                        .manifest(&output_path)
-                        .export_path(output_path.join("merge.ndjson"))
-                        .export_list(objects)?
-                        .build_kibana_merger()?
-                        .read()?
-                        .merge()?;
-                }
-                (None, Some(file)) => {
-                    log::info!(
-                        "Adding {} contents to {}",
-                        file.bright_black(),
-                        output_path.display().bright_black(),
-                    );
-                    kibob
-                        .manifest(&output_path)
-                        .export_path(output_path)
-                        .merge_path(PathBuf::from(file))
-                        .build_file_merger()?
-                        .read()?
-                        .merge()?;
-                }
-                _ => log::error!(
-                    "Invalid {} arguments, must specify either {} or {}",
-                    "Add".magenta(),
-                    "--objects".cyan(),
-                    "--file".cyan()
-                ),
-            }
+            log::info!("Adding objects to {}", output_dir.bright_black());
+            log::warn!("Add command - Phase 2 implementation");
         }
         Commands::Togo { input_dir, managed } => {
             log::info!(
@@ -211,19 +146,9 @@ fn main() -> Result<()> {
                 input_dir.bright_black(),
                 managed.cyan()
             );
-            let kibob = kibob
-                .managed(managed)
-                .import_path(PathBuf::from(input_dir))
-                .build_bundler()?;
-            log::info!(
-                "Creating to-go bundle from: {}",
-                kibob.to_string().bright_black()
-            );
-            match kibob.bundle() {
-                Ok(msg) => log::info!("To-go ready: {msg}"),
-                Err(e) => log::error!("{}", e),
-            }
+            log::warn!("Togo command - Phase 2 implementation");
         }
     }
+
     Ok(())
 }

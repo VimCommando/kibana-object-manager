@@ -1,11 +1,11 @@
+use super::Manifest;
 use super::objects;
-use super::{Manifest, exporter};
 use eyre::{OptionExt, Result};
 use owo_colors::OwoColorize;
 use serde_json::Value;
 use std::{
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::PathBuf,
 };
 
@@ -36,7 +36,7 @@ impl Merger<Values> {
             self.data.objects.len().cyan(),
             self.manifest.len().cyan()
         );
-        exporter::write_ndjson(self.data.objects, &self.export_ndjson)?;
+        write_ndjson(self.data.objects, &self.export_ndjson)?;
         let export_path = self
             .export_ndjson
             .parent()
@@ -89,23 +89,18 @@ impl ToString for Ndjson {
     }
 }
 
-pub struct Kibana {
-    pub auth_header: String,
-    pub url: String,
-    pub manifest: Manifest,
-}
-
-impl ObjectReader for Kibana {
-    fn read(self) -> Result<Values> {
-        Ok(Values {
-            objects: exporter::export_saved_objects(&self.url, &self.auth_header, &self.manifest)?,
-            manifest: self.manifest,
-        })
+pub fn write_ndjson(objects: Vec<Value>, path: &PathBuf) -> Result<()> {
+    let file = File::create(&path)?;
+    let mut writer = BufWriter::new(file);
+    let mut count = 0;
+    for object in objects {
+        writeln!(writer, "{}", serde_json::to_string(&object)?)?;
+        count += 1;
     }
-}
-
-impl ToString for Kibana {
-    fn to_string(&self) -> String {
-        format!("{}", self.url)
-    }
+    log::debug!(
+        "Saved {} objects to file {}",
+        count.cyan(),
+        path.display().bright_black()
+    );
+    Ok(())
 }

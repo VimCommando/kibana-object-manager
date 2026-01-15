@@ -1,7 +1,4 @@
-use super::authorizer::Authorizer;
 use super::bundler::Bundler;
-use super::exporter::Exporter;
-use super::importer::Importer;
 use super::initializer::Initializer;
 use super::manifest::Manifest;
 use super::merger::{self, Merger};
@@ -58,13 +55,6 @@ impl KibanaObjectManagerBuilder {
                 manifest: Manifest::from_export_list(self.export_list)?,
             },
             export_ndjson: self.file_out.ok_or_eyre("No export file provided")?,
-        })
-    }
-
-    pub fn build_authorizer(self) -> Result<Authorizer> {
-        Ok(Authorizer {
-            auth_header: self.format_auth_header(),
-            url: self.url,
         })
     }
 
