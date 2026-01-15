@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 default-run = "kibob"
 rust-version = "1.89"
+authors = ["Ryan Eno"]
+description = "A Git-inspired CLI tool for managing Kibana saved objects in version control"
+license = "Apache-2.0"
+repository = "https://github.com/VimCommando/kibana-object-manager"
+homepage = "https://github.com/VimCommando/kibana-object-manager"
+readme = "README.md"
+keywords = ["kibana", "elasticsearch", "devops", "etl", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "kibob"

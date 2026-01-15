@@ -16,15 +16,31 @@ const STYLES: styling::Styles = styling::Styles::styled()
     .literal(styling::AnsiColor::Green.on_default())
     .placeholder(styling::AnsiColor::Cyan.on_default());
 
-/// Kibana Object Manager: --{kibob}-> is the Git-flavored side dish to prepare Kibana saved objects for version control
+/// Kibana Object Manager: --{kibob}-> Git-inspired CLI for managing Kibana saved objects in version control
+///
+/// Manage dashboards, visualizations, and saved objects with a familiar Git-like workflow.
+/// Version control your Kibana artifacts, deploy across environments, and collaborate with Git.
+///
+/// Environment Variables:
+///   KIBANA_URL       Kibana base URL (required)
+///   KIBANA_USERNAME  Basic auth username (optional)
+///   KIBANA_PASSWORD  Basic auth password (optional)
+///   KIBANA_APIKEY    API key authentication (optional, conflicts with user/pass)
+///   KIBANA_SPACE     Kibana space ID (default: 'default')
+///
+/// Examples:
+///   kibob auth                              Test connection to Kibana
+///   kibob init export.ndjson ./dashboards   Initialize project from export
+///   kibob pull .                            Fetch objects from Kibana
+///   kibob push . --managed true             Deploy to Kibana as managed objects
 #[derive(Parser)]
-#[command(name = "kibob", version, styles = STYLES)]
+#[command(name = "kibob", version, styles = STYLES, about, long_about)]
 struct Cli {
-    /// The dotenv file to source credentials from
+    /// Dotenv file to load environment variables from
     #[arg(short, long, global = true, default_value = ".env")]
     env: String,
 
-    /// More verbose logging and retention of temporary files
+    /// Enable verbose logging (debug level)
     #[arg(long, global = true)]
     debug: bool,
 
@@ -35,73 +51,114 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Slice up an export.ndjson into objects files and create a manifest.json
+    /// Initialize a new project from a Kibana export file
+    ///
+    /// Creates a manifest and extracts objects into organized directories.
+    /// The export file is typically downloaded from Kibana UI (Stack Management → Saved Objects → Export).
+    ///
+    /// Example:
+    ///   kibob init export.ndjson ./my-dashboards
     Init {
-        /// An NDJSON file or directory with an export.ndjson to build a manifest file from
+        /// NDJSON export file or directory containing export.ndjson
         #[arg(default_value = "export.ndjson")]
         export: String,
 
-        /// The manifest file to generate
+        /// Output directory for manifest and objects
         #[arg(default_value = "manifest.json")]
         manifest: String,
     },
 
-    /// Test authorization to a Kibana remote
+    /// Test connection and authentication to Kibana
+    ///
+    /// Verifies that your credentials and connection are working.
+    /// Requires KIBANA_URL and either KIBANA_USERNAME/KIBANA_PASSWORD or KIBANA_APIKEY.
+    ///
+    /// Example:
+    ///   kibob auth
     Auth,
 
-    /// Fetch saved objects from a Kibana remote
+    /// Pull (fetch) saved objects from Kibana to local files
+    ///
+    /// Downloads objects specified in the manifest from Kibana and saves them locally.
+    /// Objects are organized by type in the objects/ directory.
+    ///
+    /// Example:
+    ///   kibob pull ./my-dashboards
     Pull {
-        /// Directory to save exported objects to. Must contain a manifest.json file.
+        /// Project directory containing manifest (default: current directory)
         #[arg(default_value = ".")]
         output_dir: String,
     },
 
-    /// Update saved objects in a Kibana remote
+    /// Push (upload) local saved objects to Kibana
+    ///
+    /// Uploads objects from local files to Kibana. Use --managed true (default) to make
+    /// objects read-only in Kibana UI, or --managed false to allow editing.
+    ///
+    /// Examples:
+    ///   kibob push . --managed true    # Read-only in Kibana (recommended for production)
+    ///   kibob push . --managed false   # Editable in Kibana
     Push {
-        /// A directory containing the manifest.json file to import
+        /// Project directory containing objects to upload
         #[arg(default_value = ".")]
         input_dir: String,
 
-        /// Set "managed: false" to allow direct editing in Kibana.
-        /// Use --no-managed to disable management.
+        /// Make objects read-only in Kibana UI (managed: true)
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
     },
 
-    /// Add saved objects to the manifest
+    /// Add objects to an existing manifest
+    ///
+    /// Add objects by ID or merge from an export file into the manifest.
+    ///
+    /// Examples:
+    ///   kibob add . --objects "dashboard=abc123,visualization=xyz789"
+    ///   kibob add . --file new-export.ndjson
     Add {
-        /// Directory to save the exported objects to. Must contain a manifest.json file.
+        /// Project directory with existing manifest
         #[arg(default_value = ".")]
         output_dir: String,
 
-        /// Comma-separated list of "type=uuid" objects to export from Kibana
+        /// Comma-separated list of "type=id" objects to add
         #[arg(short, long, conflicts_with = "file")]
         objects: Option<Vec<String>>,
 
-        /// Filename of an export.ndjson to merge into existing manifest
+        /// Export NDJSON file to merge into manifest
         #[arg(short, long)]
         file: Option<String>,
     },
 
-    /// Order your Kibana objects to go! (bundle an NDJSON for distribution)
+    /// Bundle objects into distributable NDJSON file
+    ///
+    /// Creates an export.ndjson file that can be imported into Kibana or shared.
+    /// Useful for creating releases or sharing dashboards with others.
+    ///
+    /// Example:
+    ///   kibob togo ./my-dashboards
     Togo {
-        /// Directory containing the objects to bundle
+        /// Project directory containing objects to bundle
         #[arg(default_value = ".")]
         input_dir: String,
 
-        /// Set "managed: false" to allow direct editing in Kibana.
-        /// Use --no-managed to disable management.
+        /// Set managed flag in bundled objects
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
     },
 
-    /// Migrate legacy manifest.json to new manifest/ directory structure
+    /// Migrate legacy manifest.json to new format
+    ///
+    /// Converts old manifest.json to new manifest/saved_objects.json structure.
+    /// Creates a backup by default unless --no-backup is specified.
+    ///
+    /// Example:
+    ///   kibob migrate ./old-project
     Migrate {
-        /// Project directory containing manifest.json
+        /// Project directory containing legacy manifest.json
         #[arg(default_value = ".")]
         project_dir: String,
 
-        /// Keep a backup of the old manifest.json file
+        /// Create backup of old manifest.json
         #[arg(short, long, default_value_t = true)]
         backup: bool,
     },

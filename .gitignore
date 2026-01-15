@@ -1,9 +1,23 @@
-# Added by cargo
+# Rust build artifacts
 /target
-# Added by --{kibob}-> (Kibana Object Manager)
+Cargo.lock
+
+# Kibana Object Manager temporary files
 .env*
-export.ndjson
-import.ndjson
+*.ndjson
 import/
 response.json
 manifest_patch.json
+
+# Editor and IDE files
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Test artifacts
+test_output/
+temp_test_*
