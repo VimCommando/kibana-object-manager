@@ -1,23 +1,29 @@
 //! Manifest migration utilities
 //!
-//! Provides utilities for migrating from the legacy single-file manifest structure
-//! to the new directory-based manifest structure.
+//! Provides utilities for migrating from the legacy Bash-based structure
+//! to the new Rust-based directory structure.
 //!
-//! Legacy structure:
+//! Legacy structure (Bash version):
 //! ```text
 //! project/
-//!   ├── manifest.json        (saved objects manifest)
-//!   └── objects/            (saved object files)
+//!   ├── manifest.json                          (saved objects manifest)
+//!   └── objects/                               (flat saved object files)
+//!       ├── allocation-overview.dashboard.json (format: name.type.json)
+//!       ├── data-summary.dashboard.json
+//!       └── test-viz.visualization.json
 //! ```
 //!
-//! New structure:
+//! New structure (Rust v0.1.0+):
 //! ```text
 //! project/
 //!   ├── manifest/
-//!   │   ├── saved_objects.json  (saved objects manifest)
-//!   │   └── spaces.yml          (spaces manifest, optional)
-//!   ├── objects/                (saved object files)
-//!   └── spaces/                 (space definition files, optional)
+//!   │   └── saved_objects.json  (saved objects manifest)
+//!   └── objects/                (hierarchical saved object files)
+//!       ├── dashboard/
+//!       │   ├── allocation-overview.json
+//!       │   └── data-summary.json
+//!       └── visualization/
+//!           └── test-viz.json
 //! ```
 
 use eyre::{Context, Result};
@@ -31,7 +37,8 @@ use crate::kibana::saved_objects::SavedObjectsManifest;
 /// 1. Reads the legacy `manifest.json` file
 /// 2. Creates a `manifest/` directory if it doesn't exist
 /// 3. Writes the manifest to `manifest/saved_objects.json`
-/// 4. Optionally backs up or removes the old `manifest.json` file
+/// 4. Migrates flat object files (`objects/type-id.json`) to hierarchical (`objects/type/id.json`)
+/// 5. Optionally backs up or removes the old `manifest.json` file
 ///
 /// # Example
 /// ```no_run
@@ -96,6 +103,9 @@ pub fn migrate_manifest(
 
     log::info!("Wrote new manifest to {}", new_manifest_path.display());
 
+    // Migrate object files from flat to hierarchical structure
+    migrate_object_files(project_dir)?;
+
     // Handle the old manifest file
     if backup_old {
         let backup_path = project_dir.join("manifest.json.backup");
@@ -114,6 +124,104 @@ pub fn migrate_manifest(
         log::info!("Removed old manifest");
         Ok(MigrationResult::MigratedWithoutBackup)
     }
+}
+
+/// Migrate object files from flat structure to hierarchical structure
+///
+/// Converts:
+///   objects/object_name.type.json → objects/type/object_name.json
+///   objects/my-dashboard.dashboard.json → objects/dashboard/my-dashboard.json
+fn migrate_object_files(project_dir: &Path) -> Result<()> {
+    let objects_dir = project_dir.join("objects");
+
+    // If objects directory doesn't exist, nothing to migrate
+    if !objects_dir.exists() {
+        log::debug!("No objects directory found, skipping object file migration");
+        return Ok(());
+    }
+
+    let mut migrated_count = 0;
+    let mut already_hierarchical = 0;
+
+    // Read all entries in objects directory
+    for entry in std::fs::read_dir(&objects_dir).with_context(|| {
+        format!(
+            "Failed to read objects directory: {}",
+            objects_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Skip subdirectories (already hierarchical)
+        if path.is_dir() {
+            already_hierarchical += 1;
+            continue;
+        }
+
+        // Only process .json files
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+
+        // Extract filename without extension
+        let filename = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        // Parse flat filename: "object_name.type" format
+        // Look for the LAST dot to split name and type
+        if let Some(dot_pos) = filename.rfind('.') {
+            let obj_name = &filename[..dot_pos];
+            let obj_type = &filename[dot_pos + 1..];
+
+            // Create hierarchical path: type/object_name.json
+            let type_dir = objects_dir.join(obj_type);
+            let new_path = type_dir.join(format!("{}.json", obj_name));
+
+            // Create type directory if it doesn't exist
+            std::fs::create_dir_all(&type_dir)
+                .with_context(|| format!("Failed to create directory: {}", type_dir.display()))?;
+
+            // Move file to new location
+            std::fs::rename(&path, &new_path).with_context(|| {
+                format!(
+                    "Failed to move {} to {}",
+                    path.display(),
+                    new_path.display()
+                )
+            })?;
+
+            log::debug!(
+                "Migrated object file: {} → {}",
+                path.display(),
+                new_path.display()
+            );
+            migrated_count += 1;
+        } else {
+            log::warn!(
+                "Skipping file with unexpected name format (expected 'object_name.type.json'): {}",
+                path.display()
+            );
+        }
+    }
+
+    if migrated_count > 0 {
+        log::info!(
+            "Migrated {} object file(s) from flat to hierarchical structure",
+            migrated_count
+        );
+    } else if already_hierarchical > 0 {
+        log::info!(
+            "Object files already in hierarchical structure ({} subdirectories found)",
+            already_hierarchical
+        );
+    } else {
+        log::info!("No object files to migrate");
+    }
+
+    Ok(())
 }
 
 /// Check if a project directory needs migration

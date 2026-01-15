@@ -2,33 +2,44 @@
 
 ## Overview
 
-Starting from version 2.0, Kibana Object Manager uses a directory-based manifest structure instead of a single `manifest.json` file. This allows better organization when managing multiple types of Kibana resources (saved objects, spaces, etc.).
+Starting from version 0.1.0 (Rust rewrite), Kibana Object Manager uses:
+1. A directory-based manifest structure (`manifest/saved_objects.json` instead of `manifest.json`)
+2. Hierarchical object storage (`objects/type/id.json` instead of `objects/id.type.json`)
+
+This provides better organization when managing multiple types of Kibana resources.
 
 ## New Structure
 
-### Legacy (v1.x)
+### Legacy (Bash version)
 ```
 project/
-├── manifest.json        # Saved objects manifest
-└── objects/             # Saved object files
+├── manifest.json                           # Saved objects manifest
+└── objects/                                # Flat object files
+    ├── allocation-overview.dashboard.json  # Format: name.type.json
+    ├── data-summary.dashboard.json
+    └── test-viz.visualization.json
 ```
 
-### New (v2.0+)
+### New (Rust v0.1.0+)
 ```
 project/
 ├── manifest/
-│   ├── saved_objects.json    # Saved objects manifest (required)
-│   └── spaces.yml            # Spaces manifest (optional)
-├── objects/                  # Saved object files
-└── spaces/                   # Space definition files (optional)
+│   └── saved_objects.json    # Saved objects manifest
+└── objects/                  # Hierarchical object files
+    ├── dashboard/            # Organized by type
+    │   ├── allocation-overview.json
+    │   └── data-summary.json
+    └── visualization/
+        └── test-viz.json
 ```
 
 ## Benefits
 
-1. **Extensibility**: Easily add new resource types (workflows, etc.) without cluttering the root directory
-2. **Clarity**: Each manifest file has a descriptive name
-3. **Organization**: Related configuration lives in one place
-4. **Consistency**: Aligns with multi-resource management patterns
+1. **Hierarchical organization**: Objects grouped by type in subdirectories
+2. **Simpler filenames**: No need for type suffix in filename
+3. **Extensibility**: Easily add new resource types (spaces, workflows, etc.)
+4. **Clarity**: Each manifest file has a descriptive name
+5. **Git-friendly**: Better diffs when objects of different types change
 
 ## Migration
 
@@ -48,7 +59,27 @@ The migration process:
 1. Reads your existing `manifest.json`
 2. Creates a `manifest/` directory
 3. Writes `manifest/saved_objects.json` with the same content
-4. Backs up or removes the old `manifest.json`
+4. Migrates object files from flat to hierarchical structure:
+   - `objects/name.type.json` → `objects/type/name.json`
+5. Backs up or removes the old `manifest.json`
+
+**Example:**
+```bash
+# Before migration
+objects/
+├── sales-dashboard.dashboard.json
+├── revenue-chart.visualization.json
+└── logs-*.index-pattern.json
+
+# After migration
+objects/
+├── dashboard/
+│   └── sales-dashboard.json
+├── visualization/
+│   └── revenue-chart.json
+└── index-pattern/
+    └── logs-*.json
+```
 
 ### Manual Migration
 
@@ -57,17 +88,24 @@ If you prefer to migrate manually:
 ```bash
 cd /path/to/project
 
-# Create manifest directory
+# Step 1: Create manifest directory and move manifest
 mkdir -p manifest
-
-# Move and rename the manifest
 mv manifest.json manifest/saved_objects.json
 
-# (Optional) Add spaces manifest
-cat > manifest/spaces.yml <<EOF
-spaces:
-  - default
-EOF
+# Step 2: Reorganize objects into subdirectories
+cd objects
+for file in *.json; do
+  # Extract name and type from filename (name.type.json)
+  if [[ $file =~ ^(.+)\.([^.]+)\.json$ ]]; then
+    name="${BASH_REMATCH[1]}"
+    type="${BASH_REMATCH[2]}"
+    
+    # Create type directory and move file
+    mkdir -p "$type"
+    mv "$file" "$type/$name.json"
+    echo "Moved $file to $type/$name.json"
+  fi
+done
 ```
 
 ## Backward Compatibility

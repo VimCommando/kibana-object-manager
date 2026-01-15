@@ -4,7 +4,9 @@
 export kibana_url="http://localhost:5601"
 export kibana_space="default"
 
-# Authentication - Leave unused values as `unset`, change set values to `export`
-unset kibana_apikey
-unset kibana_username
-unset kibana_password
+# Authentication API key
+# export kibana_apikey=""
+
+# Authentication Username and Password
+# export kibana_username=""
+# export kibana_password=""

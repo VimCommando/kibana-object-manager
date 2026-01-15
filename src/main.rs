@@ -159,7 +159,7 @@ enum Commands {
         project_dir: String,
 
         /// Create backup of old manifest.json
-        #[arg(short, long, default_value_t = true)]
+        #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
         backup: bool,
     },
 }

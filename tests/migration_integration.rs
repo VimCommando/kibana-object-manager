@@ -7,7 +7,7 @@ use kibana_object_manager::migration::{
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper function to create a test project with legacy manifest
+/// Helper function to create a test project with legacy manifest and flat object files
 fn create_test_project() -> Result<TempDir> {
     let temp_dir = TempDir::new()?;
     let project_dir = temp_dir.path();
@@ -33,21 +33,21 @@ fn create_test_project() -> Result<TempDir> {
 }"#;
     fs::write(project_dir.join("manifest.json"), manifest_content)?;
 
-    // Create objects directory with test files
-    fs::create_dir_all(project_dir.join("objects/dashboard"))?;
-    fs::create_dir_all(project_dir.join("objects/visualization"))?;
+    // Create objects directory with FLAT structure (legacy format: object_name.type.json)
+    fs::create_dir_all(project_dir.join("objects"))?;
 
+    // Create flat files: object_name.type.json format
     fs::write(
-        project_dir.join("objects/dashboard/allocation-overview.json"),
-        r#"{"attributes": {"title": "Allocation Overview"}}"#,
+        project_dir.join("objects/allocation-overview.dashboard.json"),
+        r#"{"type":"dashboard","id":"allocation-overview","attributes":{"title":"Allocation Overview"}}"#,
     )?;
     fs::write(
-        project_dir.join("objects/dashboard/data-summary.json"),
-        r#"{"attributes": {"title": "Data Summary"}}"#,
+        project_dir.join("objects/data-summary.dashboard.json"),
+        r#"{"type":"dashboard","id":"data-summary","attributes":{"title":"Data Summary"}}"#,
     )?;
     fs::write(
-        project_dir.join("objects/visualization/test-viz.json"),
-        r#"{"attributes": {"title": "Test Visualization"}}"#,
+        project_dir.join("objects/test-viz.visualization.json"),
+        r#"{"type":"visualization","id":"test-viz","attributes":{"title":"Test Visualization"}}"#,
     )?;
 
     Ok(temp_dir)
@@ -94,6 +94,26 @@ fn test_migrate_manifest() -> Result<()> {
     let temp_dir = create_test_project()?;
     let project_dir = temp_dir.path();
 
+    // Verify legacy flat files exist before migration (object_name.type.json format)
+    assert!(
+        project_dir
+            .join("objects/allocation-overview.dashboard.json")
+            .exists(),
+        "Legacy flat file should exist before migration"
+    );
+    assert!(
+        project_dir
+            .join("objects/data-summary.dashboard.json")
+            .exists(),
+        "Legacy flat file should exist before migration"
+    );
+    assert!(
+        project_dir
+            .join("objects/test-viz.visualization.json")
+            .exists(),
+        "Legacy flat file should exist before migration"
+    );
+
     // Perform migration with backup
     let result = migrate_manifest(project_dir, true)?;
 
@@ -114,6 +134,46 @@ fn test_migrate_manifest() -> Result<()> {
             assert!(
                 !project_dir.join("manifest.json").exists(),
                 "Old manifest.json should not exist"
+            );
+
+            // Verify object files were migrated to hierarchical structure
+            assert!(
+                project_dir
+                    .join("objects/dashboard/allocation-overview.json")
+                    .exists(),
+                "Hierarchical dashboard file should exist"
+            );
+            assert!(
+                project_dir
+                    .join("objects/dashboard/data-summary.json")
+                    .exists(),
+                "Hierarchical dashboard file should exist"
+            );
+            assert!(
+                project_dir
+                    .join("objects/visualization/test-viz.json")
+                    .exists(),
+                "Hierarchical visualization file should exist"
+            );
+
+            // Verify flat files no longer exist
+            assert!(
+                !project_dir
+                    .join("objects/allocation-overview.dashboard.json")
+                    .exists(),
+                "Flat file should be removed after migration"
+            );
+            assert!(
+                !project_dir
+                    .join("objects/data-summary.dashboard.json")
+                    .exists(),
+                "Flat file should be removed after migration"
+            );
+            assert!(
+                !project_dir
+                    .join("objects/test-viz.visualization.json")
+                    .exists(),
+                "Flat file should be removed after migration"
             );
         }
         _ => panic!("Expected MigratedWithBackup result"),
@@ -154,6 +214,83 @@ fn test_migrate_already_migrated() -> Result<()> {
         }
         other => panic!("Expected NoLegacyManifest result, got: {:?}", other),
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_migrate_with_mixed_structure() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let project_dir = temp_dir.path();
+
+    // Create manifest
+    let manifest_content = r#"{
+  "objects": [
+    {"type": "dashboard", "id": "flat-dash"},
+    {"type": "dashboard", "id": "hierarchical-dash"},
+    {"type": "visualization", "id": "flat-viz"}
+  ]
+}"#;
+    fs::write(project_dir.join("manifest.json"), manifest_content)?;
+
+    // Create objects directory with MIXED structure
+    fs::create_dir_all(project_dir.join("objects"))?;
+    fs::create_dir_all(project_dir.join("objects/dashboard"))?;
+
+    // One flat file (legacy format: object_name.type.json)
+    fs::write(
+        project_dir.join("objects/flat-dash.dashboard.json"),
+        r#"{"type":"dashboard","id":"flat-dash"}"#,
+    )?;
+
+    // One hierarchical file (already migrated)
+    fs::write(
+        project_dir.join("objects/dashboard/hierarchical-dash.json"),
+        r#"{"type":"dashboard","id":"hierarchical-dash"}"#,
+    )?;
+
+    // Another flat file
+    fs::write(
+        project_dir.join("objects/flat-viz.visualization.json"),
+        r#"{"type":"visualization","id":"flat-viz"}"#,
+    )?;
+
+    // Run migration
+    migrate_manifest(project_dir, true)?;
+
+    // Verify all files are now hierarchical
+    assert!(
+        project_dir
+            .join("objects/dashboard/flat-dash.json")
+            .exists(),
+        "Flat file should be migrated to hierarchical"
+    );
+    assert!(
+        project_dir
+            .join("objects/dashboard/hierarchical-dash.json")
+            .exists(),
+        "Already hierarchical file should remain"
+    );
+    assert!(
+        project_dir
+            .join("objects/visualization/flat-viz.json")
+            .exists(),
+        "Flat visualization should be migrated"
+    );
+
+    // Verify flat files are gone
+    assert!(
+        !project_dir
+            .join("objects/flat-dash.dashboard.json")
+            .exists(),
+        "Flat file should be removed"
+    );
+    assert!(
+        !project_dir
+            .join("objects/flat-viz.visualization.json")
+            .exists(),
+        "Flat file should be removed"
+    );
 
     Ok(())
 }
