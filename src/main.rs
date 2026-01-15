@@ -82,12 +82,17 @@ enum Commands {
     /// Downloads objects specified in the manifest from Kibana and saves them locally.
     /// Objects are organized by type in the objects/ directory.
     ///
-    /// Example:
+    /// Examples:
     ///   kibob pull ./my-dashboards
+    ///   kibob pull ./my-dashboards --space esdiag
     Pull {
         /// Project directory containing manifest (default: current directory)
         #[arg(default_value = ".")]
         output_dir: String,
+
+        /// Kibana space to pull from (overrides KIBANA_SPACE env var)
+        #[arg(long)]
+        space: Option<String>,
     },
 
     /// Push (upload) local saved objects to Kibana
@@ -98,6 +103,7 @@ enum Commands {
     /// Examples:
     ///   kibob push . --managed true    # Read-only in Kibana (recommended for production)
     ///   kibob push . --managed false   # Editable in Kibana
+    ///   kibob push . --space esdiag    # Push to specific space
     Push {
         /// Project directory containing objects to upload
         #[arg(default_value = ".")]
@@ -106,6 +112,10 @@ enum Commands {
         /// Make objects read-only in Kibana UI (managed: true)
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
+
+        /// Kibana space to push to (overrides KIBANA_SPACE env var)
+        #[arg(long)]
+        space: Option<String>,
     },
 
     /// Add objects to an existing manifest
@@ -182,8 +192,6 @@ async fn main() -> Result<()> {
         .format_timestamp_millis()
         .init();
 
-    log::info!("Kibana Object Manager - Phase 1 (ETL Framework)");
-
     match cli.command {
         Commands::Init { export, manifest } => {
             log::info!(
@@ -251,8 +259,16 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Pull { output_dir } => {
+        Commands::Pull { output_dir, space } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
+
+            // Override KIBANA_SPACE if --space flag is provided
+            if let Some(ref space_name) = space {
+                unsafe {
+                    std::env::set_var("KIBANA_SPACE", space_name);
+                }
+                log::info!("Using space from --space flag: {}", space_name.cyan());
+            }
 
             match pull_saved_objects(&output_dir).await {
                 Ok(count) => {
@@ -264,7 +280,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Push { input_dir, managed } => {
+        Commands::Push {
+            input_dir,
+            managed,
+            space,
+        } => {
             log::info!(
                 "Pushing {} objects from: {}",
                 match managed {
@@ -274,6 +294,14 @@ async fn main() -> Result<()> {
                 .cyan(),
                 input_dir.bright_black(),
             );
+
+            // Override KIBANA_SPACE if --space flag is provided
+            if let Some(ref space_name) = space {
+                unsafe {
+                    std::env::set_var("KIBANA_SPACE", space_name);
+                }
+                log::info!("Using space from --space flag: {}", space_name.cyan());
+            }
 
             match push_saved_objects(&input_dir, managed).await {
                 Ok(count) => {

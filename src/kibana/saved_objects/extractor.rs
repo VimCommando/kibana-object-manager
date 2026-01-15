@@ -61,19 +61,18 @@ impl SavedObjectsExtractor {
     /// POSTs the manifest to /api/saved_objects/_export and receives
     /// NDJSON response containing the exported objects.
     async fn export_objects(&self) -> Result<Vec<Value>> {
-        // Note: We need to include the space in the path since saved objects
-        // are space-specific. The client won't add the space prefix for us.
-        let path = format!("/s/{}/api/saved_objects/_export", self.space);
+        // The client will automatically add the space prefix
+        let path = "/api/saved_objects/_export";
 
         log::debug!(
-            "Exporting {} object(s) from {}",
+            "Exporting {} object(s) from space '{}'",
             self.manifest.count(),
-            path
+            self.space
         );
 
         let response = self
             .client
-            .post_json_value(&path, &serde_json::to_value(&self.manifest)?)
+            .post_json_value(path, &serde_json::to_value(&self.manifest)?)
             .await
             .with_context(|| "Failed to export saved objects from Kibana")?;
 

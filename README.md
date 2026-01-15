@@ -117,13 +117,15 @@ Test connection to Kibana with current credentials.
 ### `kibob init <export.ndjson> <output_dir>`
 Initialize a new project from a Kibana export file.
 
-### `kibob pull <dir>`
+### `kibob pull <dir> [--space <name>]`
 Fetch saved objects from Kibana (specified in manifest) and save to local files. Also pulls spaces if `manifest/spaces.yml` exists.
+- `--space <name>`: Override the Kibana space (overrides KIBANA_SPACE env var)
 
-### `kibob push <dir> [--managed true|false]`
+### `kibob push <dir> [--managed true|false] [--space <name>]`
 Upload local objects to Kibana. Also pushes spaces if `manifest/spaces.yml` exists.
 - `--managed true` (default): Objects are read-only in Kibana UI
 - `--managed false`: Objects can be edited in Kibana UI
+- `--space <name>`: Override the Kibana space (overrides KIBANA_SPACE env var)
 
 ### `kibob add <dir> [--objects <specs> | --file <export.ndjson>]`
 Add objects to an existing manifest.

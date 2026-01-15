@@ -51,10 +51,14 @@ impl Kibana {
         path: &str,
         body: Option<&[u8]>,
     ) -> Result<reqwest::Response> {
-        let path = match self.space {
-            Some(ref space) => &format!("s/{}/{}", space, path),
-            None => path,
+        // Strip leading slash from path if present, to avoid double slashes
+        let path_stripped = path.strip_prefix('/').unwrap_or(path);
+
+        let final_path = match self.space {
+            Some(ref space) => format!("s/{}/{}", space, path_stripped),
+            None => format!("/{}", path_stripped),
         };
+
         let mut headers: reqwest::header::HeaderMap = headers
             .iter()
             .map(|(k, v)| (k.parse().unwrap(), v.parse().unwrap()))
@@ -73,7 +77,7 @@ impl Kibana {
             headers.remove("Content-Type");
         }
 
-        let client = match path.split_once('?') {
+        let client = match final_path.split_once('?') {
             Some((p, query)) => {
                 let query: Vec<_> = query.split('&').filter_map(|s| s.split_once('=')).collect();
                 self.client
@@ -83,7 +87,7 @@ impl Kibana {
             }
             None => self
                 .client
-                .request(method, self.url.join(path)?)
+                .request(method, self.url.join(&final_path)?)
                 .headers(headers),
         };
 

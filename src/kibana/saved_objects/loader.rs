@@ -76,14 +76,14 @@ impl SavedObjectsLoader {
             .with_context(|| "Failed to serialize objects to NDJSON")?
             .join("\n");
 
-        // Note: We need to include the space in the path since saved objects
-        // are space-specific. The client won't add the space prefix for us.
-        let path = format!(
-            "/s/{}/api/saved_objects/_import?overwrite={}",
-            self.space, self.overwrite
-        );
+        // The client will automatically add the space prefix
+        let path = format!("/api/saved_objects/_import?overwrite={}", self.overwrite);
 
-        log::debug!("Importing {} object(s) via {}", objects.len(), path);
+        log::debug!(
+            "Importing {} object(s) to space '{}'",
+            objects.len(),
+            self.space
+        );
 
         let response = self
             .client
