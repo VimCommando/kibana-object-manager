@@ -462,6 +462,394 @@ pub async fn add_objects_to_manifest(
     Ok(count)
 }
 
+/// Add workflows to an existing manifest
+///
+/// Can add from Kibana search API or from a file (.json or .ndjson)
+/// Optionally filter results by name using regex patterns (--include, --exclude)
+pub async fn add_workflows_to_manifest(
+    project_dir: impl AsRef<Path>,
+    query: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    file_path: Option<String>,
+) -> Result<usize> {
+    use crate::kibana::workflows::WorkflowEntry;
+
+    let project_dir = project_dir.as_ref();
+
+    // Load or create manifest
+    log::info!("Loading workflows manifest from {}", project_dir.display());
+    let manifest_path = project_dir.join("manifest/workflows.yml");
+    let mut manifest = if manifest_path.exists() {
+        WorkflowsManifest::read(&manifest_path)?
+    } else {
+        log::info!("No existing manifest found, will create new one");
+        WorkflowsManifest::new()
+    };
+    log::info!("Current manifest has {} workflow(s)", manifest.count());
+
+    // Fetch workflows from API or file
+    let new_workflows: Vec<serde_json::Value> = if let Some(file) = file_path {
+        // Read from file
+        log::info!("Reading workflows from {}", file);
+        let file_path = std::path::Path::new(&file);
+
+        if !file_path.exists() {
+            eyre::bail!("File not found: {}", file_path.display());
+        }
+
+        // Detect format by extension
+        let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match extension {
+            "ndjson" => {
+                // Parse NDJSON format (one workflow per line)
+                use std::io::{BufRead, BufReader};
+                let file = std::fs::File::open(file_path)?;
+                let reader = BufReader::new(file);
+
+                let mut workflows = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let workflow: serde_json::Value = serde_json::from_str(&line)?;
+                    workflows.push(workflow);
+                }
+                log::info!("Read {} workflow(s) from NDJSON file", workflows.len());
+                workflows
+            }
+            "json" => {
+                // Parse JSON format (API response or array)
+                let content = std::fs::read_to_string(file_path)?;
+                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+
+                // Check if it's an API response with "results" field
+                if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
+                    log::info!("Read {} workflow(s) from JSON API response", results.len());
+                    results.iter().cloned().collect()
+                } else if let Some(arr) = parsed.as_array() {
+                    // Direct array of workflows
+                    log::info!("Read {} workflow(s) from JSON array", arr.len());
+                    arr.iter().cloned().collect()
+                } else {
+                    // Single workflow object
+                    log::info!("Read 1 workflow from JSON file");
+                    vec![parsed]
+                }
+            }
+            _ => {
+                eyre::bail!(
+                    "Unsupported file format: {}. Expected .json or .ndjson",
+                    extension
+                );
+            }
+        }
+    } else {
+        // Search via API
+        log::info!("Searching workflows via API...");
+        let client = load_kibana_client()?;
+        let extractor = WorkflowsExtractor::new(client, None);
+
+        extractor.search_workflows(query.as_deref(), None).await?
+    };
+
+    log::info!("Found {} workflow(s) before filtering", new_workflows.len());
+
+    // Apply regex filters: include first, then exclude
+    let filtered_workflows: Vec<serde_json::Value> = {
+        let mut workflows = new_workflows;
+
+        // Apply include filter (if specified)
+        if let Some(include_pattern) = &include {
+            let regex = regex::Regex::new(include_pattern)
+                .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+
+            workflows = workflows
+                .into_iter()
+                .filter(|w| {
+                    w.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| regex.is_match(name))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            log::info!(
+                "After include filter '{}': {} workflow(s)",
+                include_pattern,
+                workflows.len()
+            );
+        }
+
+        // Apply exclude filter (if specified)
+        if let Some(exclude_pattern) = &exclude {
+            let regex = regex::Regex::new(exclude_pattern)
+                .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+
+            workflows = workflows
+                .into_iter()
+                .filter(|w| {
+                    w.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| !regex.is_match(name))
+                        .unwrap_or(true)
+                })
+                .collect();
+
+            log::info!(
+                "After exclude filter '{}': {} workflow(s)",
+                exclude_pattern,
+                workflows.len()
+            );
+        }
+
+        workflows
+    };
+
+    log::info!(
+        "Adding {} workflow(s) after filtering",
+        filtered_workflows.len()
+    );
+
+    // Add workflows to manifest and write files
+    let workflows_dir = project_dir.join("workflows");
+    std::fs::create_dir_all(&workflows_dir)?;
+
+    let mut added_count = 0;
+    for workflow in &filtered_workflows {
+        // Extract id and name
+        let workflow_id = workflow
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
+
+        let workflow_name = workflow
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
+
+        // Add to manifest (will skip if already exists)
+        if manifest.add_workflow(WorkflowEntry::new(workflow_id, workflow_name)) {
+            log::debug!(
+                "Added workflow to manifest: {} ({})",
+                workflow_name,
+                workflow_id
+            );
+
+            // Write workflow file
+            let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+            let json = serde_json::to_string_pretty(workflow)?;
+            std::fs::write(&workflow_file, json)?;
+
+            log::debug!("Wrote workflow file: {}", workflow_file.display());
+            added_count += 1;
+        } else {
+            log::debug!("Workflow already in manifest, skipping: {}", workflow_name);
+        }
+    }
+
+    // Create manifest directory if it doesn't exist
+    let manifest_dir = project_dir.join("manifest");
+    std::fs::create_dir_all(&manifest_dir)?;
+
+    // Save updated manifest
+    manifest.write(&manifest_path)?;
+    log::info!(
+        "✓ Updated manifest now has {} workflow(s)",
+        manifest.count()
+    );
+    log::info!("✓ Added {} new workflow(s)", added_count);
+
+    Ok(added_count)
+}
+
+/// Add spaces to an existing manifest
+///
+/// Can add from Kibana search API or from a file (.json or .ndjson)
+/// Optionally filter results by name using regex patterns (--include, --exclude)
+pub async fn add_spaces_to_manifest(
+    project_dir: impl AsRef<Path>,
+    query: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    file_path: Option<String>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    // Load or create manifest
+    log::info!("Loading spaces manifest from {}", project_dir.display());
+    let manifest_path = project_dir.join("manifest/spaces.yml");
+    let mut manifest = if manifest_path.exists() {
+        SpacesManifest::read(&manifest_path)?
+    } else {
+        log::info!("No existing manifest found, will create new one");
+        SpacesManifest::new()
+    };
+    log::info!("Current manifest has {} space(s)", manifest.count());
+
+    // Fetch spaces from API or file
+    let new_spaces: Vec<serde_json::Value> = if let Some(file) = file_path {
+        // Read from file
+        log::info!("Reading spaces from {}", file);
+        let file_path = std::path::Path::new(&file);
+
+        if !file_path.exists() {
+            eyre::bail!("File not found: {}", file_path.display());
+        }
+
+        // Detect format by extension
+        let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match extension {
+            "ndjson" => {
+                // Parse NDJSON format (one space per line)
+                use std::io::{BufRead, BufReader};
+                let file = std::fs::File::open(file_path)?;
+                let reader = BufReader::new(file);
+
+                let mut spaces = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let space: serde_json::Value = serde_json::from_str(&line)?;
+                    spaces.push(space);
+                }
+                log::info!("Read {} space(s) from NDJSON file", spaces.len());
+                spaces
+            }
+            "json" => {
+                // Parse JSON format (array of spaces)
+                let content = std::fs::read_to_string(file_path)?;
+                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+
+                // Spaces API returns an array directly
+                if let Some(arr) = parsed.as_array() {
+                    log::info!("Read {} space(s) from JSON array", arr.len());
+                    arr.iter().cloned().collect()
+                } else {
+                    // Single space object
+                    log::info!("Read 1 space from JSON file");
+                    vec![parsed]
+                }
+            }
+            _ => {
+                eyre::bail!(
+                    "Unsupported file format: {}. Expected .json or .ndjson",
+                    extension
+                );
+            }
+        }
+    } else {
+        // Search via API (note: query parameter is ignored for spaces)
+        if query.is_some() {
+            log::warn!("Spaces API doesn't support query filtering - fetching all spaces");
+        }
+        log::info!("Fetching spaces via API...");
+        let client = load_kibana_client()?;
+        let extractor = SpacesExtractor::new(client, None);
+
+        extractor.search_spaces(query.as_deref()).await?
+    };
+
+    log::info!("Found {} space(s) before filtering", new_spaces.len());
+
+    // Apply regex filters: include first, then exclude
+    let filtered_spaces: Vec<serde_json::Value> = {
+        let mut spaces = new_spaces;
+
+        // Apply include filter (if specified)
+        if let Some(include_pattern) = &include {
+            let regex = regex::Regex::new(include_pattern)
+                .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+
+            spaces = spaces
+                .into_iter()
+                .filter(|s| {
+                    s.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| regex.is_match(name))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            log::info!(
+                "After include filter '{}': {} space(s)",
+                include_pattern,
+                spaces.len()
+            );
+        }
+
+        // Apply exclude filter (if specified)
+        if let Some(exclude_pattern) = &exclude {
+            let regex = regex::Regex::new(exclude_pattern)
+                .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+
+            spaces = spaces
+                .into_iter()
+                .filter(|s| {
+                    s.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| !regex.is_match(name))
+                        .unwrap_or(true)
+                })
+                .collect();
+
+            log::info!(
+                "After exclude filter '{}': {} space(s)",
+                exclude_pattern,
+                spaces.len()
+            );
+        }
+
+        spaces
+    };
+
+    log::info!("Adding {} space(s) after filtering", filtered_spaces.len());
+
+    // Add spaces to manifest and write files
+    let spaces_dir = project_dir.join("spaces");
+    std::fs::create_dir_all(&spaces_dir)?;
+
+    let mut added_count = 0;
+    for space in &filtered_spaces {
+        // Extract id
+        let space_id = space
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
+
+        // Add to manifest (will skip if already exists)
+        if manifest.add_space(space_id.to_string()) {
+            log::debug!("Added space to manifest: {}", space_id);
+
+            // Write space file
+            let space_file = spaces_dir.join(format!("{}.json", space_id));
+            let json = serde_json::to_string_pretty(space)?;
+            std::fs::write(&space_file, json)?;
+
+            log::debug!("Wrote space file: {}", space_file.display());
+            added_count += 1;
+        } else {
+            log::debug!("Space already in manifest, skipping: {}", space_id);
+        }
+    }
+
+    // Create manifest directory if it doesn't exist
+    let manifest_dir = project_dir.join("manifest");
+    std::fs::create_dir_all(&manifest_dir)?;
+
+    // Save updated manifest
+    manifest.write(&manifest_path)?;
+    log::info!("✓ Updated manifest now has {} space(s)", manifest.count());
+    log::info!("✓ Added {} new space(s)", added_count);
+
+    Ok(added_count)
+}
+
 /// Load spaces manifest from project directory
 ///
 /// Reads `manifest/spaces.yml` from the project directory

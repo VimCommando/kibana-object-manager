@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Redesigned `add` command with API-agnostic support for workflows, spaces, and objects
+- Regex-based filtering with `--include` and `--exclude` options for workflows and spaces
+- `--include` option to filter items by name using regex patterns
+- `--exclude` option to exclude items by name using regex patterns (applied after include)
+- Support for case-insensitive matching using `(?i)` regex flag
+- Spaces discovery and addition with `kibob add spaces .`
+- File-based space import supporting both `.json` (API response) and `.ndjson` (bundle) formats
+- `SpacesExtractor::search_spaces()` method for fetching all spaces via API
+- Workflow discovery via search API with `kibob add workflows . --query "term"`
+- File-based workflow import supporting both `.json` (API response) and `.ndjson` (bundle) formats
+- Duplicate detection when adding workflows and spaces to manifest
+- Automatic manifest creation if it doesn't exist when adding workflows or spaces
+- `WorkflowsExtractor::search_workflows()` method for discovering workflows via search API
 - Kibana Workflows API integration for managing workflow configurations
 - `manifest/workflows.yml` for tracking workflows with both ID and name
 - Automatic workflow pull/push/bundle when `manifest/workflows.yml` exists
@@ -21,8 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Complete spaces documentation in `docs/SPACES.md`
 - Integration tests for spaces functionality
 - `--space` flag for `pull` and `push` commands to override `KIBANA_SPACE` env var
+- `regex` crate dependency for pattern matching
 
 ### Changed
+- **Breaking**: `add` command now requires API type as first argument: `kibob add <api> [dir]`
+- **Breaking**: Replaced `--filter` with `--include` and `--exclude` regex-based filters
+- **Breaking**: Legacy `--objects` flag only works with `kibob add objects` command
+- Filtering is now regex-based instead of substring matching (more powerful and flexible)
+- `add` command syntax: `kibob add <api> .` (search), `--include "regex"` (include matches), `--exclude "regex"` (exclude matches), `--file path` (from file)
+- Workflows support `--query "term"` for server-side filtering, spaces fetch all and filter client-side
 - **Breaking**: `togo` command now creates `bundle/` directory instead of root-level NDJSON files
 - **Breaking**: Renamed `export.ndjson` to `bundle/saved_objects.ndjson`
 - **Breaking**: Spaces bundled to `bundle/spaces.ndjson` instead of root-level `spaces.ndjson`
@@ -32,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed double space prefix bug in Kibana API URLs (was `/s/space/s/space/api/...`, now `/s/space/api/...`)
+- `WorkflowsManifest::add_workflow()` now returns boolean to indicate if workflow was added or already existed
+- `SpacesManifest::add_space()` now returns boolean to indicate if space was added or already existed
 
 ## [0.1.0] - 2026-01-14
 

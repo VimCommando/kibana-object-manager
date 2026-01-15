@@ -48,6 +48,58 @@ impl WorkflowsExtractor {
         Self { client, manifest }
     }
 
+    /// Search for workflows via the Workflows API
+    ///
+    /// Uses POST /api/workflows/search with optional query parameter.
+    /// This is useful for discovering workflows before adding them to the manifest.
+    ///
+    /// # Arguments
+    /// * `query` - Optional search query string to filter workflows
+    /// * `size` - Maximum number of results to return (default: 100)
+    ///
+    /// # Returns
+    /// Vector of workflow JSON objects from the search results
+    pub async fn search_workflows(
+        &self,
+        query: Option<&str>,
+        size: Option<usize>,
+    ) -> Result<Vec<Value>> {
+        let search_body = serde_json::json!({
+            "size": size.unwrap_or(100),
+            "query": query.unwrap_or("")
+        });
+
+        log::debug!("Searching workflows with query: {:?}", query);
+
+        let response = self
+            .client
+            .post_json_value_internal("/api/workflows/search", &search_body)
+            .await
+            .context("Failed to search workflows")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            eyre::bail!("Failed to search workflows ({}): {}", status, body);
+        }
+
+        let search_result: Value = response
+            .json()
+            .await
+            .context("Failed to parse workflow search response")?;
+
+        // Extract workflows from results array
+        let workflows: Vec<Value> = search_result
+            .get("results")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().cloned().collect())
+            .unwrap_or_default();
+
+        log::info!("Found {} workflow(s) via search", workflows.len());
+
+        Ok(workflows)
+    }
+
     /// Fetch a single workflow by ID from Kibana
     async fn fetch_workflow(&self, workflow_id: &str) -> Result<Value> {
         let path = format!("/api/workflows/{}", workflow_id);

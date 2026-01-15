@@ -50,6 +50,23 @@ impl SpacesExtractor {
         Self::new(client, None)
     }
 
+    /// Search for spaces via the Spaces API
+    ///
+    /// Returns all spaces from Kibana. The Spaces API doesn't support
+    /// server-side filtering, so use the `filter` parameter in the
+    /// add command to filter by name.
+    ///
+    /// # Arguments
+    /// * `_query` - Reserved for future use (Spaces API doesn't support search)
+    ///
+    /// # Returns
+    /// Vector of space JSON objects
+    pub async fn search_spaces(&self, _query: Option<&str>) -> Result<Vec<Value>> {
+        // Spaces API doesn't support query filtering, so we fetch all
+        // and let the caller filter by name if needed
+        self.fetch_all_spaces().await
+    }
+
     /// Fetch all spaces from Kibana
     async fn fetch_all_spaces(&self) -> Result<Vec<Value>> {
         let path = "/api/spaces/space";

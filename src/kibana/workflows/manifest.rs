@@ -58,10 +58,15 @@ impl WorkflowsManifest {
     }
 
     /// Add a workflow to the manifest
-    pub fn add_workflow(&mut self, workflow: WorkflowEntry) {
+    ///
+    /// Returns true if workflow was added, false if it already exists
+    pub fn add_workflow(&mut self, workflow: WorkflowEntry) -> bool {
         // Check if workflow with same ID already exists
         if !self.workflows.iter().any(|w| w.id == workflow.id) {
             self.workflows.push(workflow);
+            true
+        } else {
+            false
         }
     }
 

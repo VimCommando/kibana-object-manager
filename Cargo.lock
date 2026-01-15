@@ -713,6 +713,7 @@ dependencies = [
  "eyre",
  "log",
  "owo-colors",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

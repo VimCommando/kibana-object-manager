@@ -34,9 +34,14 @@ impl SpacesManifest {
     }
 
     /// Add a space ID to the manifest
-    pub fn add_space(&mut self, space_id: String) {
+    ///
+    /// Returns true if space was added, false if it already exists
+    pub fn add_space(&mut self, space_id: String) -> bool {
         if !self.spaces.contains(&space_id) {
             self.spaces.push(space_id);
+            true
+        } else {
+            false
         }
     }
 

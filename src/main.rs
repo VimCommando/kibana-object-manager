@@ -118,25 +118,48 @@ enum Commands {
         space: Option<String>,
     },
 
-    /// Add objects to an existing manifest
+    /// Add items to an existing manifest
     ///
-    /// Add objects by ID or merge from an export file into the manifest.
+    /// Discovers and adds items via search API or reads from a file.
+    /// Supports: objects, workflows, spaces
     ///
     /// Examples:
-    ///   kibob add . --objects "dashboard=abc123,visualization=xyz789"
-    ///   kibob add . --file new-export.ndjson
+    ///   kibob add workflows .                          # Search all workflows
+    ///   kibob add workflows . --query "alert"          # Search for workflows matching "alert"
+    ///   kibob add workflows . --include "^prod"        # Include names matching regex "^prod"
+    ///   kibob add workflows . --exclude "test"         # Exclude names matching regex "test"
+    ///   kibob add workflows . --file export.json       # Add from API response file
+    ///   kibob add workflows . --file export.ndjson     # Add from bundle file
+    ///   kibob add spaces .                             # Fetch all spaces
+    ///   kibob add spaces . --include "prod|staging"    # Include spaces matching pattern
+    ///   kibob add objects . --objects "dashboard=abc"  # Legacy: add specific objects by ID
     Add {
+        /// API to add to (objects, workflows, spaces)
+        api: String,
+
         /// Project directory with existing manifest
         #[arg(default_value = ".")]
         output_dir: String,
 
-        /// Comma-separated list of "type=id" objects to add
-        #[arg(short, long, conflicts_with = "file")]
-        objects: Option<Vec<String>>,
+        /// Search query term for API
+        #[arg(short, long, conflicts_with_all = &["file", "objects"])]
+        query: Option<String>,
 
-        /// Export NDJSON file to merge into manifest
+        /// Include items matching regex pattern (applied to name field)
         #[arg(short, long)]
+        include: Option<String>,
+
+        /// Exclude items matching regex pattern (applied to name field, after include)
+        #[arg(short, long)]
+        exclude: Option<String>,
+
+        /// File to read from (.json or .ndjson)
+        #[arg(long, conflicts_with_all = &["query", "objects"])]
         file: Option<String>,
+
+        /// [objects only] Comma-separated "type=id" pairs to add
+        #[arg(short = 'o', long, conflicts_with_all = &["query", "file"])]
+        objects: Option<Vec<String>>,
     },
 
     /// Bundle objects into distributable NDJSON files
@@ -314,21 +337,42 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Add {
+            api,
             output_dir,
-            objects,
+            query,
+            include,
+            exclude,
             file,
+            objects,
         } => {
-            log::info!("Adding objects to {}", output_dir.bright_black());
+            log::info!("Adding {} to {}", api.cyan(), output_dir.bright_black());
 
-            match add_objects_to_manifest(&output_dir, objects, file).await {
-                Ok(count) => {
-                    log::info!("✓ Added {} object(s)", count);
+            // Route to appropriate handler based on API type
+            let count = match api.as_str() {
+                "objects" => {
+                    // Legacy objects support: --objects flag or --file
+                    add_objects_to_manifest(&output_dir, objects, file).await?
                 }
-                Err(e) => {
-                    log::error!("Add failed: {}", e);
-                    return Err(e);
+                "workflows" => {
+                    // New workflows support: --query, --include, --exclude, or --file
+                    use kibana_object_manager::cli::add_workflows_to_manifest;
+                    add_workflows_to_manifest(&output_dir, query, include, exclude, file).await?
                 }
-            }
+                "spaces" => {
+                    // Spaces support: --query (ignored), --include, --exclude, or --file
+                    use kibana_object_manager::cli::add_spaces_to_manifest;
+                    add_spaces_to_manifest(&output_dir, query, include, exclude, file).await?
+                }
+                _ => {
+                    log::error!("Unknown API: {}", api);
+                    return Err(eyre::eyre!(
+                        "Unknown API '{}'. Supported: objects, workflows, spaces",
+                        api
+                    ));
+                }
+            };
+
+            log::info!("✓ Added {} item(s)", count);
         }
         Commands::Togo { input_dir, managed } => {
             log::info!(

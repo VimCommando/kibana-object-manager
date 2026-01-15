@@ -143,10 +143,34 @@ Upload local objects to Kibana. Also pushes spaces if `manifest/spaces.yml` exis
 - `--managed false`: Objects can be edited in Kibana UI
 - `--space <name>`: Override the Kibana space (overrides KIBANA_SPACE env var)
 
-### `kibob add <dir> [--objects <specs> | --file <export.ndjson>]`
-Add objects to an existing manifest.
-- `--objects "dashboard=abc123,visualization=xyz789"`
-- `--file export.ndjson`
+### `kibob add <api> <dir> [options]`
+Add items to an existing manifest. Supports: `objects`, `workflows`, `spaces`
+
+**For Workflows:**
+- `kibob add workflows .` - Search and add all workflows
+- `kibob add workflows . --query "alert"` - Search workflows matching "alert"
+- `kibob add workflows . --include "^prod"` - Include workflows matching regex "^prod"
+- `kibob add workflows . --exclude "test"` - Exclude workflows matching regex "test"
+- `kibob add workflows . --include "(?i)prod"` - Case-insensitive include
+- `kibob add workflows . --file export.json` - Add from API response file
+- `kibob add workflows . --file bundle.ndjson` - Add from bundle file
+
+**For Spaces:**
+- `kibob add spaces .` - Fetch and add all spaces
+- `kibob add spaces . --include "prod|staging"` - Include spaces matching pattern
+- `kibob add spaces . --exclude "(?i)test"` - Exclude test spaces (case-insensitive)
+- `kibob add spaces . --file spaces.json` - Add from API response file
+- `kibob add spaces . --file bundle.ndjson` - Add from bundle file
+
+**For Objects (legacy):**
+- `kibob add objects . --objects "dashboard=abc123,visualization=xyz789"`
+- `kibob add objects . --file export.ndjson`
+
+**Regex Filtering:**
+- `--include` and `--exclude` accept standard Rust regex patterns
+- Include filter is applied first, then exclude filter
+- Use `(?i)` prefix for case-insensitive matching
+- Examples: `^prod`, `test$`, `(?i)staging`, `dev|test`
 
 ### `kibob togo <dir>`
 Bundle objects into a distributable `bundle/` directory containing NDJSON files:
