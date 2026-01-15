@@ -68,7 +68,7 @@ This will:
 
 ### 4. Bundle Spaces for Distribution
 
-The `togo` command will automatically bundle spaces to `spaces.ndjson` if a `manifest/spaces.yml` file exists:
+The `togo` command will automatically bundle spaces to `bundle/spaces.ndjson` if a `manifest/spaces.yml` file exists:
 
 ```bash
 kibob togo ./my-project
@@ -77,8 +77,17 @@ kibob togo ./my-project
 This creates:
 ```
 my-project/
-├── export.ndjson      # Saved objects bundle
-└── spaces.ndjson      # Spaces bundle
+└── bundle/
+    ├── saved_objects.ndjson  # Saved objects bundle
+    └── spaces.ndjson         # Spaces bundle
+```
+
+You can easily create a distributable archive:
+```bash
+cd my-project
+zip -r dashboards.zip bundle/
+# or
+tar -czf dashboards.tar.gz bundle/
 ```
 
 ## Space File Format
@@ -211,7 +220,7 @@ For each space file in `spaces/` directory:
 - If space is new: `POST /api/spaces/space`
 
 ### Bundle (NDJSON)
-Converts all `spaces/*.json` files to newline-delimited JSON format in `spaces.ndjson`
+Converts all `spaces/*.json` files to newline-delimited JSON format in `bundle/spaces.ndjson`
 
 ## Best Practices
 
@@ -320,8 +329,9 @@ my-kibana-project/
 │   ├── default.json
 │   ├── production.json
 │   └── staging.json
-└── export.ndjson          # Bundled saved objects (from togo)
-└── spaces.ndjson          # Bundled spaces (from togo)
+└── bundle/                 # Bundled files (from togo)
+    ├── saved_objects.ndjson
+    └── spaces.ndjson
 ```
 
 ## Integration with CI/CD

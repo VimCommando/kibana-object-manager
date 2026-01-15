@@ -12,9 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `manifest/spaces.yml` for tracking spaces in YAML format
 - Automatic space pull/push/bundle when `manifest/spaces.yml` exists
 - Individual space storage as pretty-printed JSON files in `spaces/` directory
-- Spaces bundling to `spaces.ndjson` format
+- `bundle/` directory structure for organized NDJSON output files
 - Complete spaces documentation in `docs/SPACES.md`
 - Integration tests for spaces functionality
+
+### Changed
+- **Breaking**: `togo` command now creates `bundle/` directory instead of root-level NDJSON files
+- **Breaking**: Renamed `export.ndjson` to `bundle/saved_objects.ndjson`
+- **Breaking**: Spaces bundled to `bundle/spaces.ndjson` instead of root-level `spaces.ndjson`
+- Bundle directory structure allows easy archiving: `zip -r archive.zip bundle/`
 
 ## [0.1.0] - 2026-01-14
 

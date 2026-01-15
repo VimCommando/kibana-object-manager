@@ -129,13 +129,17 @@ enum Commands {
         file: Option<String>,
     },
 
-    /// Bundle objects into distributable NDJSON file
+    /// Bundle objects into distributable NDJSON files
     ///
-    /// Creates an export.ndjson file that can be imported into Kibana or shared.
-    /// Useful for creating releases or sharing dashboards with others.
+    /// Creates a bundle/ directory with NDJSON files for each API:
+    /// - bundle/saved_objects.ndjson - Saved objects
+    /// - bundle/spaces.ndjson - Spaces (if manifest/spaces.yml exists)
+    ///
+    /// The bundle directory can be easily zipped for distribution.
     ///
     /// Example:
     ///   kibob togo ./my-dashboards
+    ///   zip -r dashboards.zip my-dashboards/bundle/
     Togo {
         /// Project directory containing objects to bundle
         #[arg(default_value = ".")]
@@ -305,17 +309,24 @@ async fn main() -> Result<()> {
                 managed.cyan()
             );
 
-            let output_file = std::path::Path::new(&input_dir).join("export.ndjson");
+            // Create bundle directory
+            let bundle_dir = std::path::Path::new(&input_dir).join("bundle");
+            std::fs::create_dir_all(&bundle_dir)?;
+            log::info!("Bundle directory: {}", bundle_dir.display());
 
-            match bundle_to_ndjson(&input_dir, &output_file, managed).await {
+            // Bundle saved objects
+            let saved_objects_file = bundle_dir.join("saved_objects.ndjson");
+            match bundle_to_ndjson(&input_dir, &saved_objects_file, managed).await {
                 Ok(count) => {
-                    log::info!("✓ Bundled {} object(s) to {}", count, output_file.display());
+                    log::info!("✓ Bundled {} saved object(s)", count);
                 }
                 Err(e) => {
                     log::error!("Bundle failed: {}", e);
                     return Err(e);
                 }
             }
+
+            log::info!("✓ Bundle created at {}", bundle_dir.display());
         }
         Commands::Migrate {
             project_dir,

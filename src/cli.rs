@@ -166,7 +166,7 @@ pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) ->
 /// Bundle saved objects to NDJSON file for distribution
 ///
 /// Pipeline: DirectoryReader → FieldEscaper → ManagedFlagAdder → Write to NDJSON
-/// Also bundles spaces to spaces.ndjson if manifest/spaces.yml exists
+/// Also bundles spaces to bundle/spaces.ndjson if manifest/spaces.yml exists
 pub async fn bundle_to_ndjson(
     project_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
@@ -214,17 +214,14 @@ pub async fn bundle_to_ndjson(
     let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
     if spaces_manifest_path.exists() {
         log::info!("Spaces manifest found, bundling spaces...");
-        let spaces_output = output_file
+        // Get bundle directory from output_file path
+        let bundle_dir = output_file
             .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("spaces.ndjson");
+            .ok_or_else(|| eyre::eyre!("Could not determine bundle directory"))?;
+        let spaces_output = bundle_dir.join("spaces.ndjson");
         match bundle_spaces_to_ndjson_internal(project_dir, &spaces_output).await {
             Ok(space_count) => {
-                log::info!(
-                    "✓ Bundled {} space(s) to {}",
-                    space_count,
-                    spaces_output.display()
-                );
+                log::info!("✓ Bundled {} space(s)", space_count);
             }
             Err(e) => {
                 log::warn!("Failed to bundle spaces: {}", e);
