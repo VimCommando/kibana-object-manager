@@ -177,11 +177,11 @@ async fn test_extract_transform_load_to_directory() -> Result<()> {
 
     assert_eq!(count, 3, "Should have processed 3 objects");
 
-    // Verify the output files exist
+    // Verify the output files exist in hierarchical structure (dashboard/id.json)
     assert!(output_dir.exists());
 
-    // Verify files were written (they'll be named type-id.json)
-    let dashboard_file = output_dir.join("dashboard-dashboard-1.json");
+    // Note: Files are named by title/name from attributes, not by ID
+    let dashboard_file = output_dir.join("dashboard").join("My Dashboard.json");
     assert!(dashboard_file.exists());
 
     // Verify that managed flag was added
@@ -226,8 +226,8 @@ async fn test_ndjson_to_directory_pipeline() -> Result<()> {
 
     assert_eq!(count, 2, "Should have processed 2 objects");
 
-    // Verify output
-    let dash1_file = output_dir.join("dashboard-dash-1.json");
+    // Verify output (hierarchical structure: dashboard/Dashboard 1.json)
+    let dash1_file = output_dir.join("dashboard").join("Dashboard 1.json");
     assert!(dash1_file.exists());
 
     let dash1 = std::fs::read_to_string(&dash1_file)?;
@@ -336,8 +336,8 @@ async fn test_roundtrip_directory_to_directory() -> Result<()> {
 
     assert_eq!(count, 1, "Should have processed 1 object");
 
-    // Verify destination
-    let dest_file = dest_dir.join("dashboard-my-dashboard.json");
+    // Verify destination (hierarchical structure: dashboard/Test Dashboard.json)
+    let dest_file = dest_dir.join("dashboard").join("Test Dashboard.json");
     assert!(dest_file.exists());
 
     let content = std::fs::read_to_string(&dest_file)?;

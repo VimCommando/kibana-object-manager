@@ -1,2 +1,0 @@
-mod directory;
-mod kibana;

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use url::Url;
 
 /// A client that communicates with the Kibana API.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Kibana {
     client: Client,
     space: Option<String>,
@@ -133,6 +133,28 @@ impl Kibana {
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
         self.request(Method::POST, &headers, path, Some(body)).await
+    }
+
+    /// Helper for POST requests with JSON value
+    pub async fn post_json_value(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        self.post_json(path, &body).await
+    }
+
+    /// Helper for PUT requests with JSON value
+    pub async fn put_json_value(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.request(Method::PUT, &headers, path, Some(&body)).await
     }
 
     /// Helper for POST requests with multipart form data

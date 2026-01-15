@@ -1,5 +1,12 @@
 use clap::{Parser, Subcommand, builder::styling};
 use eyre::Result;
+use kibana_object_manager::{
+    cli::{
+        add_objects_to_manifest, bundle_to_ndjson, init_from_export, load_kibana_client,
+        pull_saved_objects, push_saved_objects,
+    },
+    migration::{MigrationResult, migrate_manifest},
+};
 use owo_colors::OwoColorize;
 
 // CLI Styling
@@ -55,8 +62,9 @@ enum Commands {
         #[arg(default_value = ".")]
         input_dir: String,
 
-        /// Set "managed: false" to allow direct editing in Kibana
-        #[arg(short, long, default_value_t = true)]
+        /// Set "managed: false" to allow direct editing in Kibana.
+        /// Use --no-managed to disable management.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
     },
 
@@ -81,9 +89,21 @@ enum Commands {
         #[arg(default_value = ".")]
         input_dir: String,
 
-        /// Set "managed: false" to allow direct editing in Kibana
-        #[arg(short, long, default_value_t = true)]
+        /// Set "managed: false" to allow direct editing in Kibana.
+        /// Use --no-managed to disable management.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
+    },
+
+    /// Migrate legacy manifest.json to new manifest/ directory structure
+    Migrate {
+        /// Project directory containing manifest.json
+        #[arg(default_value = ".")]
+        project_dir: String,
+
+        /// Keep a backup of the old manifest.json file
+        #[arg(short, long, default_value_t = true)]
+        backup: bool,
     },
 }
 
@@ -106,19 +126,82 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { export, manifest } => {
             log::info!(
-                "Initializing {} and building manifest {}",
+                "Initializing from {} and building manifest in {}",
                 export.bright_black(),
                 manifest.bright_black()
             );
-            log::warn!("Init command - Phase 2 implementation");
+
+            // Determine if export is a file or directory
+            let export_path = std::path::Path::new(&export);
+            let export_file = if export_path.is_dir() {
+                export_path.join("export.ndjson")
+            } else {
+                export_path.to_path_buf()
+            };
+
+            if !export_file.exists() {
+                log::error!("Export file not found: {}", export_file.display());
+                return Err(eyre::eyre!(
+                    "Export file not found: {}",
+                    export_file.display()
+                ));
+            }
+
+            match init_from_export(&export_file, &manifest).await {
+                Ok(count) => {
+                    log::info!("✓ Initialized {} object(s)", count);
+                }
+                Err(e) => {
+                    log::error!("Init failed: {}", e);
+                    return Err(e);
+                }
+            }
         }
         Commands::Auth => {
-            log::info!("Testing authorization");
-            log::warn!("Auth command - Phase 2 implementation");
+            log::info!("Testing authorization to Kibana");
+
+            match load_kibana_client() {
+                Ok(client) => match client.test_connection().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            log::info!("✓ Authorization successful");
+                            log::info!(
+                                "  Connected to: {}",
+                                std::env::var("KIBANA_URL")
+                                    .unwrap_or_else(|_| "unknown".to_string())
+                                    .green()
+                            );
+                        } else {
+                            log::error!("✗ Authorization failed: {}", response.status());
+                            return Err(eyre::eyre!(
+                                "Authorization failed with status: {}",
+                                response.status()
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("✗ Connection test failed: {}", e);
+                        return Err(e);
+                    }
+                },
+                Err(e) => {
+                    log::error!("✗ Failed to create Kibana client: {}", e);
+                    return Err(e);
+                }
+            }
         }
         Commands::Pull { output_dir } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
-            log::warn!("Pull command - Phase 2 implementation");
+
+            match pull_saved_objects(&output_dir).await {
+                Ok(count) => {
+                    log::info!("✓ Successfully pulled {} object(s)", count);
+                }
+                Err(e) => {
+                    log::error!("Pull failed: {}", e);
+                    return Err(e);
+                }
+            }
         }
         Commands::Push { input_dir, managed } => {
             log::info!(
@@ -130,15 +213,33 @@ async fn main() -> Result<()> {
                 .cyan(),
                 input_dir.bright_black(),
             );
-            log::warn!("Push command - Phase 2 implementation");
+
+            match push_saved_objects(&input_dir, managed).await {
+                Ok(count) => {
+                    log::info!("✓ Successfully pushed {} object(s)", count);
+                }
+                Err(e) => {
+                    log::error!("Push failed: {}", e);
+                    return Err(e);
+                }
+            }
         }
         Commands::Add {
             output_dir,
-            objects: _,
-            file: _,
+            objects,
+            file,
         } => {
             log::info!("Adding objects to {}", output_dir.bright_black());
-            log::warn!("Add command - Phase 2 implementation");
+
+            match add_objects_to_manifest(&output_dir, objects, file).await {
+                Ok(count) => {
+                    log::info!("✓ Added {} object(s)", count);
+                }
+                Err(e) => {
+                    log::error!("Add failed: {}", e);
+                    return Err(e);
+                }
+            }
         }
         Commands::Togo { input_dir, managed } => {
             log::info!(
@@ -146,7 +247,54 @@ async fn main() -> Result<()> {
                 input_dir.bright_black(),
                 managed.cyan()
             );
-            log::warn!("Togo command - Phase 2 implementation");
+
+            let output_file = std::path::Path::new(&input_dir).join("export.ndjson");
+
+            match bundle_to_ndjson(&input_dir, &output_file, managed).await {
+                Ok(count) => {
+                    log::info!("✓ Bundled {} object(s) to {}", count, output_file.display());
+                }
+                Err(e) => {
+                    log::error!("Bundle failed: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+        Commands::Migrate {
+            project_dir,
+            backup,
+        } => {
+            log::info!("Migrating manifest in: {}", project_dir.bright_black());
+
+            match migrate_manifest(&project_dir, backup)? {
+                MigrationResult::MigratedWithBackup(backup_path) => {
+                    log::info!("✓ Migration completed successfully!");
+                    log::info!(
+                        "  New manifest: {}",
+                        format!("{}/manifest/saved_objects.json", project_dir).green()
+                    );
+                    log::info!(
+                        "  Backup saved: {}",
+                        backup_path.display().to_string().cyan()
+                    );
+                }
+                MigrationResult::MigratedWithoutBackup => {
+                    log::info!("✓ Migration completed successfully!");
+                    log::info!(
+                        "  New manifest: {}",
+                        format!("{}/manifest/saved_objects.json", project_dir).green()
+                    );
+                    log::info!("  Old manifest removed (no backup)");
+                }
+                MigrationResult::NoLegacyManifest => {
+                    log::warn!("No legacy manifest.json found in {}", project_dir);
+                    log::info!("Nothing to migrate.");
+                }
+                MigrationResult::AlreadyMigrated => {
+                    log::info!("Already migrated!");
+                    log::info!("  manifest/saved_objects.json already exists");
+                }
+            }
         }
     }
 

@@ -2,16 +2,13 @@
 //!
 //! A Git-flavored ETL tool for managing Kibana objects
 
+pub mod cli;
 pub mod client;
 pub mod etl;
+pub mod kibana;
+pub mod migration;
 pub mod storage;
-
-// Phase 2 - will be removed
-// Temporarily keep old modules commented out for reference
-// mod processor;
-// mod exporter;
-// mod receiver;
-// mod kibana_object_manager;
+pub mod transform;
 
 // Re-exports for convenience
 pub use client::{Auth, AuthType, Kibana};
@@ -20,3 +17,4 @@ pub use storage::{
     DirectoryReader, DirectoryWriter, GitIgnoreManager, ManifestDirectory, NdjsonReader,
     NdjsonWriter,
 };
+pub use transform::{FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder};
