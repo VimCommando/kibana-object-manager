@@ -4,6 +4,7 @@ use crate::{
     client::{Auth, Kibana},
     etl::{Extractor, Loader, Transformer},
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
+    kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     migration::load_saved_objects_manifest,
     storage::{DirectoryReader, DirectoryWriter},
     transform::{FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder},
@@ -43,6 +44,7 @@ pub fn load_kibana_client() -> Result<Kibana> {
 /// Pull saved objects from Kibana to local directory
 ///
 /// Pipeline: SavedObjectsExtractor → FieldDropper → FieldUnescaper → DirectoryWriter
+/// Also pulls spaces if manifest/spaces.yml exists
 pub async fn pull_saved_objects(project_dir: impl AsRef<Path>) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -62,7 +64,7 @@ pub async fn pull_saved_objects(project_dir: impl AsRef<Path>) -> Result<usize> 
 
     // Build the extract pipeline
     log::info!("Extracting objects from Kibana...");
-    let extractor = SavedObjectsExtractor::new(client, manifest, &space);
+    let extractor = SavedObjectsExtractor::new(client.clone(), manifest, &space);
 
     // Transform: Drop metadata fields and unescape JSON strings
     let drop_fields = FieldDropper::default_kibana_fields();
@@ -83,12 +85,27 @@ pub async fn pull_saved_objects(project_dir: impl AsRef<Path>) -> Result<usize> 
 
     log::info!("✓ Pulled {} object(s) to {}", count, objects_dir.display());
 
+    // Also pull spaces if manifest exists
+    let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
+    if spaces_manifest_path.exists() {
+        log::info!("Spaces manifest found, pulling spaces...");
+        match pull_spaces_internal(project_dir, client).await {
+            Ok(space_count) => {
+                log::info!("✓ Pulled {} space(s)", space_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to pull spaces: {}", e);
+            }
+        }
+    }
+
     Ok(count)
 }
 
 /// Push saved objects from local directory to Kibana
 ///
 /// Pipeline: DirectoryReader → FieldEscaper → ManagedFlagAdder → SavedObjectsLoader
+/// Also pushes spaces if manifest/spaces.yml exists
 pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -116,7 +133,7 @@ pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) ->
     log::info!("Using space: {}", space);
     log::info!("Managed flag: {}", managed);
 
-    let loader = SavedObjectsLoader::new(client, &space);
+    let loader = SavedObjectsLoader::new(client.clone(), &space);
 
     // Read → Escape → Add Managed Flag → Load
     log::info!("Loading objects...");
@@ -129,12 +146,27 @@ pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) ->
 
     log::info!("✓ Pushed {} object(s) to Kibana", count);
 
+    // Also push spaces if manifest exists
+    let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
+    if spaces_manifest_path.exists() {
+        log::info!("Spaces manifest found, pushing spaces...");
+        match push_spaces_internal(project_dir, client).await {
+            Ok(space_count) => {
+                log::info!("✓ Pushed {} space(s)", space_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to push spaces: {}", e);
+            }
+        }
+    }
+
     Ok(count)
 }
 
 /// Bundle saved objects to NDJSON file for distribution
 ///
 /// Pipeline: DirectoryReader → FieldEscaper → ManagedFlagAdder → Write to NDJSON
+/// Also bundles spaces to spaces.ndjson if manifest/spaces.yml exists
 pub async fn bundle_to_ndjson(
     project_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
@@ -177,6 +209,28 @@ pub async fn bundle_to_ndjson(
         flagged.len(),
         output_file.display()
     );
+
+    // Also bundle spaces if manifest exists
+    let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
+    if spaces_manifest_path.exists() {
+        log::info!("Spaces manifest found, bundling spaces...");
+        let spaces_output = output_file
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("spaces.ndjson");
+        match bundle_spaces_to_ndjson_internal(project_dir, &spaces_output).await {
+            Ok(space_count) => {
+                log::info!(
+                    "✓ Bundled {} space(s) to {}",
+                    space_count,
+                    spaces_output.display()
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to bundle spaces: {}", e);
+            }
+        }
+    }
 
     Ok(flagged.len())
 }
@@ -361,6 +415,271 @@ pub async fn add_objects_to_manifest(
     log::info!("✓ Wrote {} new object file(s)", count);
 
     Ok(count)
+}
+
+/// Load spaces manifest from project directory
+///
+/// Reads `manifest/spaces.yml` from the project directory
+fn load_spaces_manifest(project_dir: impl AsRef<Path>) -> Result<SpacesManifest> {
+    let manifest_path = project_dir.as_ref().join("manifest/spaces.yml");
+
+    if !manifest_path.exists() {
+        eyre::bail!("Spaces manifest not found: {}", manifest_path.display());
+    }
+
+    SpacesManifest::read(&manifest_path)
+}
+
+/// Pull spaces from Kibana to local directory (internal)
+///
+/// Pipeline: SpacesExtractor → Write to spaces/<space_id>.json files
+async fn pull_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading spaces manifest from {}", project_dir.display());
+    let manifest = load_spaces_manifest(project_dir)?;
+    log::debug!("Manifest loaded: {} space(s)", manifest.count());
+
+    // Build the extract pipeline
+    log::debug!("Extracting spaces from Kibana...");
+    let extractor = SpacesExtractor::new(client, Some(manifest));
+
+    // Extract spaces
+    let spaces = extractor.extract().await?;
+
+    // Write each space to its own JSON file
+    let spaces_dir = project_dir.join("spaces");
+    std::fs::create_dir_all(&spaces_dir)?;
+
+    let mut count = 0;
+    for space in &spaces {
+        let space_id = space
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
+
+        let space_file = spaces_dir.join(format!("{}.json", space_id));
+        let json = serde_json::to_string_pretty(space)?;
+        std::fs::write(&space_file, json)?;
+
+        log::debug!("Wrote space: {}", space_file.display());
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Pull spaces from Kibana to local directory
+///
+/// Pipeline: SpacesExtractor → Write to spaces/<space_id>.json files
+pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading spaces manifest from {}", project_dir.display());
+    let manifest = load_spaces_manifest(project_dir)?;
+    log::info!("Manifest loaded: {} space(s)", manifest.count());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    // Build the extract pipeline
+    log::info!("Extracting spaces from Kibana...");
+    let extractor = SpacesExtractor::new(client, Some(manifest));
+
+    // Extract spaces
+    let spaces = extractor.extract().await?;
+
+    // Write each space to its own JSON file
+    let spaces_dir = project_dir.join("spaces");
+    std::fs::create_dir_all(&spaces_dir)?;
+
+    let mut count = 0;
+    for space in &spaces {
+        let space_id = space
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
+
+        let space_file = spaces_dir.join(format!("{}.json", space_id));
+        let json = serde_json::to_string_pretty(space)?;
+        std::fs::write(&space_file, json)?;
+
+        log::debug!("Wrote space: {}", space_file.display());
+        count += 1;
+    }
+
+    log::info!("✓ Pulled {} space(s) to {}", count, spaces_dir.display());
+
+    Ok(count)
+}
+
+/// Push spaces from local directory to Kibana (internal)
+///
+/// Pipeline: Read from spaces/<space_id>.json → SpacesLoader
+async fn push_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading spaces from {}", project_dir.display());
+    let spaces_dir = project_dir.join("spaces");
+
+    if !spaces_dir.exists() {
+        eyre::bail!("Spaces directory not found: {}", spaces_dir.display());
+    }
+
+    // Read all JSON files from spaces directory
+    let mut spaces = Vec::new();
+    for entry in std::fs::read_dir(&spaces_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let space: serde_json::Value = serde_json::from_str(&content)?;
+            spaces.push(space);
+        }
+    }
+
+    log::debug!("Read {} space(s) from disk", spaces.len());
+
+    let loader = SpacesLoader::new(client);
+
+    // Load spaces to Kibana
+    let count = loader.load(spaces).await?;
+
+    Ok(count)
+}
+
+/// Push spaces from local directory to Kibana
+///
+/// Pipeline: Read from spaces/<space_id>.json → SpacesLoader
+pub async fn push_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading spaces from {}", project_dir.display());
+    let spaces_dir = project_dir.join("spaces");
+
+    if !spaces_dir.exists() {
+        eyre::bail!("Spaces directory not found: {}", spaces_dir.display());
+    }
+
+    // Read all JSON files from spaces directory
+    let mut spaces = Vec::new();
+    for entry in std::fs::read_dir(&spaces_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let space: serde_json::Value = serde_json::from_str(&content)?;
+            spaces.push(space);
+        }
+    }
+
+    log::info!("Read {} space(s) from disk", spaces.len());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    let loader = SpacesLoader::new(client);
+
+    // Load spaces to Kibana
+    let count = loader.load(spaces).await?;
+
+    log::info!("✓ Pushed {} space(s) to Kibana", count);
+
+    Ok(count)
+}
+
+/// Bundle spaces to NDJSON file for distribution (internal)
+///
+/// Pipeline: Read from spaces/<space_id>.json → Write to spaces.ndjson
+async fn bundle_spaces_to_ndjson_internal(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::debug!("Loading spaces from {}", project_dir.display());
+    let spaces_dir = project_dir.join("spaces");
+
+    if !spaces_dir.exists() {
+        eyre::bail!("Spaces directory not found: {}", spaces_dir.display());
+    }
+
+    // Read all JSON files from spaces directory
+    let mut spaces = Vec::new();
+    for entry in std::fs::read_dir(&spaces_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let space: serde_json::Value = serde_json::from_str(&content)?;
+            spaces.push(space);
+        }
+    }
+
+    log::debug!("Read {} space(s) from disk", spaces.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for space in &spaces {
+        let json_line = serde_json::to_string(space)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    Ok(spaces.len())
+}
+
+/// Bundle spaces to NDJSON file for distribution
+///
+/// Pipeline: Read from spaces/<space_id>.json → Write to spaces.ndjson
+pub async fn bundle_spaces_to_ndjson(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::info!("Loading spaces from {}", project_dir.display());
+    let spaces_dir = project_dir.join("spaces");
+
+    if !spaces_dir.exists() {
+        eyre::bail!("Spaces directory not found: {}", spaces_dir.display());
+    }
+
+    // Read all JSON files from spaces directory
+    let mut spaces = Vec::new();
+    for entry in std::fs::read_dir(&spaces_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let space: serde_json::Value = serde_json::from_str(&content)?;
+            spaces.push(space);
+        }
+    }
+
+    log::info!("Read {} space(s) from disk", spaces.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for space in &spaces {
+        let json_line = serde_json::to_string(space)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    log::info!(
+        "✓ Bundled {} space(s) to {}",
+        spaces.len(),
+        output_file.display()
+    );
+
+    Ok(spaces.len())
 }
 #[cfg(test)]
 mod tests {

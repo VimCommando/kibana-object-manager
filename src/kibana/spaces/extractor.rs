@@ -78,6 +78,58 @@ impl SpacesExtractor {
         Ok(spaces)
     }
 
+    /// Fetch a single space by ID from Kibana
+    async fn fetch_space(&self, space_id: &str) -> Result<Value> {
+        let path = format!("/api/spaces/space/{}", space_id);
+
+        log::debug!("Fetching space '{}' from {}", space_id, path);
+
+        let response = self
+            .client
+            .get(&path)
+            .await
+            .with_context(|| format!("Failed to fetch space '{}'", space_id))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            eyre::bail!(
+                "Failed to fetch space '{}' ({}): {}",
+                space_id,
+                status,
+                body
+            );
+        }
+
+        let space: Value = response
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse space '{}' response", space_id))?;
+
+        log::debug!("Fetched space: {}", space_id);
+
+        Ok(space)
+    }
+
+    /// Fetch specific spaces by ID from manifest
+    async fn fetch_manifest_spaces(&self, manifest: &super::SpacesManifest) -> Result<Vec<Value>> {
+        let mut spaces = Vec::new();
+
+        for space_id in &manifest.spaces {
+            match self.fetch_space(space_id).await {
+                Ok(space) => spaces.push(space),
+                Err(e) => {
+                    log::warn!("Failed to fetch space '{}': {}", space_id, e);
+                    // Continue with other spaces instead of failing completely
+                }
+            }
+        }
+
+        log::info!("Fetched {} space(s) from manifest", spaces.len());
+
+        Ok(spaces)
+    }
+
     /// Filter spaces based on manifest
     fn filter_spaces(&self, spaces: Vec<Value>) -> Vec<Value> {
         if let Some(manifest) = &self.manifest {
@@ -102,20 +154,26 @@ impl Extractor for SpacesExtractor {
     type Item = Value;
 
     async fn extract(&self) -> Result<Vec<Self::Item>> {
-        let all_spaces = self.fetch_all_spaces().await?;
-        let filtered = self.filter_spaces(all_spaces);
+        let spaces = if let Some(manifest) = &self.manifest {
+            // Fetch only spaces from manifest by ID
+            self.fetch_manifest_spaces(manifest).await?
+        } else {
+            // Fetch all spaces and filter
+            let all_spaces = self.fetch_all_spaces().await?;
+            self.filter_spaces(all_spaces)
+        };
 
         log::info!(
             "Extracted {} space(s){}",
-            filtered.len(),
+            spaces.len(),
             if self.manifest.is_some() {
-                " (filtered by manifest)"
+                " (from manifest)"
             } else {
                 ""
             }
         );
 
-        Ok(filtered)
+        Ok(spaces)
     }
 }
 

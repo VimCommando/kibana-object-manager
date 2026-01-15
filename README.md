@@ -9,8 +9,9 @@ A Git-inspired CLI tool for managing Kibana saved objects in version control. Bu
 ### Key Features
 
 - **Git-like workflow** - `pull`, `push`, and version control your Kibana objects
+- **Spaces management** - Version control and deploy Kibana spaces alongside objects
 - **Environment management** - Easy deployment across dev, staging, and production
-- **Manifest-based tracking** - Explicitly define which objects to manage
+- **Manifest-based tracking** - Explicitly define which objects and spaces to manage
 - **Managed vs. unmanaged** - Control whether objects can be edited in Kibana UI
 - **Modern architecture** - Built with async Rust, no external dependencies
 - **Fast and reliable** - ETL pipeline design with proper error handling
@@ -69,6 +70,18 @@ This creates:
 - `manifest/saved_objects.json` - Tracks which objects to manage
 - `objects/` - Directory with your objects organized by type
 
+**Optional: Add spaces management**
+
+Create a `manifest/spaces.yml` to also manage Kibana spaces:
+```yaml
+spaces:
+  - default
+  - marketing
+  - engineering
+```
+
+Now `pull` and `push` will also manage spaces! See [Spaces Guide](docs/SPACES.md) for details.
+
 ### 4. Version control with Git
 
 ```bash
@@ -105,10 +118,10 @@ Test connection to Kibana with current credentials.
 Initialize a new project from a Kibana export file.
 
 ### `kibob pull <dir>`
-Fetch saved objects from Kibana (specified in manifest) and save to local files.
+Fetch saved objects from Kibana (specified in manifest) and save to local files. Also pulls spaces if `manifest/spaces.yml` exists.
 
 ### `kibob push <dir> [--managed true|false]`
-Upload local objects to Kibana.
+Upload local objects to Kibana. Also pushes spaces if `manifest/spaces.yml` exists.
 - `--managed true` (default): Objects are read-only in Kibana UI
 - `--managed false`: Objects can be edited in Kibana UI
 
@@ -118,7 +131,7 @@ Add objects to an existing manifest.
 - `--file export.ndjson`
 
 ### `kibob togo <dir>`
-Bundle objects into a distributable NDJSON file for sharing.
+Bundle objects into a distributable NDJSON file for sharing. Also bundles spaces to `spaces.ndjson` if `manifest/spaces.yml` exists.
 
 ### `kibob migrate <dir>`
 Migrate legacy `manifest.json` to new `manifest/saved_objects.json` format.
@@ -184,16 +197,41 @@ Built with:
 ```
 my-dashboards/
 ├── manifest/
-│   └── saved_objects.json    # Tracks which objects to manage
-└── objects/
-    ├── dashboard/
-    │   ├── abc-123.json
-    │   └── xyz-789.json
-    ├── visualization/
-    │   └── def-456.json
-    └── index-pattern/
-        └── logs-*.json
+│   ├── saved_objects.json    # Tracks which objects to manage
+│   └── spaces.yml            # (Optional) Tracks which spaces to manage
+├── objects/                  # Saved objects organized by type
+│   ├── dashboard/
+│   │   ├── abc-123.json
+│   │   └── xyz-789.json
+│   ├── visualization/
+│   │   └── def-456.json
+│   └── index-pattern/
+│       └── logs-*.json
+└── spaces/                   # (Optional) Space configurations
+    ├── default.json
+    ├── marketing.json
+    └── engineering.json
 ```
+
+## Managing Kibana Spaces
+
+`kibob` can also manage Kibana Spaces alongside saved objects. Create a `manifest/spaces.yml`:
+
+```yaml
+spaces:
+  - default
+  - marketing
+  - engineering
+```
+
+Then use the same workflow:
+```bash
+kibob pull .    # Pulls spaces to spaces/*.json
+kibob push .    # Creates/updates spaces in Kibana
+kibob togo .    # Bundles to spaces.ndjson
+```
+
+Each space is stored as a pretty-printed JSON file. See the [Spaces Guide](docs/SPACES.md) for complete documentation.
 
 ## Migrating from Bash Version
 
