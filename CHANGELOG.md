@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Kibana Workflows API integration for managing workflow configurations
+- `manifest/workflows.yml` for tracking workflows with both ID and name
+- Automatic workflow pull/push/bundle when `manifest/workflows.yml` exists
+- Individual workflow storage as pretty-printed JSON files in `workflows/` directory (named by workflow name)
+- Integration tests for workflows functionality
 - Kibana Spaces API integration for managing space configurations
 - `manifest/spaces.yml` for tracking spaces in YAML format
 - Automatic space pull/push/bundle when `manifest/spaces.yml` exists
@@ -15,12 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bundle/` directory structure for organized NDJSON output files
 - Complete spaces documentation in `docs/SPACES.md`
 - Integration tests for spaces functionality
+- `--space` flag for `pull` and `push` commands to override `KIBANA_SPACE` env var
 
 ### Changed
 - **Breaking**: `togo` command now creates `bundle/` directory instead of root-level NDJSON files
 - **Breaking**: Renamed `export.ndjson` to `bundle/saved_objects.ndjson`
 - **Breaking**: Spaces bundled to `bundle/spaces.ndjson` instead of root-level `spaces.ndjson`
+- **Breaking**: Workflows bundled to `bundle/workflows.ndjson`
+- **Breaking**: Workflows manifest format now includes both `id` and `name` fields (not just name)
 - Bundle directory structure allows easy archiving: `zip -r archive.zip bundle/`
+
+### Fixed
+- Fixed double space prefix bug in Kibana API URLs (was `/s/space/s/space/api/...`, now `/s/space/api/...`)
 
 ## [0.1.0] - 2026-01-14
 

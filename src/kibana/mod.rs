@@ -5,6 +5,8 @@
 
 pub mod saved_objects;
 pub mod spaces;
+pub mod workflows;
 
 pub use saved_objects::{SavedObjectsExtractor, SavedObjectsLoader};
 pub use spaces::{SpacesExtractor, SpacesLoader};
+pub use workflows::{WorkflowsExtractor, WorkflowsLoader};

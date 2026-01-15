@@ -5,6 +5,7 @@ use crate::{
     etl::{Extractor, Loader, Transformer},
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
+    kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
     migration::load_saved_objects_manifest,
     storage::{DirectoryReader, DirectoryWriter},
     transform::{FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder},
@@ -89,12 +90,26 @@ pub async fn pull_saved_objects(project_dir: impl AsRef<Path>) -> Result<usize> 
     let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
     if spaces_manifest_path.exists() {
         log::info!("Spaces manifest found, pulling spaces...");
-        match pull_spaces_internal(project_dir, client).await {
+        match pull_spaces_internal(project_dir, client.clone()).await {
             Ok(space_count) => {
                 log::info!("✓ Pulled {} space(s)", space_count);
             }
             Err(e) => {
                 log::warn!("Failed to pull spaces: {}", e);
+            }
+        }
+    }
+
+    // Also pull workflows if manifest exists
+    let workflows_manifest_path = project_dir.join("manifest/workflows.yml");
+    if workflows_manifest_path.exists() {
+        log::info!("Workflows manifest found, pulling workflows...");
+        match pull_workflows_internal(project_dir, client).await {
+            Ok(workflow_count) => {
+                log::info!("✓ Pulled {} workflow(s)", workflow_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to pull workflows: {}", e);
             }
         }
     }
@@ -150,12 +165,26 @@ pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) ->
     let spaces_manifest_path = project_dir.join("manifest/spaces.yml");
     if spaces_manifest_path.exists() {
         log::info!("Spaces manifest found, pushing spaces...");
-        match push_spaces_internal(project_dir, client).await {
+        match push_spaces_internal(project_dir, client.clone()).await {
             Ok(space_count) => {
                 log::info!("✓ Pushed {} space(s)", space_count);
             }
             Err(e) => {
                 log::warn!("Failed to push spaces: {}", e);
+            }
+        }
+    }
+
+    // Also push workflows if manifest exists
+    let workflows_manifest_path = project_dir.join("manifest/workflows.yml");
+    if workflows_manifest_path.exists() {
+        log::info!("Workflows manifest found, pushing workflows...");
+        match push_workflows_internal(project_dir, client).await {
+            Ok(workflow_count) => {
+                log::info!("✓ Pushed {} workflow(s)", workflow_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to push workflows: {}", e);
             }
         }
     }
@@ -225,6 +254,25 @@ pub async fn bundle_to_ndjson(
             }
             Err(e) => {
                 log::warn!("Failed to bundle spaces: {}", e);
+            }
+        }
+    }
+
+    // Also bundle workflows if manifest exists
+    let workflows_manifest_path = project_dir.join("manifest/workflows.yml");
+    if workflows_manifest_path.exists() {
+        log::info!("Workflows manifest found, bundling workflows...");
+        // Get bundle directory from output_file path
+        let bundle_dir = output_file
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Could not determine bundle directory"))?;
+        let workflows_output = bundle_dir.join("workflows.ndjson");
+        match bundle_workflows_to_ndjson_internal(project_dir, &workflows_output).await {
+            Ok(workflow_count) => {
+                log::info!("✓ Bundled {} workflow(s)", workflow_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to bundle workflows: {}", e);
             }
         }
     }
@@ -678,6 +726,280 @@ pub async fn bundle_spaces_to_ndjson(
 
     Ok(spaces.len())
 }
+
+/// Load workflows manifest from project directory
+fn load_workflows_manifest(project_dir: impl AsRef<Path>) -> Result<WorkflowsManifest> {
+    let manifest_path = project_dir.as_ref().join("manifest/workflows.yml");
+
+    if !manifest_path.exists() {
+        eyre::bail!("Workflows manifest not found: {}", manifest_path.display());
+    }
+
+    WorkflowsManifest::read(&manifest_path)
+}
+
+/// Pull workflows from Kibana to local directory (internal)
+///
+/// Pipeline: WorkflowsExtractor → Write to workflows/<name>.json files
+async fn pull_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading workflows manifest from {}", project_dir.display());
+    let manifest = load_workflows_manifest(project_dir)?;
+    log::debug!("Manifest loaded: {} workflow(s)", manifest.count());
+
+    // Build the extract pipeline
+    log::debug!("Extracting workflows from Kibana...");
+    let extractor = WorkflowsExtractor::new(client, Some(manifest));
+
+    // Extract workflows
+    let workflows = extractor.extract().await?;
+
+    // Write each workflow to its own JSON file
+    let workflows_dir = project_dir.join("workflows");
+    std::fs::create_dir_all(&workflows_dir)?;
+
+    let mut count = 0;
+    for workflow in &workflows {
+        let workflow_name = workflow
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
+
+        let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+        let json = serde_json::to_string_pretty(workflow)?;
+        std::fs::write(&workflow_file, json)?;
+
+        log::debug!("Wrote workflow: {}", workflow_file.display());
+        count += 1;
+    }
+
+    log::debug!(
+        "✓ Pulled {} workflow(s) to {}",
+        count,
+        workflows_dir.display()
+    );
+
+    Ok(count)
+}
+
+/// Pull workflows from Kibana to local directory
+///
+/// Pipeline: WorkflowsExtractor → Write to workflows/<name>.json files
+pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading workflows manifest from {}", project_dir.display());
+    let manifest = load_workflows_manifest(project_dir)?;
+    log::info!("Manifest loaded: {} workflow(s)", manifest.count());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    // Build the extract pipeline
+    log::info!("Extracting workflows from Kibana...");
+    let extractor = WorkflowsExtractor::new(client, Some(manifest));
+
+    // Extract workflows
+    let workflows = extractor.extract().await?;
+
+    // Write each workflow to its own JSON file
+    let workflows_dir = project_dir.join("workflows");
+    std::fs::create_dir_all(&workflows_dir)?;
+
+    let mut count = 0;
+    for workflow in &workflows {
+        let workflow_name = workflow
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
+
+        let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+        let json = serde_json::to_string_pretty(workflow)?;
+        std::fs::write(&workflow_file, json)?;
+
+        log::debug!("Wrote workflow: {}", workflow_file.display());
+        count += 1;
+    }
+
+    log::info!(
+        "✓ Pulled {} workflow(s) to {}",
+        count,
+        workflows_dir.display()
+    );
+
+    Ok(count)
+}
+
+/// Push workflows from local directory to Kibana (internal)
+///
+/// Pipeline: Read from workflows/<name>.json → WorkflowsLoader
+async fn push_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading workflows from {}", project_dir.display());
+    let workflows_dir = project_dir.join("workflows");
+
+    if !workflows_dir.exists() {
+        eyre::bail!("Workflows directory not found: {}", workflows_dir.display());
+    }
+
+    // Read all JSON files from workflows directory
+    let mut workflows = Vec::new();
+    for entry in std::fs::read_dir(&workflows_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            workflows.push(workflow);
+        }
+    }
+
+    log::debug!("Read {} workflow(s) from disk", workflows.len());
+
+    let loader = WorkflowsLoader::new(client);
+
+    // Load workflows to Kibana
+    let count = loader.load(workflows).await?;
+
+    Ok(count)
+}
+
+/// Push workflows from local directory to Kibana
+///
+/// Pipeline: Read from workflows/<name>.json → WorkflowsLoader
+pub async fn push_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading workflows from {}", project_dir.display());
+    let workflows_dir = project_dir.join("workflows");
+
+    if !workflows_dir.exists() {
+        eyre::bail!("Workflows directory not found: {}", workflows_dir.display());
+    }
+
+    // Read all JSON files from workflows directory
+    let mut workflows = Vec::new();
+    for entry in std::fs::read_dir(&workflows_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            workflows.push(workflow);
+        }
+    }
+
+    log::info!("Read {} workflow(s) from disk", workflows.len());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    let loader = WorkflowsLoader::new(client);
+
+    // Load workflows to Kibana
+    let count = loader.load(workflows).await?;
+
+    log::info!("✓ Pushed {} workflow(s) to Kibana", count);
+
+    Ok(count)
+}
+
+/// Bundle workflows to NDJSON file for distribution (internal)
+///
+/// Pipeline: Read from workflows/<name>.json → Write to workflows.ndjson
+async fn bundle_workflows_to_ndjson_internal(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::debug!("Loading workflows from {}", project_dir.display());
+    let workflows_dir = project_dir.join("workflows");
+
+    if !workflows_dir.exists() {
+        eyre::bail!("Workflows directory not found: {}", workflows_dir.display());
+    }
+
+    // Read all JSON files from workflows directory
+    let mut workflows = Vec::new();
+    for entry in std::fs::read_dir(&workflows_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            workflows.push(workflow);
+        }
+    }
+
+    log::debug!("Read {} workflow(s) from disk", workflows.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for workflow in &workflows {
+        let json_line = serde_json::to_string(workflow)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    Ok(workflows.len())
+}
+
+/// Bundle workflows to NDJSON file for distribution
+///
+/// Pipeline: Read from workflows/<name>.json → Write to workflows.ndjson
+pub async fn bundle_workflows_to_ndjson(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::info!("Loading workflows from {}", project_dir.display());
+    let workflows_dir = project_dir.join("workflows");
+
+    if !workflows_dir.exists() {
+        eyre::bail!("Workflows directory not found: {}", workflows_dir.display());
+    }
+
+    // Read all JSON files from workflows directory
+    let mut workflows = Vec::new();
+    for entry in std::fs::read_dir(&workflows_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            workflows.push(workflow);
+        }
+    }
+
+    log::info!("Read {} workflow(s) from disk", workflows.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for workflow in &workflows {
+        let json_line = serde_json::to_string(workflow)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    log::info!(
+        "✓ Bundled {} workflow(s) to {}",
+        workflows.len(),
+        output_file.display()
+    );
+
+    Ok(workflows.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

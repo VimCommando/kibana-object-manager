@@ -132,6 +132,17 @@ impl Kibana {
         self.request(Method::GET, &HashMap::new(), path, None).await
     }
 
+    /// Helper for GET requests for internal Kibana APIs
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn get_internal(&self, path: &str) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::GET, &headers, path, None).await
+    }
+
     /// Helper for POST requests with JSON body
     pub async fn post_json(&self, path: &str, body: &[u8]) -> Result<reqwest::Response> {
         let mut headers = HashMap::new();
@@ -147,6 +158,24 @@ impl Kibana {
     ) -> Result<reqwest::Response> {
         let body = serde_json::to_vec(value)?;
         self.post_json(path, &body).await
+    }
+
+    /// Helper for POST requests with JSON value for internal Kibana APIs
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn post_json_value_internal(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::POST, &headers, path, Some(&body))
+            .await
     }
 
     /// Helper for PUT requests with JSON value
