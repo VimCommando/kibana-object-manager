@@ -5,7 +5,6 @@ use kibana_object_manager::migration::{
     MigrationResult, load_saved_objects_manifest, migrate_manifest, needs_migration,
 };
 use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Helper function to create a test project with legacy manifest
