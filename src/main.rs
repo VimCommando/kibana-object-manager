@@ -121,7 +121,7 @@ enum Commands {
     /// Add items to an existing manifest
     ///
     /// Discovers and adds items via search API or reads from a file.
-    /// Supports: objects, workflows, spaces
+    /// Supports: objects, workflows, spaces, agents, tools
     ///
     /// Examples:
     ///   kibob add workflows .                          # Search all workflows
@@ -132,9 +132,13 @@ enum Commands {
     ///   kibob add workflows . --file export.ndjson     # Add from bundle file
     ///   kibob add spaces .                             # Fetch all spaces
     ///   kibob add spaces . --include "prod|staging"    # Include spaces matching pattern
+    ///   kibob add agents .                             # Fetch all agents
+    ///   kibob add agents . --include "^support"        # Include agents matching pattern
+    ///   kibob add tools .                              # Fetch all tools
+    ///   kibob add tools . --include "^search"          # Include tools matching pattern
     ///   kibob add objects . --objects "dashboard=abc"  # Legacy: add specific objects by ID
     Add {
-        /// API to add to (objects, workflows, spaces)
+        /// API to add to (objects, workflows, spaces, agents, tools)
         api: String,
 
         /// Project directory with existing manifest
@@ -363,10 +367,20 @@ async fn main() -> Result<()> {
                     use kibana_object_manager::cli::add_spaces_to_manifest;
                     add_spaces_to_manifest(&output_dir, query, include, exclude, file).await?
                 }
+                "agents" => {
+                    // Agents support: --query (ignored), --include, --exclude, or --file
+                    use kibana_object_manager::cli::add_agents_to_manifest;
+                    add_agents_to_manifest(&output_dir, query, include, exclude, file).await?
+                }
+                "tools" => {
+                    // Tools support: --query (ignored), --include, --exclude, or --file
+                    use kibana_object_manager::cli::add_tools_to_manifest;
+                    add_tools_to_manifest(&output_dir, query, include, exclude, file).await?
+                }
                 _ => {
                     log::error!("Unknown API: {}", api);
                     return Err(eyre::eyre!(
-                        "Unknown API '{}'. Supported: objects, workflows, spaces",
+                        "Unknown API '{}'. Supported: objects, workflows, spaces, agents, tools",
                         api
                     ));
                 }

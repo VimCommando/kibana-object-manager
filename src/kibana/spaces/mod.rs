@@ -9,4 +9,4 @@ mod manifest;
 
 pub use extractor::SpacesExtractor;
 pub use loader::SpacesLoader;
-pub use manifest::SpacesManifest;
+pub use manifest::{SpaceEntry, SpacesManifest};

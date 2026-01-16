@@ -1,0 +1,8 @@
+{
+  "configuration": {},
+  "description": "Retrieve mappings for the specified index or indices.",
+  "id": "platform.core.get_index_mapping",
+  "readonly": true,
+  "tags": [],
+  "type": "builtin"
+}

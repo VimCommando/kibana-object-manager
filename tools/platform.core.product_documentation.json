@@ -1,0 +1,8 @@
+{
+  "configuration": {},
+  "description": "Search and retrieve documentation about Elastic products (Kibana, Elasticsearch, Elastic Security, Elastic Observability).",
+  "id": "platform.core.product_documentation",
+  "readonly": true,
+  "tags": [],
+  "type": "builtin"
+}

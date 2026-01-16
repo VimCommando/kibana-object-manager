@@ -1,25 +1,44 @@
 //! Spaces manifest management
 //!
 //! The spaces manifest is stored as `manifest/spaces.yml` and contains
-//! a list of space IDs to manage.
+//! a list of spaces with their IDs and names.
 //!
 //! Example format:
 //! ```yaml
 //! spaces:
-//!   - default
-//!   - marketing
-//!   - engineering
+//!   - id: default
+//!     name: Default
+//!   - id: marketing
+//!     name: Marketing
+//!   - id: engineering
+//!     name: Engineering
 //! ```
 
 use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Space entry in manifest with ID and name
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpaceEntry {
+    /// Space ID (used for API calls)
+    pub id: String,
+    /// Space name (used for filename)
+    pub name: String,
+}
+
+impl SpaceEntry {
+    /// Create a new space entry
+    pub fn new(id: String, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
 /// Spaces manifest structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpacesManifest {
-    /// List of space IDs to manage
-    pub spaces: Vec<String>,
+    /// List of spaces to manage (with ID and name)
+    pub spaces: Vec<SpaceEntry>,
 }
 
 impl SpacesManifest {
@@ -28,26 +47,26 @@ impl SpacesManifest {
         Self { spaces: Vec::new() }
     }
 
-    /// Create a manifest with specified space IDs
-    pub fn with_spaces(spaces: Vec<String>) -> Self {
+    /// Create a manifest with specified spaces
+    pub fn with_spaces(spaces: Vec<SpaceEntry>) -> Self {
         Self { spaces }
     }
 
-    /// Add a space ID to the manifest
+    /// Add a space to the manifest
     ///
     /// Returns true if space was added, false if it already exists
-    pub fn add_space(&mut self, space_id: String) -> bool {
-        if !self.spaces.contains(&space_id) {
-            self.spaces.push(space_id);
+    pub fn add_space(&mut self, id: String, name: String) -> bool {
+        if !self.spaces.iter().any(|s| s.id == id) {
+            self.spaces.push(SpaceEntry::new(id, name));
             true
         } else {
             false
         }
     }
 
-    /// Remove a space ID from the manifest
+    /// Remove a space from the manifest by ID
     pub fn remove_space(&mut self, space_id: &str) -> bool {
-        if let Some(pos) = self.spaces.iter().position(|s| s == space_id) {
+        if let Some(pos) = self.spaces.iter().position(|s| s.id == space_id) {
             self.spaces.remove(pos);
             true
         } else {
@@ -57,7 +76,12 @@ impl SpacesManifest {
 
     /// Check if a space ID is in the manifest
     pub fn contains(&self, space_id: &str) -> bool {
-        self.spaces.contains(&space_id.to_string())
+        self.spaces.iter().any(|s| s.id == space_id)
+    }
+
+    /// Get all space IDs
+    pub fn ids(&self) -> Vec<String> {
+        self.spaces.iter().map(|s| s.id.clone()).collect()
     }
 
     /// Get the number of spaces in the manifest
@@ -120,8 +144,10 @@ mod tests {
 
     #[test]
     fn test_with_spaces() {
-        let manifest =
-            SpacesManifest::with_spaces(vec!["default".to_string(), "marketing".to_string()]);
+        let manifest = SpacesManifest::with_spaces(vec![
+            SpaceEntry::new("default".to_string(), "Default".to_string()),
+            SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
+        ]);
         assert_eq!(manifest.count(), 2);
         assert!(manifest.contains("default"));
         assert!(manifest.contains("marketing"));
@@ -130,19 +156,21 @@ mod tests {
     #[test]
     fn test_add_space() {
         let mut manifest = SpacesManifest::new();
-        manifest.add_space("test".to_string());
+        manifest.add_space("test".to_string(), "Test".to_string());
         assert_eq!(manifest.count(), 1);
         assert!(manifest.contains("test"));
 
         // Adding duplicate should not increase count
-        manifest.add_space("test".to_string());
+        manifest.add_space("test".to_string(), "Test".to_string());
         assert_eq!(manifest.count(), 1);
     }
 
     #[test]
     fn test_remove_space() {
-        let mut manifest =
-            SpacesManifest::with_spaces(vec!["space1".to_string(), "space2".to_string()]);
+        let mut manifest = SpacesManifest::with_spaces(vec![
+            SpaceEntry::new("space1".to_string(), "Space 1".to_string()),
+            SpaceEntry::new("space2".to_string(), "Space 2".to_string()),
+        ]);
 
         assert!(manifest.remove_space("space1"));
         assert_eq!(manifest.count(), 1);
@@ -158,9 +186,9 @@ mod tests {
         let manifest_path = temp_dir.path().join("manifest").join("spaces.yml");
 
         let original = SpacesManifest::with_spaces(vec![
-            "default".to_string(),
-            "marketing".to_string(),
-            "engineering".to_string(),
+            SpaceEntry::new("default".to_string(), "Default".to_string()),
+            SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
+            SpaceEntry::new("engineering".to_string(), "Engineering".to_string()),
         ]);
 
         // Write
@@ -175,12 +203,16 @@ mod tests {
 
     #[test]
     fn test_yaml_format() {
-        let manifest =
-            SpacesManifest::with_spaces(vec!["space1".to_string(), "space2".to_string()]);
+        let manifest = SpacesManifest::with_spaces(vec![
+            SpaceEntry::new("space1".to_string(), "Space 1".to_string()),
+            SpaceEntry::new("space2".to_string(), "Space 2".to_string()),
+        ]);
         let yaml = serde_yaml::to_string(&manifest).unwrap();
 
         assert!(yaml.contains("spaces:"));
-        assert!(yaml.contains("space1"));
-        assert!(yaml.contains("space2"));
+        assert!(yaml.contains("id: space1"));
+        assert!(yaml.contains("name: Space 1"));
+        assert!(yaml.contains("id: space2"));
+        assert!(yaml.contains("name: Space 2"));
     }
 }

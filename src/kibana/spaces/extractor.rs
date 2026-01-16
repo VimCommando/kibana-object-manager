@@ -132,11 +132,11 @@ impl SpacesExtractor {
     async fn fetch_manifest_spaces(&self, manifest: &super::SpacesManifest) -> Result<Vec<Value>> {
         let mut spaces = Vec::new();
 
-        for space_id in &manifest.spaces {
-            match self.fetch_space(space_id).await {
+        for entry in &manifest.spaces {
+            match self.fetch_space(&entry.id).await {
                 Ok(space) => spaces.push(space),
                 Err(e) => {
-                    log::warn!("Failed to fetch space '{}': {}", space_id, e);
+                    log::warn!("Failed to fetch space '{}': {}", entry.id, e);
                     // Continue with other spaces instead of failing completely
                 }
             }
@@ -206,8 +206,8 @@ mod tests {
         let url = Url::parse("http://localhost:5601").unwrap();
         let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let manifest = super::super::SpacesManifest::with_spaces(vec![
-            "default".to_string(),
-            "marketing".to_string(),
+            super::super::SpaceEntry::new("default".to_string(), "Default".to_string()),
+            super::super::SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
         ]);
 
         let extractor = SpacesExtractor::new(client, Some(manifest));

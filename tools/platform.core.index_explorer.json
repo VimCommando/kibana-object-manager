@@ -1,0 +1,8 @@
+{
+  "configuration": {},
+  "description": "List relevant indices, aliases and datastreams based on a natural language query.\n\nThe 'indexPattern' parameter can be used to filter indices by a specific pattern, e.g. 'foo*'.\nThis should *only* be used if you know what you're doing (e.g. if the user explicitly specified a pattern).\nOtherwise, leave it empty to search against all indices.\n\n*Example:*\nUser: \"Show me my latest alerts\"\nYou: call tool 'index_explorer' with { query: 'indices containing user alerts' }\nTool result: [{ type: \"index\", name: '.alerts' }]\n",
+  "id": "platform.core.index_explorer",
+  "readonly": true,
+  "tags": [],
+  "type": "builtin"
+}

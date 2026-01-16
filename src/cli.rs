@@ -3,8 +3,10 @@
 use crate::{
     client::{Auth, Kibana},
     etl::{Extractor, Loader, Transformer},
+    kibana::agents::{AgentsExtractor, AgentsLoader, AgentsManifest},
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
+    kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
     kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
     migration::load_saved_objects_manifest,
     storage::{DirectoryReader, DirectoryWriter},
@@ -104,12 +106,40 @@ pub async fn pull_saved_objects(project_dir: impl AsRef<Path>) -> Result<usize> 
     let workflows_manifest_path = project_dir.join("manifest/workflows.yml");
     if workflows_manifest_path.exists() {
         log::info!("Workflows manifest found, pulling workflows...");
-        match pull_workflows_internal(project_dir, client).await {
+        match pull_workflows_internal(project_dir, client.clone()).await {
             Ok(workflow_count) => {
                 log::info!("✓ Pulled {} workflow(s)", workflow_count);
             }
             Err(e) => {
                 log::warn!("Failed to pull workflows: {}", e);
+            }
+        }
+    }
+
+    // Also pull agents if manifest exists
+    let agents_manifest_path = project_dir.join("manifest/agents.yml");
+    if agents_manifest_path.exists() {
+        log::info!("Agents manifest found, pulling agents...");
+        match pull_agents_internal(project_dir, client.clone()).await {
+            Ok(agent_count) => {
+                log::info!("✓ Pulled {} agent(s)", agent_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to pull agents: {}", e);
+            }
+        }
+    }
+
+    // Also pull tools if manifest exists
+    let tools_manifest_path = project_dir.join("manifest/tools.yml");
+    if tools_manifest_path.exists() {
+        log::info!("Tools manifest found, pulling tools...");
+        match pull_tools_internal(project_dir, client).await {
+            Ok(tool_count) => {
+                log::info!("✓ Pulled {} tool(s)", tool_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to pull tools: {}", e);
             }
         }
     }
@@ -179,12 +209,40 @@ pub async fn push_saved_objects(project_dir: impl AsRef<Path>, managed: bool) ->
     let workflows_manifest_path = project_dir.join("manifest/workflows.yml");
     if workflows_manifest_path.exists() {
         log::info!("Workflows manifest found, pushing workflows...");
-        match push_workflows_internal(project_dir, client).await {
+        match push_workflows_internal(project_dir, client.clone()).await {
             Ok(workflow_count) => {
                 log::info!("✓ Pushed {} workflow(s)", workflow_count);
             }
             Err(e) => {
                 log::warn!("Failed to push workflows: {}", e);
+            }
+        }
+    }
+
+    // Also push agents if manifest exists
+    let agents_manifest_path = project_dir.join("manifest/agents.yml");
+    if agents_manifest_path.exists() {
+        log::info!("Agents manifest found, pushing agents...");
+        match push_agents_internal(project_dir, client.clone()).await {
+            Ok(agent_count) => {
+                log::info!("✓ Pushed {} agent(s)", agent_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to push agents: {}", e);
+            }
+        }
+    }
+
+    // Also push tools if manifest exists
+    let tools_manifest_path = project_dir.join("manifest/tools.yml");
+    if tools_manifest_path.exists() {
+        log::info!("Tools manifest found, pushing tools...");
+        match push_tools_internal(project_dir, client).await {
+            Ok(tool_count) => {
+                log::info!("✓ Pushed {} tool(s)", tool_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to push tools: {}", e);
             }
         }
     }
@@ -273,6 +331,44 @@ pub async fn bundle_to_ndjson(
             }
             Err(e) => {
                 log::warn!("Failed to bundle workflows: {}", e);
+            }
+        }
+    }
+
+    // Also bundle agents if manifest exists
+    let agents_manifest_path = project_dir.join("manifest/agents.yml");
+    if agents_manifest_path.exists() {
+        log::info!("Agents manifest found, bundling agents...");
+        // Get bundle directory from output_file path
+        let bundle_dir = output_file
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Could not determine bundle directory"))?;
+        let agents_output = bundle_dir.join("agents.ndjson");
+        match bundle_agents_to_ndjson_internal(project_dir, &agents_output).await {
+            Ok(agent_count) => {
+                log::info!("✓ Bundled {} agent(s)", agent_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to bundle agents: {}", e);
+            }
+        }
+    }
+
+    // Also bundle tools if manifest exists
+    let tools_manifest_path = project_dir.join("manifest/tools.yml");
+    if tools_manifest_path.exists() {
+        log::info!("Tools manifest found, bundling tools...");
+        // Get bundle directory from output_file path
+        let bundle_dir = output_file
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Could not determine bundle directory"))?;
+        let tools_output = bundle_dir.join("tools.ndjson");
+        match bundle_tools_to_ndjson_internal(project_dir, &tools_output).await {
+            Ok(tool_count) => {
+                log::info!("✓ Bundled {} tool(s)", tool_count);
+            }
+            Err(e) => {
+                log::warn!("Failed to bundle tools: {}", e);
             }
         }
     }
@@ -816,18 +912,23 @@ pub async fn add_spaces_to_manifest(
 
     let mut added_count = 0;
     for space in &filtered_spaces {
-        // Extract id
+        // Extract id and name
         let space_id = space
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
 
-        // Add to manifest (will skip if already exists)
-        if manifest.add_space(space_id.to_string()) {
-            log::debug!("Added space to manifest: {}", space_id);
+        let space_name = space
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Space missing 'name' field"))?;
 
-            // Write space file
-            let space_file = spaces_dir.join(format!("{}.json", space_id));
+        // Add to manifest (will skip if already exists)
+        if manifest.add_space(space_id.to_string(), space_name.to_string()) {
+            log::debug!("Added space to manifest: {} ({})", space_id, space_name);
+
+            // Write space file using name for filename
+            let space_file = spaces_dir.join(format!("{}.json", space_name));
             let json = serde_json::to_string_pretty(space)?;
             std::fs::write(&space_file, json)?;
 
@@ -886,12 +987,19 @@ async fn pull_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
     let mut count = 0;
     for space in &spaces {
+        // Get space ID (required)
         let space_id = space
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
 
-        let space_file = spaces_dir.join(format!("{}.json", space_id));
+        // Use name if available, otherwise use id for filename
+        let filename = space
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(space_id);
+
+        let space_file = spaces_dir.join(format!("{}.json", filename));
         let json = serde_json::to_string_pretty(space)?;
         std::fs::write(&space_file, json)?;
 
@@ -904,7 +1012,7 @@ async fn pull_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
 /// Pull spaces from Kibana to local directory
 ///
-/// Pipeline: SpacesExtractor → Write to spaces/<space_id>.json files
+/// Pipeline: SpacesExtractor → Write to spaces/<name or id>.json files
 pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -928,12 +1036,19 @@ pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
 
     let mut count = 0;
     for space in &spaces {
+        // Get space ID (required)
         let space_id = space
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Space missing 'id' field"))?;
 
-        let space_file = spaces_dir.join(format!("{}.json", space_id));
+        // Use name if available, otherwise use id for filename
+        let filename = space
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(space_id);
+
+        let space_file = spaces_dir.join(format!("{}.json", filename));
         let json = serde_json::to_string_pretty(space)?;
         std::fs::write(&space_file, json)?;
 
@@ -948,7 +1063,7 @@ pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
 
 /// Push spaces from local directory to Kibana (internal)
 ///
-/// Pipeline: Read from spaces/<space_id>.json → SpacesLoader
+/// Pipeline: Read from spaces/<name or id>.json → SpacesLoader
 async fn push_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -984,7 +1099,7 @@ async fn push_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
 /// Push spaces from local directory to Kibana
 ///
-/// Pipeline: Read from spaces/<space_id>.json → SpacesLoader
+/// Pipeline: Read from spaces/<name or id>.json → SpacesLoader
 pub async fn push_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -1386,6 +1501,941 @@ pub async fn bundle_workflows_to_ndjson(
     );
 
     Ok(workflows.len())
+}
+
+// ==============================================================================
+// Agents API Functions
+// ==============================================================================
+
+/// Load agents manifest from project directory
+///
+/// Expects manifest at `manifest/agents.yml`
+fn load_agents_manifest(project_dir: impl AsRef<Path>) -> Result<AgentsManifest> {
+    let project_dir = project_dir.as_ref();
+    let manifest_path = project_dir.join("manifest/agents.yml");
+
+    if !manifest_path.exists() {
+        eyre::bail!(
+            "Agents manifest not found: {}. Run 'kibob add agents' to create it.",
+            manifest_path.display()
+        );
+    }
+
+    AgentsManifest::read(&manifest_path)
+}
+
+/// Add agents to an existing manifest
+///
+/// Can add from Kibana search API or from a file (.json or .ndjson)
+/// Optionally filter results by name using regex patterns (--include, --exclude)
+pub async fn add_agents_to_manifest(
+    project_dir: impl AsRef<Path>,
+    query: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    file_path: Option<String>,
+) -> Result<usize> {
+    use crate::kibana::agents::AgentEntry;
+
+    let project_dir = project_dir.as_ref();
+
+    // Load or create manifest
+    log::info!("Loading agents manifest from {}", project_dir.display());
+    let manifest_path = project_dir.join("manifest/agents.yml");
+    let mut manifest = if manifest_path.exists() {
+        AgentsManifest::read(&manifest_path)?
+    } else {
+        log::info!("No existing manifest found, will create new one");
+        AgentsManifest::new()
+    };
+    log::info!("Current manifest has {} agent(s)", manifest.count());
+
+    // Fetch agents from API or file
+    let new_agents: Vec<serde_json::Value> = if let Some(file) = file_path {
+        // Read from file
+        log::info!("Reading agents from {}", file);
+        let file_path = std::path::Path::new(&file);
+
+        if !file_path.exists() {
+            eyre::bail!("File not found: {}", file_path.display());
+        }
+
+        // Detect format by extension
+        let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match extension {
+            "ndjson" => {
+                // Parse NDJSON format (one agent per line)
+                use std::io::{BufRead, BufReader};
+                let file = std::fs::File::open(file_path)?;
+                let reader = BufReader::new(file);
+
+                let mut agents = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let agent: serde_json::Value = serde_json::from_str(&line)?;
+                    agents.push(agent);
+                }
+                log::info!("Read {} agent(s) from NDJSON file", agents.len());
+                agents
+            }
+            "json" => {
+                // Parse JSON format (array or single object)
+                let content = std::fs::read_to_string(file_path)?;
+                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+
+                // Check if it's an array
+                if let Some(arr) = parsed.as_array() {
+                    log::info!("Read {} agent(s) from JSON array", arr.len());
+                    arr.iter().cloned().collect()
+                } else {
+                    // Single agent object
+                    log::info!("Read 1 agent from JSON file");
+                    vec![parsed]
+                }
+            }
+            _ => {
+                eyre::bail!(
+                    "Unsupported file format: {}. Expected .json or .ndjson",
+                    extension
+                );
+            }
+        }
+    } else {
+        // Search via API
+        log::info!("Searching agents via API...");
+        let client = load_kibana_client()?;
+        let extractor = AgentsExtractor::new(client, None);
+
+        extractor.search_agents(query.as_deref()).await?
+    };
+
+    log::info!("Found {} agent(s) before filtering", new_agents.len());
+
+    // Apply regex filters: include first, then exclude
+    let filtered_agents: Vec<serde_json::Value> = {
+        let mut agents = new_agents;
+
+        // Apply include filter (if specified)
+        if let Some(include_pattern) = &include {
+            let regex = regex::Regex::new(include_pattern)
+                .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+
+            agents = agents
+                .into_iter()
+                .filter(|a| {
+                    a.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| regex.is_match(name))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            log::info!(
+                "After include filter '{}': {} agent(s)",
+                include_pattern,
+                agents.len()
+            );
+        }
+
+        // Apply exclude filter (if specified)
+        if let Some(exclude_pattern) = &exclude {
+            let regex = regex::Regex::new(exclude_pattern)
+                .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+
+            agents = agents
+                .into_iter()
+                .filter(|a| {
+                    a.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|name| !regex.is_match(name))
+                        .unwrap_or(true)
+                })
+                .collect();
+
+            log::info!(
+                "After exclude filter '{}': {} agent(s)",
+                exclude_pattern,
+                agents.len()
+            );
+        }
+
+        agents
+    };
+
+    log::info!("Adding {} agent(s) after filtering", filtered_agents.len());
+
+    // Add agents to manifest and write files
+    let agents_dir = project_dir.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+
+    let mut added_count = 0;
+    for agent in &filtered_agents {
+        // Extract id and name
+        let agent_id = agent
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Agent missing 'id' field"))?;
+
+        let agent_name = agent
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Agent missing 'name' field"))?;
+
+        // Add to manifest (will skip if already exists)
+        if manifest.add_agent(AgentEntry::new(agent_id, agent_name)) {
+            log::debug!("Added agent to manifest: {} ({})", agent_name, agent_id);
+
+            // Write agent file
+            let agent_file = agents_dir.join(format!("{}.json", agent_name));
+            let json = serde_json::to_string_pretty(agent)?;
+            std::fs::write(&agent_file, json)?;
+
+            log::debug!("Wrote agent file: {}", agent_file.display());
+            added_count += 1;
+        } else {
+            log::debug!("Agent already in manifest, skipping: {}", agent_name);
+        }
+    }
+
+    // Create manifest directory if it doesn't exist
+    let manifest_dir = project_dir.join("manifest");
+    std::fs::create_dir_all(&manifest_dir)?;
+
+    // Save updated manifest
+    manifest.write(&manifest_path)?;
+    log::info!("✓ Updated manifest now has {} agent(s)", manifest.count());
+    log::info!("✓ Added {} new agent(s)", added_count);
+
+    Ok(added_count)
+}
+
+/// Pull agents from Kibana to local directory (internal)
+///
+/// Pipeline: AgentsExtractor → Write to agents/<name>.json files
+async fn pull_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading agents manifest from {}", project_dir.display());
+    let manifest = load_agents_manifest(project_dir)?;
+    log::debug!("Manifest loaded: {} agent(s)", manifest.count());
+
+    // Build the extract pipeline
+    log::debug!("Extracting agents from Kibana...");
+    let extractor = AgentsExtractor::new(client, Some(manifest));
+
+    // Extract agents
+    let agents = extractor.extract().await?;
+
+    // Write each agent to its own JSON file
+    let agents_dir = project_dir.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+
+    let mut count = 0;
+    for agent in &agents {
+        let agent_name = agent
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Agent missing 'name' field"))?;
+
+        let agent_file = agents_dir.join(format!("{}.json", agent_name));
+        let json = serde_json::to_string_pretty(agent)?;
+        std::fs::write(&agent_file, json)?;
+
+        log::debug!("Wrote agent: {}", agent_file.display());
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Pull agents from Kibana to local directory
+///
+/// Pipeline: AgentsExtractor → Write to agents/<name>.json files
+pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading agents manifest from {}", project_dir.display());
+    let manifest = load_agents_manifest(project_dir)?;
+    log::info!("Manifest loaded: {} agent(s)", manifest.count());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    // Build the extract pipeline
+    log::info!("Extracting agents from Kibana...");
+    let extractor = AgentsExtractor::new(client, Some(manifest));
+
+    // Extract agents
+    let agents = extractor.extract().await?;
+
+    // Write each agent to its own JSON file
+    let agents_dir = project_dir.join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+
+    let mut count = 0;
+    for agent in &agents {
+        let agent_name = agent
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Agent missing 'name' field"))?;
+
+        let agent_file = agents_dir.join(format!("{}.json", agent_name));
+        let json = serde_json::to_string_pretty(agent)?;
+        std::fs::write(&agent_file, json)?;
+
+        log::debug!("Wrote agent: {}", agent_file.display());
+        count += 1;
+    }
+
+    log::info!("✓ Pulled {} agent(s) to {}", count, agents_dir.display());
+
+    Ok(count)
+}
+
+/// Push agents from local directory to Kibana (internal)
+///
+/// Pipeline: Read from agents/<name>.json → AgentsLoader
+async fn push_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading agents from {}", project_dir.display());
+    let agents_dir = project_dir.join("agents");
+
+    if !agents_dir.exists() {
+        eyre::bail!("Agents directory not found: {}", agents_dir.display());
+    }
+
+    // Read all JSON files from agents directory
+    let mut agents = Vec::new();
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            agents.push(agent);
+        }
+    }
+
+    log::debug!("Read {} agent(s) from disk", agents.len());
+
+    let loader = AgentsLoader::new(client);
+
+    // Load agents to Kibana
+    let count = loader.load(agents).await?;
+
+    Ok(count)
+}
+
+/// Push agents from local directory to Kibana
+///
+/// Pipeline: Read from agents/<name>.json → AgentsLoader
+pub async fn push_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading agents from {}", project_dir.display());
+    let agents_dir = project_dir.join("agents");
+
+    if !agents_dir.exists() {
+        eyre::bail!("Agents directory not found: {}", agents_dir.display());
+    }
+
+    // Read all JSON files from agents directory
+    let mut agents = Vec::new();
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            agents.push(agent);
+        }
+    }
+
+    log::info!("Read {} agent(s) from disk", agents.len());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    let loader = AgentsLoader::new(client);
+
+    // Load agents to Kibana
+    let count = loader.load(agents).await?;
+
+    log::info!("✓ Pushed {} agent(s) to Kibana", count);
+
+    Ok(count)
+}
+
+/// Bundle agents to NDJSON file for distribution (internal)
+///
+/// Pipeline: Read from agents/<name>.json → Write to agents.ndjson
+async fn bundle_agents_to_ndjson_internal(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::debug!("Loading agents from {}", project_dir.display());
+    let agents_dir = project_dir.join("agents");
+
+    if !agents_dir.exists() {
+        eyre::bail!("Agents directory not found: {}", agents_dir.display());
+    }
+
+    // Read all JSON files from agents directory
+    let mut agents = Vec::new();
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            agents.push(agent);
+        }
+    }
+
+    log::debug!("Read {} agent(s) from disk", agents.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for agent in &agents {
+        let json_line = serde_json::to_string(agent)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    Ok(agents.len())
+}
+
+/// Bundle agents to NDJSON file for distribution
+///
+/// Pipeline: Read from agents/<name>.json → Write to agents.ndjson
+pub async fn bundle_agents_to_ndjson(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::info!("Loading agents from {}", project_dir.display());
+    let agents_dir = project_dir.join("agents");
+
+    if !agents_dir.exists() {
+        eyre::bail!("Agents directory not found: {}", agents_dir.display());
+    }
+
+    // Read all JSON files from agents directory
+    let mut agents = Vec::new();
+    for entry in std::fs::read_dir(&agents_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            agents.push(agent);
+        }
+    }
+
+    log::info!("Read {} agent(s) from disk", agents.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for agent in &agents {
+        let json_line = serde_json::to_string(agent)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    log::info!(
+        "✓ Bundled {} agent(s) to {}",
+        agents.len(),
+        output_file.display()
+    );
+
+    Ok(agents.len())
+}
+
+// ==============================================================================
+// Tools API Functions
+// ==============================================================================
+
+/// Load tools manifest from project directory
+///
+/// Expects manifest at `manifest/tools.yml`
+fn load_tools_manifest(project_dir: impl AsRef<Path>) -> Result<ToolsManifest> {
+    let project_dir = project_dir.as_ref();
+    let manifest_path = project_dir.join("manifest/tools.yml");
+
+    if !manifest_path.exists() {
+        eyre::bail!(
+            "Tools manifest not found: {}. Run 'kibob add tools' to create it.",
+            manifest_path.display()
+        );
+    }
+
+    ToolsManifest::read(&manifest_path)
+}
+
+/// Add tools to an existing manifest
+///
+/// Can add from Kibana search API or from a file (.json or .ndjson)
+/// Optionally filter results by name using regex patterns (--include, --exclude)
+pub async fn add_tools_to_manifest(
+    project_dir: impl AsRef<Path>,
+    query: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    file_path: Option<String>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    // Load or create manifest
+    log::info!("Loading tools manifest from {}", project_dir.display());
+    let manifest_path = project_dir.join("manifest/tools.yml");
+    let mut manifest = if manifest_path.exists() {
+        ToolsManifest::read(&manifest_path)?
+    } else {
+        log::info!("No existing manifest found, will create new one");
+        ToolsManifest::new()
+    };
+    log::info!("Current manifest has {} tool(s)", manifest.count());
+
+    // Fetch tools from API or file
+    let new_tools: Vec<serde_json::Value> = if let Some(file) = file_path {
+        // Read from file
+        log::info!("Reading tools from {}", file);
+        let file_path = std::path::Path::new(&file);
+
+        if !file_path.exists() {
+            eyre::bail!("File not found: {}", file_path.display());
+        }
+
+        // Detect format by extension
+        let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+
+        match extension {
+            "ndjson" => {
+                // Parse NDJSON format (one tool per line)
+                use std::io::{BufRead, BufReader};
+                let file = std::fs::File::open(file_path)?;
+                let reader = BufReader::new(file);
+
+                let mut tools = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let tool: serde_json::Value = serde_json::from_str(&line)?;
+                    tools.push(tool);
+                }
+                log::info!("Read {} tool(s) from NDJSON file", tools.len());
+                tools
+            }
+            "json" => {
+                // Parse JSON format (array or single object)
+                let content = std::fs::read_to_string(file_path)?;
+                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+
+                // Check if it's an array
+                if let Some(arr) = parsed.as_array() {
+                    log::info!("Read {} tool(s) from JSON array", arr.len());
+                    arr.iter().cloned().collect()
+                } else {
+                    // Single tool object
+                    log::info!("Read 1 tool from JSON file");
+                    vec![parsed]
+                }
+            }
+            _ => {
+                eyre::bail!(
+                    "Unsupported file format: {}. Expected .json or .ndjson",
+                    extension
+                );
+            }
+        }
+    } else {
+        // Search via API
+        log::info!("Searching tools via API...");
+        let client = load_kibana_client()?;
+        let extractor = ToolsExtractor::new(client, None);
+
+        extractor.search_tools(query.as_deref()).await?
+    };
+
+    log::info!("Found {} tool(s) before filtering", new_tools.len());
+
+    // Apply regex filters: include first, then exclude
+    // Filter by id since tools don't have name field
+    let filtered_tools: Vec<serde_json::Value> = {
+        let mut tools = new_tools;
+
+        // Apply include filter (if specified) - filter by id or name if available
+        if let Some(include_pattern) = &include {
+            let regex = regex::Regex::new(include_pattern)
+                .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+
+            tools = tools
+                .into_iter()
+                .filter(|t| {
+                    // Try name first, fallback to id
+                    let filter_field = t
+                        .get("name")
+                        .or_else(|| t.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    regex.is_match(filter_field)
+                })
+                .collect();
+
+            log::info!(
+                "After include filter '{}': {} tool(s)",
+                include_pattern,
+                tools.len()
+            );
+        }
+
+        // Apply exclude filter (if specified)
+        if let Some(exclude_pattern) = &exclude {
+            let regex = regex::Regex::new(exclude_pattern)
+                .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+
+            tools = tools
+                .into_iter()
+                .filter(|t| {
+                    // Try name first, fallback to id
+                    let filter_field = t
+                        .get("name")
+                        .or_else(|| t.get("id"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    !regex.is_match(filter_field)
+                })
+                .collect();
+
+            log::info!(
+                "After exclude filter '{}': {} tool(s)",
+                exclude_pattern,
+                tools.len()
+            );
+        }
+
+        tools
+    };
+
+    log::info!("Adding {} tool(s) after filtering", filtered_tools.len());
+
+    // Add tools to manifest and write files
+    let tools_dir = project_dir.join("tools");
+    std::fs::create_dir_all(&tools_dir)?;
+
+    let mut added_count = 0;
+    for tool in &filtered_tools {
+        // Extract id (required)
+        let tool_id = tool
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
+
+        // Use name for filename if available, otherwise use id
+        let filename = tool.get("name").and_then(|v| v.as_str()).unwrap_or(tool_id);
+
+        // Add to manifest (will skip if already exists)
+        if manifest.add_tool(tool_id.to_string()) {
+            log::debug!("Added tool to manifest: {}", tool_id);
+
+            // Write tool file - use name if available, otherwise id
+            let tool_file = tools_dir.join(format!("{}.json", filename));
+            let json = serde_json::to_string_pretty(tool)?;
+            std::fs::write(&tool_file, json)?;
+
+            log::debug!("Wrote tool file: {}", tool_file.display());
+            added_count += 1;
+        } else {
+            log::debug!("Tool already in manifest, skipping: {}", tool_id);
+        }
+    }
+
+    // Create manifest directory if it doesn't exist
+    let manifest_dir = project_dir.join("manifest");
+    std::fs::create_dir_all(&manifest_dir)?;
+
+    // Save updated manifest
+    manifest.write(&manifest_path)?;
+    log::info!("✓ Updated manifest now has {} tool(s)", manifest.count());
+    log::info!("✓ Added {} new tool(s)", added_count);
+
+    Ok(added_count)
+}
+
+/// Pull tools from Kibana to local directory (internal)
+///
+/// Pipeline: ToolsExtractor → Write to tools/<name or id>.json files
+async fn pull_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading tools manifest from {}", project_dir.display());
+    let manifest = load_tools_manifest(project_dir)?;
+    log::debug!("Manifest loaded: {} tool(s)", manifest.count());
+
+    // Build the extract pipeline
+    log::debug!("Extracting tools from Kibana...");
+    let extractor = ToolsExtractor::new(client, Some(manifest));
+
+    // Extract tools
+    let tools = extractor.extract().await?;
+
+    // Write each tool to its own JSON file
+    let tools_dir = project_dir.join("tools");
+    std::fs::create_dir_all(&tools_dir)?;
+
+    let mut count = 0;
+    for tool in &tools {
+        // Get tool ID (required)
+        let tool_id = tool
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
+
+        // Use name if available, otherwise use id for filename
+        let filename = tool.get("name").and_then(|v| v.as_str()).unwrap_or(tool_id);
+
+        let tool_file = tools_dir.join(format!("{}.json", filename));
+        let json = serde_json::to_string_pretty(tool)?;
+        std::fs::write(&tool_file, json)?;
+
+        log::debug!("Wrote tool: {}", tool_file.display());
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+/// Pull tools from Kibana to local directory
+///
+/// Pipeline: ToolsExtractor → Write to tools/<name or id>.json files
+pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading tools manifest from {}", project_dir.display());
+    let manifest = load_tools_manifest(project_dir)?;
+    log::info!("Manifest loaded: {} tool(s)", manifest.count());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    // Build the extract pipeline
+    log::info!("Extracting tools from Kibana...");
+    let extractor = ToolsExtractor::new(client, Some(manifest));
+
+    // Extract tools
+    let tools = extractor.extract().await?;
+
+    // Write each tool to its own JSON file
+    let tools_dir = project_dir.join("tools");
+    std::fs::create_dir_all(&tools_dir)?;
+
+    let mut count = 0;
+    for tool in &tools {
+        // Get tool ID (required)
+        let tool_id = tool
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
+
+        // Use name if available, otherwise use id for filename
+        let filename = tool.get("name").and_then(|v| v.as_str()).unwrap_or(tool_id);
+
+        let tool_file = tools_dir.join(format!("{}.json", filename));
+        let json = serde_json::to_string_pretty(tool)?;
+        std::fs::write(&tool_file, json)?;
+
+        log::debug!("Wrote tool: {}", tool_file.display());
+        count += 1;
+    }
+
+    log::info!("✓ Pulled {} tool(s) to {}", count, tools_dir.display());
+
+    Ok(count)
+}
+
+/// Push tools from local directory to Kibana (internal)
+///
+/// Pipeline: Read from tools/<name or id>.json → ToolsLoader
+async fn push_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::debug!("Loading tools from {}", project_dir.display());
+    let tools_dir = project_dir.join("tools");
+
+    if !tools_dir.exists() {
+        eyre::bail!("Tools directory not found: {}", tools_dir.display());
+    }
+
+    // Read all JSON files from tools directory
+    let mut tools = Vec::new();
+    for entry in std::fs::read_dir(&tools_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            tools.push(tool);
+        }
+    }
+
+    log::debug!("Read {} tool(s) from disk", tools.len());
+
+    let loader = ToolsLoader::new(client);
+
+    // Load tools to Kibana
+    let count = loader.load(tools).await?;
+
+    Ok(count)
+}
+
+/// Push tools from local directory to Kibana
+///
+/// Pipeline: Read from tools/<name or id>.json → ToolsLoader
+pub async fn push_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    log::info!("Loading tools from {}", project_dir.display());
+    let tools_dir = project_dir.join("tools");
+
+    if !tools_dir.exists() {
+        eyre::bail!("Tools directory not found: {}", tools_dir.display());
+    }
+
+    // Read all JSON files from tools directory
+    let mut tools = Vec::new();
+    for entry in std::fs::read_dir(&tools_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            tools.push(tool);
+        }
+    }
+
+    log::info!("Read {} tool(s) from disk", tools.len());
+
+    log::info!("Connecting to Kibana...");
+    let client = load_kibana_client()?;
+
+    let loader = ToolsLoader::new(client);
+
+    // Load tools to Kibana
+    let count = loader.load(tools).await?;
+
+    log::info!("✓ Pushed {} tool(s) to Kibana", count);
+
+    Ok(count)
+}
+
+/// Bundle tools to NDJSON file for distribution (internal)
+///
+/// Pipeline: Read from tools/<name or id>.json → Write to tools.ndjson
+async fn bundle_tools_to_ndjson_internal(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::debug!("Loading tools from {}", project_dir.display());
+    let tools_dir = project_dir.join("tools");
+
+    if !tools_dir.exists() {
+        eyre::bail!("Tools directory not found: {}", tools_dir.display());
+    }
+
+    // Read all JSON files from tools directory
+    let mut tools = Vec::new();
+    for entry in std::fs::read_dir(&tools_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            tools.push(tool);
+        }
+    }
+
+    log::debug!("Read {} tool(s) from disk", tools.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for tool in &tools {
+        let json_line = serde_json::to_string(tool)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    Ok(tools.len())
+}
+
+/// Bundle tools to NDJSON file for distribution
+///
+/// Pipeline: Read from tools/<name or id>.json → Write to tools.ndjson
+pub async fn bundle_tools_to_ndjson(
+    project_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+    let output_file = output_file.as_ref();
+
+    log::info!("Loading tools from {}", project_dir.display());
+    let tools_dir = project_dir.join("tools");
+
+    if !tools_dir.exists() {
+        eyre::bail!("Tools directory not found: {}", tools_dir.display());
+    }
+
+    // Read all JSON files from tools directory
+    let mut tools = Vec::new();
+    for entry in std::fs::read_dir(&tools_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let content = std::fs::read_to_string(&path)?;
+            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            tools.push(tool);
+        }
+    }
+
+    log::info!("Read {} tool(s) from disk", tools.len());
+
+    // Write to NDJSON file
+    use std::io::Write;
+    let mut file = std::fs::File::create(output_file)?;
+    for tool in &tools {
+        let json_line = serde_json::to_string(tool)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    log::info!(
+        "✓ Bundled {} tool(s) to {}",
+        tools.len(),
+        output_file.display()
+    );
+
+    Ok(tools.len())
 }
 
 #[cfg(test)]
