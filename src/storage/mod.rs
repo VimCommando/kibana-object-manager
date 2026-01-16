@@ -8,10 +8,14 @@
 
 mod directory;
 mod git;
+mod json_writer;
 mod manifest;
 mod ndjson;
 
 pub use directory::{DirectoryReader, DirectoryWriter};
 pub use git::GitIgnoreManager;
+pub use json_writer::{
+    from_json5_str, read_json5_file, to_string_with_multiline, write_json_with_multiline,
+};
 pub use manifest::ManifestDirectory;
 pub use ndjson::{NdjsonReader, NdjsonWriter};

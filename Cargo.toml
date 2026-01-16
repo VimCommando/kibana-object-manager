@@ -24,6 +24,7 @@ clap = { version = "^4.5", features = ["derive"] }
 dotenvy = "^0.15"
 env_logger = "^0.11"
 eyre = "^0.6"
+json5 = "0.4"
 log = "^0.4"
 owo-colors = "4.2.0"
 regex = "1.12.2"

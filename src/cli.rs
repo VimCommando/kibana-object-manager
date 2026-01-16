@@ -9,7 +9,7 @@ use crate::{
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
     kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
     migration::load_saved_objects_manifest,
-    storage::{DirectoryReader, DirectoryWriter},
+    storage::{self, DirectoryReader, DirectoryWriter},
     transform::{FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder},
 };
 use eyre::{Context, Result};
@@ -630,7 +630,7 @@ pub async fn add_workflows_to_manifest(
 
             // Write workflow file
             let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
-            let json = serde_json::to_string_pretty(workflow)?;
+            let json = storage::to_string_with_multiline(workflow)?;
             std::fs::write(&workflow_file, json)?;
 
             log::debug!("Wrote workflow file: {}", workflow_file.display());
@@ -1165,19 +1165,30 @@ async fn pull_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) 
     // Extract workflows
     let workflows = extractor.extract().await?;
 
+    // Apply YAML formatting transform
+    use crate::etl::Transformer;
+    use crate::transform::YamlFormatter;
+
+    let formatter = YamlFormatter::for_workflows();
+    let formatted_workflows: Result<Vec<_>> = workflows
+        .into_iter()
+        .map(|w| formatter.transform(w))
+        .collect();
+    let formatted_workflows = formatted_workflows?;
+
     // Write each workflow to its own JSON file
     let workflows_dir = project_dir.join("workflows");
     std::fs::create_dir_all(&workflows_dir)?;
 
     let mut count = 0;
-    for workflow in &workflows {
+    for workflow in &formatted_workflows {
         let workflow_name = workflow
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
 
         let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
-        let json = serde_json::to_string_pretty(workflow)?;
+        let json = storage::to_string_with_multiline(workflow)?;
         std::fs::write(&workflow_file, json)?;
 
         log::debug!("Wrote workflow: {}", workflow_file.display());
@@ -1214,19 +1225,30 @@ pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
     // Extract workflows
     let workflows = extractor.extract().await?;
 
+    // Apply YAML formatting transform
+    use crate::etl::Transformer;
+    use crate::transform::YamlFormatter;
+
+    let formatter = YamlFormatter::for_workflows();
+    let formatted_workflows: Result<Vec<_>> = workflows
+        .into_iter()
+        .map(|w| formatter.transform(w))
+        .collect();
+    let formatted_workflows = formatted_workflows?;
+
     // Write each workflow to its own JSON file
     let workflows_dir = project_dir.join("workflows");
     std::fs::create_dir_all(&workflows_dir)?;
 
     let mut count = 0;
-    for workflow in &workflows {
+    for workflow in &formatted_workflows {
         let workflow_name = workflow
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
 
         let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
-        let json = serde_json::to_string_pretty(workflow)?;
+        let json = storage::to_string_with_multiline(workflow)?;
         std::fs::write(&workflow_file, json)?;
 
         log::debug!("Wrote workflow: {}", workflow_file.display());
@@ -1263,8 +1285,7 @@ async fn push_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) 
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            let workflow = storage::read_json5_file(&path)?;
             workflows.push(workflow);
         }
     }
@@ -1300,8 +1321,7 @@ pub async fn push_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            let workflow = storage::read_json5_file(&path)?;
             workflows.push(workflow);
         }
     }
@@ -2499,19 +2519,30 @@ async fn pull_space_workflows(
     let extractor = WorkflowsExtractor::new(client.clone(), space_id, Some(manifest));
     let workflows = extractor.extract().await?;
 
+    // Apply YAML formatting transform
+    use crate::etl::Transformer;
+    use crate::transform::YamlFormatter;
+
+    let formatter = YamlFormatter::for_workflows();
+    let formatted_workflows: Result<Vec<_>> = workflows
+        .into_iter()
+        .map(|w| formatter.transform(w))
+        .collect();
+    let formatted_workflows = formatted_workflows?;
+
     // Write each workflow to its own JSON file
     let workflows_dir = get_space_workflows_dir(project_dir, space_id);
     std::fs::create_dir_all(&workflows_dir)?;
 
     let mut count = 0;
-    for workflow in &workflows {
+    for workflow in &formatted_workflows {
         let workflow_name = workflow
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
 
         let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
-        let json = serde_json::to_string_pretty(workflow)?;
+        let json = storage::to_string_with_multiline(workflow)?;
         std::fs::write(&workflow_file, json)?;
         count += 1;
     }
@@ -2661,8 +2692,7 @@ async fn push_space_workflows(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            let workflow = storage::read_json5_file(&path)?;
             workflows.push(workflow);
         }
     }
