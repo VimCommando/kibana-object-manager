@@ -210,8 +210,8 @@ mod tests {
     #[tokio::test]
     async fn test_missing_id_fails() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = AgentsLoader::new(client, "default");
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
+        let loader = AgentsLoader::new(client);
 
         let agent = json!({"name": "No ID"});
 

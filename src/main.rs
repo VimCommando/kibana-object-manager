@@ -5,7 +5,7 @@ use kibana_object_manager::{
         add_objects_to_manifest, bundle_to_ndjson, init_from_export, load_kibana_client,
         pull_saved_objects, push_saved_objects,
     },
-    migration::{MigrationResult, migrate_manifest},
+    migration::{MigrationResult, migrate_to_multispace_unified},
 };
 use owo_colors::OwoColorize;
 
@@ -124,7 +124,8 @@ enum Commands {
     /// Supports: objects, workflows, spaces, agents, tools
     ///
     /// Examples:
-    ///   kibob add workflows .                          # Search all workflows
+    ///   kibob add workflows .                          # Search all workflows in default space
+    ///   kibob add workflows . --space marketing        # Search in specific space
     ///   kibob add workflows . --query "alert"          # Search for workflows matching "alert"
     ///   kibob add workflows . --include "^prod"        # Include names matching regex "^prod"
     ///   kibob add workflows . --exclude "test"         # Exclude names matching regex "test"
@@ -164,18 +165,26 @@ enum Commands {
         /// [objects only] Comma-separated "type=id" pairs to add
         #[arg(short = 'o', long, conflicts_with_all = &["query", "file"])]
         objects: Option<Vec<String>>,
+
+        /// Kibana space to add to (for workflows, agents, tools)
+        #[arg(long, default_value = "default")]
+        space: String,
     },
 
     /// Bundle objects into distributable NDJSON files
     ///
     /// Creates a bundle/ directory with NDJSON files for each API:
-    /// - bundle/saved_objects.ndjson - Saved objects
+    /// - bundle/{space_id}/saved_objects.ndjson - Saved objects per space
+    /// - bundle/{space_id}/workflows.ndjson - Workflows per space
+    /// - bundle/{space_id}/agents.ndjson - Agents per space
+    /// - bundle/{space_id}/tools.ndjson - Tools per space
     /// - bundle/spaces.ndjson - Spaces (if manifest/spaces.yml exists)
     ///
     /// The bundle directory can be easily zipped for distribution.
     ///
     /// Example:
     ///   kibob togo ./my-dashboards
+    ///   kibob togo ./my-dashboards --space default
     ///   zip -r dashboards.zip my-dashboards/bundle/
     Togo {
         /// Project directory containing objects to bundle
@@ -185,11 +194,19 @@ enum Commands {
         /// Set managed flag in bundled objects
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
+
+        /// Kibana space(s) to bundle (comma-separated, e.g., "default,marketing")
+        #[arg(long)]
+        space: Option<String>,
     },
 
-    /// Migrate legacy manifest.json to new format
+    /// Migrate legacy structure to multi-space format
     ///
-    /// Converts old manifest.json to new manifest/saved_objects.json structure.
+    /// Converts either:
+    /// - Legacy manifest.json → manifest/default/saved_objects.json
+    /// - Old manifest/saved_objects.json → manifest/default/saved_objects.json
+    ///
+    /// This is a single-step migration that moves all content to the 'default' space.
     /// Creates a backup by default unless --no-backup is specified.
     ///
     /// Example:
@@ -289,15 +306,14 @@ async fn main() -> Result<()> {
         Commands::Pull { output_dir, space } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
 
-            // Override KIBANA_SPACE if --space flag is provided
-            if let Some(ref space_name) = space {
-                unsafe {
-                    std::env::set_var("KIBANA_SPACE", space_name);
-                }
-                log::info!("Using space from --space flag: {}", space_name.cyan());
+            // Convert space flag to space_filter string
+            let space_filter = space.as_deref();
+
+            if let Some(spaces) = space_filter {
+                log::info!("Filtering to space(s): {}", spaces.cyan());
             }
 
-            match pull_saved_objects(&output_dir).await {
+            match pull_saved_objects(&output_dir, space_filter).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pulled {} object(s)", count);
                 }
@@ -322,15 +338,14 @@ async fn main() -> Result<()> {
                 input_dir.bright_black(),
             );
 
-            // Override KIBANA_SPACE if --space flag is provided
-            if let Some(ref space_name) = space {
-                unsafe {
-                    std::env::set_var("KIBANA_SPACE", space_name);
-                }
-                log::info!("Using space from --space flag: {}", space_name.cyan());
+            // Convert space flag to space_filter string
+            let space_filter = space.as_deref();
+
+            if let Some(spaces) = space_filter {
+                log::info!("Filtering to space(s): {}", spaces.cyan());
             }
 
-            match push_saved_objects(&input_dir, managed).await {
+            match push_saved_objects(&input_dir, managed, space_filter).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pushed {} object(s)", count);
                 }
@@ -348,6 +363,7 @@ async fn main() -> Result<()> {
             exclude,
             file,
             objects,
+            space,
         } => {
             log::info!("Adding {} to {}", api.cyan(), output_dir.bright_black());
 
@@ -358,9 +374,11 @@ async fn main() -> Result<()> {
                     add_objects_to_manifest(&output_dir, objects, file).await?
                 }
                 "workflows" => {
-                    // New workflows support: --query, --include, --exclude, or --file
+                    // Workflows support: --query, --include, --exclude, or --file
+                    log::info!("Using space: {}", space.cyan());
                     use kibana_object_manager::cli::add_workflows_to_manifest;
-                    add_workflows_to_manifest(&output_dir, query, include, exclude, file).await?
+                    add_workflows_to_manifest(&output_dir, &space, query, include, exclude, file)
+                        .await?
                 }
                 "spaces" => {
                     // Spaces support: --query (ignored), --include, --exclude, or --file
@@ -369,13 +387,17 @@ async fn main() -> Result<()> {
                 }
                 "agents" => {
                     // Agents support: --query (ignored), --include, --exclude, or --file
+                    log::info!("Using space: {}", space.cyan());
                     use kibana_object_manager::cli::add_agents_to_manifest;
-                    add_agents_to_manifest(&output_dir, query, include, exclude, file).await?
+                    add_agents_to_manifest(&output_dir, &space, query, include, exclude, file)
+                        .await?
                 }
                 "tools" => {
                     // Tools support: --query (ignored), --include, --exclude, or --file
+                    log::info!("Using space: {}", space.cyan());
                     use kibana_object_manager::cli::add_tools_to_manifest;
-                    add_tools_to_manifest(&output_dir, query, include, exclude, file).await?
+                    add_tools_to_manifest(&output_dir, &space, query, include, exclude, file)
+                        .await?
                 }
                 _ => {
                     log::error!("Unknown API: {}", api);
@@ -388,21 +410,32 @@ async fn main() -> Result<()> {
 
             log::info!("✓ Added {} item(s)", count);
         }
-        Commands::Togo { input_dir, managed } => {
+        Commands::Togo {
+            input_dir,
+            managed,
+            space,
+        } => {
             log::info!(
                 "Creating to-go bundle from: {}, managed: {}",
                 input_dir.bright_black(),
                 managed.cyan()
             );
 
+            // Convert space flag to space_filter string
+            let space_filter = space.as_deref();
+
+            if let Some(spaces) = space_filter {
+                log::info!("Filtering to space(s): {}", spaces.cyan());
+            }
+
             // Create bundle directory
             let bundle_dir = std::path::Path::new(&input_dir).join("bundle");
             std::fs::create_dir_all(&bundle_dir)?;
             log::info!("Bundle directory: {}", bundle_dir.display());
 
-            // Bundle saved objects
+            // Bundle saved objects (now creates per-space bundles)
             let saved_objects_file = bundle_dir.join("saved_objects.ndjson");
-            match bundle_to_ndjson(&input_dir, &saved_objects_file, managed).await {
+            match bundle_to_ndjson(&input_dir, &saved_objects_file, managed, space_filter).await {
                 Ok(count) => {
                     log::info!("✓ Bundled {} saved object(s)", count);
                 }
@@ -418,35 +451,58 @@ async fn main() -> Result<()> {
             project_dir,
             backup,
         } => {
-            log::info!("Migrating manifest in: {}", project_dir.bright_black());
+            log::info!(
+                "Migrating project to multi-space structure: {}",
+                project_dir.bright_black()
+            );
 
-            match migrate_manifest(&project_dir, backup)? {
+            match migrate_to_multispace_unified(&project_dir, backup)? {
                 MigrationResult::MigratedWithBackup(backup_path) => {
+                    let target_space =
+                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
                     log::info!("✓ Migration completed successfully!");
                     log::info!(
                         "  New manifest: {}",
-                        format!("{}/manifest/saved_objects.json", project_dir).green()
+                        format!(
+                            "{}/{}/manifest/saved_objects.json",
+                            project_dir, target_space
+                        )
+                        .green()
                     );
                     log::info!(
                         "  Backup saved: {}",
                         backup_path.display().to_string().cyan()
                     );
+                    if target_space != "default" {
+                        log::info!("  Note: KIBANA_SPACE is deprecated and may be safely unset");
+                    }
                 }
                 MigrationResult::MigratedWithoutBackup => {
+                    let target_space =
+                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
                     log::info!("✓ Migration completed successfully!");
                     log::info!(
                         "  New manifest: {}",
-                        format!("{}/manifest/saved_objects.json", project_dir).green()
+                        format!(
+                            "{}/{}/manifest/saved_objects.json",
+                            project_dir, target_space
+                        )
+                        .green()
                     );
-                    log::info!("  Old manifest removed (no backup)");
+                    log::info!("  Old files removed (no backup)");
+                    if target_space != "default" {
+                        log::info!("  Note: KIBANA_SPACE is deprecated and may be safely unset");
+                    }
                 }
                 MigrationResult::NoLegacyManifest => {
-                    log::warn!("No legacy manifest.json found in {}", project_dir);
+                    log::warn!("No legacy structure found in {}", project_dir);
                     log::info!("Nothing to migrate.");
                 }
                 MigrationResult::AlreadyMigrated => {
-                    log::info!("Already migrated!");
-                    log::info!("  manifest/saved_objects.json already exists");
+                    let target_space =
+                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+                    log::info!("✓ Project is already using multi-space structure!");
+                    log::info!("  {}/manifest/ already exists", target_space);
                 }
             }
         }

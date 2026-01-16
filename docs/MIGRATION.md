@@ -2,11 +2,13 @@
 
 ## Overview
 
-Starting from version 0.1.0 (Rust rewrite), Kibana Object Manager uses:
-1. A directory-based manifest structure (`manifest/saved_objects.json` instead of `manifest.json`)
-2. Hierarchical object storage (`objects/type/id.json` instead of `objects/id.type.json`)
+Starting from version 0.1.0 (Rust rewrite), Kibana Object Manager uses a **self-contained space directory structure**:
+1. Each space is completely self-contained in `{space_id}/` directories
+2. Space definitions are co-located at `{space_id}/space.json`
+3. Per-space manifests are at `{space_id}/manifest/*.json`
+4. Global space list is at root `spaces.yml`
 
-This provides better organization when managing multiple types of Kibana resources.
+This provides better organization when managing multiple spaces and resource types.
 
 ## New Structure
 
@@ -20,11 +22,12 @@ project/
     └── test-viz.visualization.json
 ```
 
-### New (Rust v0.1.0+)
+### Intermediate (v0.1.0)
 ```
 project/
 ├── manifest/
-│   └── saved_objects.json    # Saved objects manifest
+│   ├── saved_objects.json    # Saved objects manifest
+│   └── spaces.yml            # Spaces manifest
 └── objects/                  # Hierarchical object files
     ├── dashboard/            # Organized by type
     │   ├── allocation-overview.json
@@ -33,13 +36,39 @@ project/
         └── test-viz.json
 ```
 
+### Current (v0.1.0+, Self-Contained Spaces)
+```
+project/
+├── spaces.yml                # Global spaces list
+├── default/                  # Self-contained space
+│   ├── space.json           # Space definition
+│   ├── manifest/            # Per-space manifests
+│   │   ├── saved_objects.json
+│   │   ├── workflows.yml
+│   │   ├── agents.yml
+│   │   └── tools.yml
+│   ├── objects/             # Space-specific objects
+│   │   ├── dashboard/
+│   │   └── visualization/
+│   ├── workflows/
+│   ├── agents/
+│   └── tools/
+└── bundle/
+    ├── default/
+    │   ├── saved_objects.ndjson
+    │   └── workflows.ndjson
+    └── spaces.ndjson
+```
+
 ## Benefits
 
-1. **Hierarchical organization**: Objects grouped by type in subdirectories
-2. **Simpler filenames**: No need for type suffix in filename
-3. **Extensibility**: Easily add new resource types (spaces, workflows, etc.)
-4. **Clarity**: Each manifest file has a descriptive name
-5. **Git-friendly**: Better diffs when objects of different types change
+1. **Self-contained spaces**: Each space directory contains everything related to that space
+2. **Hierarchical organization**: Objects grouped by type in subdirectories
+3. **Simpler filenames**: No need for type suffix in filename
+4. **Extensibility**: Easily add new resource types (spaces, workflows, agents, tools)
+5. **Clarity**: Each manifest file has a descriptive name and location
+6. **Git-friendly**: Better diffs when objects of different types change
+7. **Co-located definitions**: Space definition lives with its resources
 
 ## Migration
 
@@ -53,32 +82,54 @@ kibob migrate /path/to/project
 
 # Migrate without backup
 kibob migrate /path/to/project --no-backup
+
+# Migrate to a custom space (uses KIBANA_SPACE env var)
+KIBANA_SPACE=production kibob migrate /path/to/project
 ```
 
 The migration process:
-1. Reads your existing `manifest.json`
-2. Creates a `manifest/` directory
-3. Writes `manifest/saved_objects.json` with the same content
-4. Migrates object files from flat to hierarchical structure:
-   - `objects/name.type.json` → `objects/type/name.json`
-5. Backs up or removes the old `manifest.json`
+1. Reads your existing `manifest.json` or `manifest/saved_objects.json`
+2. Creates a space directory (default: `default/`, or from `KIBANA_SPACE` env var)
+3. Creates `{space}/manifest/saved_objects.json`
+4. Migrates object files to `{space}/objects/type/name.json`
+5. If spaces existed at `manifest/spaces.yml`, moves to root `spaces.yml`
+6. Cleans up empty `manifest/` directory
+7. Backs up or removes old files
+
+**Migration Paths:**
+
+**From Legacy (manifest.json):**
+```
+manifest.json          → {space}/manifest/saved_objects.json
+objects/name.type.json → {space}/objects/type/name.json
+```
+
+**From v0.1.0 (manifest/ directory):**
+```
+manifest/saved_objects.json → {space}/manifest/saved_objects.json
+manifest/spaces.yml         → spaces.yml (root)
+objects/type/name.json      → {space}/objects/type/name.json
+```
 
 **Example:**
 ```bash
-# Before migration
+# Before migration (legacy)
 objects/
 ├── sales-dashboard.dashboard.json
 ├── revenue-chart.visualization.json
 └── logs-*.index-pattern.json
 
-# After migration
-objects/
-├── dashboard/
-│   └── sales-dashboard.json
-├── visualization/
-│   └── revenue-chart.json
-└── index-pattern/
-    └── logs-*.json
+# After migration (default space)
+default/
+├── manifest/
+│   └── saved_objects.json
+└── objects/
+    ├── dashboard/
+    │   └── sales-dashboard.json
+    ├── visualization/
+    │   └── revenue-chart.json
+    └── index-pattern/
+        └── logs-*.json
 ```
 
 ### Manual Migration
@@ -88,40 +139,64 @@ If you prefer to migrate manually:
 ```bash
 cd /path/to/project
 
-# Step 1: Create manifest directory and move manifest
-mkdir -p manifest
-mv manifest.json manifest/saved_objects.json
+# Step 1: Create default space directory structure
+mkdir -p default/manifest
+mkdir -p default/objects
 
-# Step 2: Reorganize objects into subdirectories
-cd objects
-for file in *.json; do
-  # Extract name and type from filename (name.type.json)
-  if [[ $file =~ ^(.+)\.([^.]+)\.json$ ]]; then
-    name="${BASH_REMATCH[1]}"
-    type="${BASH_REMATCH[2]}"
-    
-    # Create type directory and move file
-    mkdir -p "$type"
-    mv "$file" "$type/$name.json"
-    echo "Moved $file to $type/$name.json"
-  fi
-done
+# Step 2: Move manifest
+if [ -f manifest.json ]; then
+  mv manifest.json default/manifest/saved_objects.json
+elif [ -f manifest/saved_objects.json ]; then
+  mv manifest/saved_objects.json default/manifest/saved_objects.json
+fi
+
+# Step 3: Move spaces manifest to root if it exists
+if [ -f manifest/spaces.yml ]; then
+  mv manifest/spaces.yml spaces.yml
+fi
+
+# Step 4: Reorganize objects into space directory
+if [ -d objects ]; then
+  # If objects are already hierarchical
+  mv objects/* default/objects/
+  rmdir objects
+else
+  # If objects are flat (legacy format)
+  cd objects
+  for file in *.json; do
+    if [[ $file =~ ^(.+)\.([^.]+)\.json$ ]]; then
+      name="${BASH_REMATCH[1]}"
+      type="${BASH_REMATCH[2]}"
+      
+      mkdir -p "../default/objects/$type"
+      mv "$file" "../default/objects/$type/$name.json"
+      echo "Moved $file to default/objects/$type/$name.json"
+    fi
+  done
+  cd ..
+  rmdir objects
+fi
+
+# Step 5: Clean up empty manifest directory
+if [ -d manifest ] && [ -z "$(ls -A manifest)" ]; then
+  rmdir manifest
+fi
 ```
 
 ## Backward Compatibility
 
-The `load_saved_objects_manifest()` function provides automatic backward compatibility:
+The migration functions provide automatic backward compatibility:
 
 ```rust
-use kibana_object_manager::migration::load_saved_objects_manifest;
+use kibana_object_manager::migration::{needs_migration_unified, migrate_to_multispace_unified};
 
-// Automatically checks both locations:
-// 1. manifest/saved_objects.json (new)
-// 2. manifest.json (legacy)
-let manifest = load_saved_objects_manifest(".")?;
+// Automatically detects legacy formats and migrates to self-contained space structure
+if needs_migration_unified(".", "default") {
+    migrate_to_multispace_unified(".", true)?;
+}
 ```
 
-This allows tools to work with both old and new project structures without modification.
+This allows tools to work with legacy, intermediate, and current project structures.
 
 ## Checking Migration Status
 
@@ -132,15 +207,14 @@ kibob migrate /path/to/project
 ```
 
 The command will report:
-- "No legacy manifest.json found" - Nothing to migrate
-- "Already migrated" - Project is up to date
-- "Migration completed" - Successfully migrated
+- "No migration needed" - Project is already using self-contained space structure
+- "Migration completed" - Successfully migrated from legacy or v0.1.0 format
 
 ## File Formats
 
 ### saved_objects.json
 
-JSON format that doubles as the Kibana export API payload:
+JSON format that doubles as the Kibana export API payload (now per-space):
 
 ```json
 {
@@ -159,32 +233,40 @@ JSON format that doubles as the Kibana export API payload:
 }
 ```
 
+Location: `{space_id}/manifest/saved_objects.json`
+
 ### spaces.yml
 
-YAML format listing space IDs to manage:
+YAML format listing spaces to manage:
 
 ```yaml
 spaces:
-  - default
-  - marketing
-  - engineering
+  - id: default
+    name: Default
+  - id: marketing
+    name: Marketing Team
+  - id: engineering
+    name: Engineering
 ```
+
+Location: `spaces.yml` (root level)
 
 ## Examples
 
 ### Example 1: New Project
 
-When creating a new project, use the new structure:
+When creating a new project, use the self-contained space structure:
 
 ```bash
 mkdir my-kibana-project
 cd my-kibana-project
 
-# Create manifest directory
-mkdir -p manifest
+# Create default space directory
+mkdir -p default/manifest
+mkdir -p default/objects
 
 # Create saved objects manifest
-cat > manifest/saved_objects.json <<'EOF'
+cat > default/manifest/saved_objects.json <<'EOF'
 {
   "objects": [],
   "excludeExportDetails": true,
@@ -192,8 +274,21 @@ cat > manifest/saved_objects.json <<'EOF'
 }
 EOF
 
-# Create objects directory
-mkdir objects
+# Create spaces manifest
+cat > spaces.yml <<'EOF'
+spaces:
+  - id: default
+    name: Default
+EOF
+
+# Create space definition
+cat > default/space.json <<'EOF'
+{
+  "id": "default",
+  "name": "Default",
+  "description": "Default space"
+}
+EOF
 ```
 
 ### Example 2: Migrating Existing Project
@@ -203,7 +298,7 @@ cd existing-project
 
 # Check current structure
 ls -la
-# manifest.json ✓
+# manifest.json ✓ (legacy)
 # objects/ ✓
 
 # Run migration
@@ -211,31 +306,75 @@ kibob migrate .
 
 # Verify new structure
 ls -la
-# manifest/ ✓
+# default/ ✓ (self-contained space)
 # manifest.json.backup ✓ (if using --backup)
+
+ls default/
+# space.json ✓
+# manifest/ ✓
 # objects/ ✓
 
-ls manifest/
+ls default/manifest/
 # saved_objects.json ✓
 ```
 
-### Example 3: Adding Spaces Management
+### Example 3: Adding Multiple Spaces
 
-After migration, you can add spaces management:
+After initial setup, you can add more spaces:
 
 ```bash
 cd project
 
-# Create spaces manifest
-cat > manifest/spaces.yml <<'EOF'
+# Update spaces manifest
+cat > spaces.yml <<'EOF'
 spaces:
-  - default
-  - team-a
-  - team-b
+  - id: default
+    name: Default
+  - id: production
+    name: Production
+  - id: staging
+    name: Staging
 EOF
 
-# Create spaces directory
-mkdir -p spaces
+# Create production space
+mkdir -p production/manifest
+mkdir -p production/objects
+
+cat > production/space.json <<'EOF'
+{
+  "id": "production",
+  "name": "Production",
+  "description": "Production environment - monitored 24/7"
+}
+EOF
+
+cat > production/manifest/saved_objects.json <<'EOF'
+{
+  "objects": [],
+  "excludeExportDetails": true,
+  "includeReferencesDeep": true
+}
+EOF
+
+# Create staging space
+mkdir -p staging/manifest
+mkdir -p staging/objects
+
+cat > staging/space.json <<'EOF'
+{
+  "id": "staging",
+  "name": "Staging",
+  "description": "Staging environment for testing"
+}
+EOF
+
+cat > staging/manifest/saved_objects.json <<'EOF'
+{
+  "objects": [],
+  "excludeExportDetails": true,
+  "includeReferencesDeep": true
+}
+EOF
 ```
 
 ## API Usage
@@ -244,25 +383,26 @@ mkdir -p spaces
 
 ```rust
 use kibana_object_manager::migration::load_saved_objects_manifest;
-use kibana_object_manager::kibana::spaces::SpacesManifest;
+use kibana_object_manager::space_context::SpaceContext;
+use std::path::Path;
 
-// Load saved objects (backward compatible)
-let saved_objects = load_saved_objects_manifest(".")?;
+// Load space context (reads spaces.yml)
+let ctx = SpaceContext::load(Path::new("."), None)?;
 
-// Load spaces (new location only)
-let spaces = SpacesManifest::read("manifest/spaces.yml")?;
+// Load saved objects for a specific space
+let space_manifest = load_saved_objects_manifest_for_space(Path::new("."), "default")?;
 ```
 
 ### Programmatic Migration
 
 ```rust
-use kibana_object_manager::migration::{migrate_manifest, needs_migration};
+use kibana_object_manager::migration::{migrate_to_multispace_unified, needs_migration_unified};
 
 // Check if migration needed
-if needs_migration("/path/to/project") {
+if needs_migration_unified("/path/to/project", "default") {
     // Perform migration
-    let result = migrate_manifest("/path/to/project", true)?;
-    println!("{}", result);
+    migrate_to_multispace_unified("/path/to/project", true)?;
+    println!("Migration completed");
 }
 ```
 
@@ -270,11 +410,11 @@ if needs_migration("/path/to/project") {
 
 ### "No saved objects manifest found"
 
-Neither `manifest/saved_objects.json` nor `manifest.json` exists. Create one:
+Neither per-space manifest nor legacy manifest exists. Create one:
 
 ```bash
-mkdir -p manifest
-cat > manifest/saved_objects.json <<'EOF'
+mkdir -p default/manifest
+cat > default/manifest/saved_objects.json <<'EOF'
 {
   "objects": [],
   "excludeExportDetails": true,
@@ -285,18 +425,29 @@ EOF
 
 ### "Already migrated"
 
-Both `manifest.json` and `manifest/saved_objects.json` exist. The tool won't migrate to avoid data loss. Either:
+Project is already using self-contained space structure. No action needed.
 
-1. Remove the old `manifest.json` manually after verifying the migration
-2. Delete `manifest/saved_objects.json` and re-run migration
+### "KIBANA_SPACE is deprecated"
+
+If you see this warning during migration:
+```
+Warning: KIBANA_SPACE environment variable is deprecated for migration. 
+The 'production' space has been created, but future operations should use --space flag.
+```
+
+This means you used `KIBANA_SPACE=production kibob migrate .` to migrate to a non-default space. While this works, it's recommended to:
+1. Use the default migration: `kibob migrate .`
+2. Then use `--space` flag for operations: `kibob pull . --space production`
 
 ### Migration Failed Midway
 
-If migration fails after creating `manifest/saved_objects.json` but before removing the old file:
+If migration fails partway through:
 
-1. Check that `manifest/saved_objects.json` is valid
-2. Manually remove `manifest.json` or create a backup
-3. Or delete `manifest/` and try again
+1. Check that `{space}/manifest/saved_objects.json` is valid JSON
+2. Verify the space directory structure is correct
+3. Look for backup files (`.backup` suffix) if migration used `--backup`
+4. If needed, restore from backup and try again
+5. Check logs for specific error messages
 
 ## See Also
 

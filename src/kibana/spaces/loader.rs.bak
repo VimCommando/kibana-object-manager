@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = Kibana::try_new(url, Auth::None, None)?;
 /// let loader = SpacesLoader::new(client);
 ///
 /// let spaces = vec![
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn test_loader_creation() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let loader = SpacesLoader::new(client);
         assert!(loader.overwrite);
     }
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_with_overwrite() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let loader = SpacesLoader::new(client).with_overwrite(false);
         assert!(!loader.overwrite);
     }
@@ -165,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn test_missing_id_fails() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let loader = SpacesLoader::new(client);
 
         let space = json!({"name": "No ID"});

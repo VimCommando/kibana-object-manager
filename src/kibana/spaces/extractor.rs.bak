@@ -22,7 +22,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = Kibana::try_new(url, Auth::None, None)?;
 /// let manifest = SpacesManifest::with_spaces(vec!["default".to_string(), "marketing".to_string()]);
 ///
 /// let extractor = SpacesExtractor::new(client, Some(manifest));
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn test_filter_with_manifest() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let manifest = super::super::SpacesManifest::with_spaces(vec![
             super::super::SpaceEntry::new("default".to_string(), "Default".to_string()),
             super::super::SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn test_filter_without_manifest() {
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = Kibana::try_new(url, Auth::None, None).unwrap();
         let extractor = SpacesExtractor::all(client);
 
         let spaces = vec![

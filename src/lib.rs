@@ -7,6 +7,7 @@ pub mod client;
 pub mod etl;
 pub mod kibana;
 pub mod migration;
+pub mod space_context;
 pub mod storage;
 pub mod transform;
 

@@ -9,14 +9,13 @@ use url::Url;
 #[derive(Clone, Debug)]
 pub struct Kibana {
     client: Client,
-    space: Option<String>,
     url: Url,
 }
 
 /// A reqwest-based client with authentication for Kibana
 impl Kibana {
     /// Create a new KibanaExporter from a URL and Auth
-    pub fn try_new(url: Url, auth: Auth, space: Option<String>) -> Result<Self> {
+    pub fn try_new(url: Url, auth: Auth) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("kbn-xsrf", "true".parse()?);
         match auth {
@@ -40,13 +39,21 @@ impl Kibana {
         }
         let client = Client::builder().default_headers(headers).build()?;
 
-        Ok(Self { client, space, url })
+        Ok(Self { client, url })
     }
 
     /// Send a request to a given path on the Kibana client
+    ///
+    /// # Arguments
+    /// * `method` - HTTP method
+    /// * `space_id` - Optional space ID to scope the request to
+    /// * `headers` - Additional headers
+    /// * `path` - API path
+    /// * `body` - Optional request body
     pub async fn request(
         &self,
         method: Method,
+        space_id: Option<&str>,
         headers: &HashMap<String, String>,
         path: &str,
         body: Option<&[u8]>,
@@ -54,9 +61,10 @@ impl Kibana {
         // Strip leading slash from path if present, to avoid double slashes
         let path_stripped = path.strip_prefix('/').unwrap_or(path);
 
-        let final_path = match self.space {
-            Some(ref space) => format!("s/{}/{}", space, path_stripped),
-            None => format!("/{}", path_stripped),
+        // Build final path with space prefix if provided
+        let final_path = match space_id {
+            Some(space) if space != "default" => format!("/s/{}/{}", space, path_stripped),
+            _ => format!("/{}", path_stripped),
         };
 
         let mut headers: reqwest::header::HeaderMap = headers
@@ -113,7 +121,7 @@ impl Kibana {
 
     /// Verify the connection and authentication to Kibana
     pub async fn test_connection(&self) -> Result<reqwest::Response> {
-        self.request(Method::GET, &HashMap::new(), "/api/status", None)
+        self.request(Method::GET, None, &HashMap::new(), "/api/status", None)
             .await
     }
 
@@ -122,17 +130,19 @@ impl Kibana {
         &self.url
     }
 
-    /// Get the space (if configured)
-    pub fn space(&self) -> Option<&str> {
-        self.space.as_deref()
-    }
-
-    /// Helper for GET requests
+    /// Helper for GET requests (no space scoping)
     pub async fn get(&self, path: &str) -> Result<reqwest::Response> {
-        self.request(Method::GET, &HashMap::new(), path, None).await
+        self.request(Method::GET, None, &HashMap::new(), path, None)
+            .await
     }
 
-    /// Helper for GET requests for internal Kibana APIs
+    /// Helper for GET requests with space scoping
+    pub async fn get_with_space(&self, space_id: &str, path: &str) -> Result<reqwest::Response> {
+        self.request(Method::GET, Some(space_id), &HashMap::new(), path, None)
+            .await
+    }
+
+    /// Helper for GET requests for internal Kibana APIs (no space scoping)
     /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
     pub async fn get_internal(&self, path: &str) -> Result<reqwest::Response> {
         let mut headers = HashMap::new();
@@ -140,17 +150,47 @@ impl Kibana {
             "X-Elastic-Internal-Origin".to_string(),
             "Kibana".to_string(),
         );
-        self.request(Method::GET, &headers, path, None).await
+        self.request(Method::GET, None, &headers, path, None).await
     }
 
-    /// Helper for POST requests with JSON body
+    /// Helper for GET requests for internal Kibana APIs with space scoping
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn get_internal_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+    ) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::GET, Some(space_id), &headers, path, None)
+            .await
+    }
+
+    /// Helper for POST requests with JSON body (no space scoping)
     pub async fn post_json(&self, path: &str, body: &[u8]) -> Result<reqwest::Response> {
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
-        self.request(Method::POST, &headers, path, Some(body)).await
+        self.request(Method::POST, None, &headers, path, Some(body))
+            .await
     }
 
-    /// Helper for POST requests with JSON value
+    /// Helper for POST requests with JSON body with space scoping
+    pub async fn post_json_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.request(Method::POST, Some(space_id), &headers, path, Some(body))
+            .await
+    }
+
+    /// Helper for POST requests with JSON value (no space scoping)
     pub async fn post_json_value(
         &self,
         path: &str,
@@ -160,7 +200,18 @@ impl Kibana {
         self.post_json(path, &body).await
     }
 
-    /// Helper for POST requests with JSON value for internal Kibana APIs
+    /// Helper for POST requests with JSON value with space scoping
+    pub async fn post_json_value_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        self.post_json_with_space(space_id, path, &body).await
+    }
+
+    /// Helper for POST requests with JSON value for internal Kibana APIs (no space scoping)
     /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
     pub async fn post_json_value_internal(
         &self,
@@ -174,11 +225,30 @@ impl Kibana {
             "X-Elastic-Internal-Origin".to_string(),
             "Kibana".to_string(),
         );
-        self.request(Method::POST, &headers, path, Some(&body))
+        self.request(Method::POST, None, &headers, path, Some(&body))
             .await
     }
 
-    /// Helper for PUT requests with JSON value
+    /// Helper for POST requests with JSON value for internal Kibana APIs with space scoping
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn post_json_value_internal_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::POST, Some(space_id), &headers, path, Some(&body))
+            .await
+    }
+
+    /// Helper for PUT requests with JSON value (no space scoping)
     pub async fn put_json_value(
         &self,
         path: &str,
@@ -187,17 +257,49 @@ impl Kibana {
         let body = serde_json::to_vec(value)?;
         let mut headers = HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
-        self.request(Method::PUT, &headers, path, Some(&body)).await
+        self.request(Method::PUT, None, &headers, path, Some(&body))
+            .await
     }
 
-    /// Helper for POST requests with multipart form data
+    /// Helper for PUT requests with JSON value with space scoping
+    pub async fn put_json_value_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        self.request(Method::PUT, Some(space_id), &headers, path, Some(&body))
+            .await
+    }
+
+    /// Helper for POST requests with multipart form data (no space scoping)
     pub async fn post_form(&self, path: &str, body: &[u8]) -> Result<reqwest::Response> {
         let mut headers = HashMap::new();
         headers.insert(
             "Content-Type".to_string(),
             "multipart/form-data".to_string(),
         );
-        self.request(Method::POST, &headers, path, Some(body)).await
+        self.request(Method::POST, None, &headers, path, Some(body))
+            .await
+    }
+
+    /// Helper for POST requests with multipart form data with space scoping
+    pub async fn post_form_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Content-Type".to_string(),
+            "multipart/form-data".to_string(),
+        );
+        self.request(Method::POST, Some(space_id), &headers, path, Some(body))
+            .await
     }
 }
 

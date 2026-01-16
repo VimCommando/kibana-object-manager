@@ -15,23 +15,28 @@ Kibana Spaces allow you to organize your saved objects (dashboards, visualizatio
 
 ### 1. Create a Spaces Manifest
 
-Create a `manifest/spaces.yml` file in your project directory with a list of space IDs to manage:
+Create a `spaces.yml` file in your project directory with a list of spaces to manage:
 
 ```yaml
 spaces:
-  - default
-  - marketing
-  - engineering
+  - id: default
+    name: Default
+  - id: marketing
+    name: Marketing Team
+  - id: engineering
+    name: Engineering
 ```
 
 **Manifest Format:**
-- Minimalist YAML structure
-- Simple list of space IDs (names)
+- YAML structure with space entries
+- Each entry requires `id` and `name` fields
+- The `id` is the space identifier used in URLs
+- The `name` is the display name shown in Kibana UI
 - Human-readable and easy to edit
 
 ### 2. Pull Spaces from Kibana
 
-The `pull` command will automatically pull spaces if a `manifest/spaces.yml` file exists:
+The `pull` command will automatically pull spaces if a `spaces.yml` file exists:
 
 ```bash
 kibob pull ./my-project
@@ -40,22 +45,32 @@ kibob pull ./my-project
 This creates:
 ```
 my-project/
-├── manifest/
-│   ├── saved_objects.json
-│   └── spaces.yml
-├── objects/
-│   └── ... (saved objects)
-└── spaces/
-    ├── default.json
-    ├── marketing.json
-    └── engineering.json
+├── spaces.yml               # Managed spaces list
+├── default/
+│   ├── space.json           # Space definition
+│   ├── manifest/            # Per-space manifests
+│   │   └── saved_objects.json
+│   └── objects/
+│       └── ... (saved objects)
+├── marketing/
+│   ├── space.json
+│   ├── manifest/
+│   │   └── saved_objects.json
+│   └── objects/
+│       └── ...
+└── engineering/
+    ├── space.json
+    ├── manifest/
+    │   └── saved_objects.json
+    └── objects/
+        └── ...
 ```
 
-Each space is saved as a pretty-printed JSON file in the `spaces/` directory.
+Each space's definition is saved in its own directory as `{space_id}/space.json`.
 
 ### 3. Push Spaces to Kibana
 
-The `push` command will automatically push spaces if a `manifest/spaces.yml` file exists:
+The `push` command will automatically push spaces if a `spaces.yml` file exists:
 
 ```bash
 kibob push ./my-project
@@ -64,11 +79,11 @@ kibob push ./my-project
 This will:
 - Create new spaces if they don't exist (POST)
 - Update existing spaces (PUT)
-- Use the space definitions from `spaces/<space_id>.json` files
+- Use the space definitions from `{space_id}/space.json` files
 
 ### 4. Bundle Spaces for Distribution
 
-The `togo` command will automatically bundle spaces to `bundle/spaces.ndjson` if a `manifest/spaces.yml` file exists:
+The `togo` command will automatically bundle spaces to `bundle/spaces.ndjson` if a `spaces.yml` file exists:
 
 ```bash
 kibob togo ./my-project
@@ -119,11 +134,14 @@ Each space is stored as a JSON file with the following structure:
 
 1. Create spaces manifest:
    ```yaml
-   # manifest/spaces.yml
+   # spaces.yml
    spaces:
-     - default
-     - production
-     - staging
+     - id: default
+       name: Default
+     - id: production
+       name: Production
+     - id: staging
+       name: Staging
    ```
 
 2. Pull spaces from Kibana:
@@ -133,7 +151,7 @@ Each space is stored as a JSON file with the following structure:
 
 3. Commit to Git:
    ```bash
-   git add manifest/spaces.yml spaces/
+   git add spaces.yml default/space.json production/space.json staging/space.json
    git commit -m "Add space configurations"
    ```
 
@@ -161,7 +179,8 @@ Each space is stored as a JSON file with the following structure:
 
 1. Manually create space JSON file:
    ```bash
-   cat > spaces/data-science.json <<EOF
+   mkdir -p data-science
+   cat > data-science/space.json <<EOF
    {
      "id": "data-science",
      "name": "Data Science",
@@ -174,10 +193,12 @@ Each space is stored as a JSON file with the following structure:
 
 2. Add to manifest:
    ```yaml
-   # manifest/spaces.yml
+   # spaces.yml
    spaces:
-     - default
-     - data-science
+     - id: default
+       name: Default
+     - id: data-science
+       name: Data Science
    ```
 
 3. Push to Kibana:
@@ -189,7 +210,7 @@ Each space is stored as a JSON file with the following structure:
 
 1. Edit the space JSON file:
    ```bash
-   vim spaces/marketing.json
+   vim marketing/space.json
    # Update name, description, or other fields
    ```
 
@@ -200,7 +221,7 @@ Each space is stored as a JSON file with the following structure:
 
 3. Commit to Git:
    ```bash
-   git add spaces/marketing.json
+   git add marketing/space.json
    git commit -m "Update marketing space description"
    ```
 
@@ -212,25 +233,28 @@ For each space ID in the manifest, `kibob` calls:
 GET /api/spaces/space/{space_id}
 ```
 
-Response is saved to `spaces/{space_id}.json`
+Response is saved to `{space_id}/space.json`
 
 ### Push (POST/PUT)
-For each space file in `spaces/` directory:
+For each space file in space directories:
 - If space exists: `PUT /api/spaces/space/{space_id}`
 - If space is new: `POST /api/spaces/space`
 
 ### Bundle (NDJSON)
-Converts all `spaces/*.json` files to newline-delimited JSON format in `bundle/spaces.ndjson`
+Converts all `{space_id}/space.json` files to newline-delimited JSON format in `bundle/spaces.ndjson`
 
 ## Best Practices
 
-### 1. Minimal Manifest
-Keep the manifest simple - just list space IDs:
+### 1. Structured Manifest
+Keep the manifest clear with id and name for each space:
 ```yaml
 spaces:
-  - production
-  - staging
-  - development
+  - id: production
+    name: Production
+  - id: staging
+    name: Staging
+  - id: development
+    name: Development
 ```
 
 ### 2. Pretty-Print JSON
@@ -251,7 +275,7 @@ Use consistent naming conventions for space IDs:
 ### 4. Version Control Everything
 Commit both manifest and space files:
 ```bash
-git add manifest/spaces.yml spaces/
+git add spaces.yml */space.json
 ```
 
 ### 5. Document Space Purpose
@@ -291,7 +315,7 @@ Potential features for future releases:
 ```
 Failed to fetch space 'my-space': 404 Not Found
 ```
-**Solution**: Remove the space from `manifest/spaces.yml` or create it in Kibana first
+**Solution**: Remove the space from `spaces.yml` or create it in Kibana first
 
 ### Permission Denied
 ```
@@ -307,9 +331,9 @@ Space missing 'id' field
 
 ### Manifest Not Found
 ```
-Spaces manifest not found: ./manifest/spaces.yml
+Spaces manifest not found: ./spaces.yml
 ```
-**Solution**: Create `manifest/spaces.yml` with your space IDs
+**Solution**: Create `spaces.yml` with your space IDs
 
 ## Example Project Structure
 
@@ -318,19 +342,32 @@ Complete project with spaces:
 my-kibana-project/
 ├── .env                    # Kibana connection settings
 ├── .gitignore
-├── manifest/
-│   ├── saved_objects.json  # Saved objects manifest
-│   └── spaces.yml          # Spaces manifest
-├── objects/                # Saved objects (dashboards, etc.)
-│   ├── dashboard/
-│   ├── visualization/
-│   └── index-pattern/
-├── spaces/                 # Space configurations
-│   ├── default.json
-│   ├── production.json
-│   └── staging.json
+├── spaces.yml              # Spaces manifest
+├── default/                # Self-contained space directory
+│   ├── space.json          # Space definition
+│   ├── manifest/           # Per-space manifests
+│   │   ├── saved_objects.json
+│   │   ├── workflows.yml
+│   │   ├── agents.yml
+│   │   └── tools.yml
+│   ├── objects/            # Saved objects
+│   │   ├── dashboard/
+│   │   ├── visualization/
+│   │   └── index-pattern/
+│   ├── workflows/          # Workflow definitions
+│   ├── agents/             # Agent definitions
+│   └── tools/              # Tool definitions
+├── production/             # Another self-contained space
+│   ├── space.json
+│   ├── manifest/
+│   │   └── saved_objects.json
+│   └── objects/
 └── bundle/                 # Bundled files (from togo)
-    ├── saved_objects.ndjson
+    ├── default/
+    │   ├── saved_objects.ndjson
+    │   └── workflows.ndjson
+    ├── production/
+    │   └── saved_objects.ndjson
     └── spaces.ndjson
 ```
 
@@ -343,8 +380,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'spaces/**'
-      - 'manifest/spaces.yml'
+      - '*/space.json'
+      - 'spaces.yml'
 
 jobs:
   deploy:
@@ -374,8 +411,8 @@ deploy-spaces:
     - kibob push .
   only:
     changes:
-      - spaces/**
-      - manifest/spaces.yml
+      - '*/space.json'
+      - spaces.yml
   environment:
     name: production
 ```
