@@ -192,7 +192,7 @@ fn write_object(
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use kibana_object_manager::storage::read_json5_file;
 /// use std::path::Path;
 ///

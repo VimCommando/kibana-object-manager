@@ -2,7 +2,7 @@
 
 use eyre::Result;
 use kibana_object_manager::cli::{bundle_spaces_to_ndjson, pull_spaces, push_spaces};
-use kibana_object_manager::kibana::spaces::SpacesManifest;
+use kibana_object_manager::kibana::spaces::{SpaceEntry, SpacesManifest};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -13,15 +13,13 @@ fn create_test_project_with_spaces(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(&manifest_dir)?;
 
     // Create spaces manifest
-    let manifest =
-        SpacesManifest::with_spaces(vec!["default".to_string(), "marketing".to_string()]);
+    let manifest = SpacesManifest::with_spaces(vec![
+        SpaceEntry::new("default".to_string(), "Default".to_string()),
+        SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
+    ]);
     manifest.write(manifest_dir.join("spaces.yml"))?;
 
-    // Create spaces directory with sample space files
-    let spaces_dir = dir.join("spaces");
-    std::fs::create_dir_all(&spaces_dir)?;
-
-    // Write sample space files
+    // Create space directories and write space.json files
     let default_space = serde_json::json!({
         "id": "default",
         "name": "Default",
@@ -35,12 +33,18 @@ fn create_test_project_with_spaces(dir: &Path) -> Result<()> {
         "disabledFeatures": []
     });
 
+    // Write to {space_id}/space.json structure
+    let default_dir = dir.join("default");
+    std::fs::create_dir_all(&default_dir)?;
     std::fs::write(
-        spaces_dir.join("default.json"),
+        default_dir.join("space.json"),
         serde_json::to_string_pretty(&default_space)?,
     )?;
+
+    let marketing_dir = dir.join("marketing");
+    std::fs::create_dir_all(&marketing_dir)?;
     std::fs::write(
-        spaces_dir.join("marketing.json"),
+        marketing_dir.join("space.json"),
         serde_json::to_string_pretty(&marketing_space)?,
     )?;
 
@@ -70,16 +74,18 @@ fn test_spaces_directory_structure() -> Result<()> {
     let temp_dir = TempDir::new()?;
     create_test_project_with_spaces(temp_dir.path())?;
 
-    // Verify spaces directory exists
-    let spaces_dir = temp_dir.path().join("spaces");
-    assert!(spaces_dir.exists());
+    // Verify space directories exist
+    let default_dir = temp_dir.path().join("default");
+    assert!(default_dir.exists());
+    let marketing_dir = temp_dir.path().join("marketing");
+    assert!(marketing_dir.exists());
 
-    // Verify space files exist
-    assert!(spaces_dir.join("default.json").exists());
-    assert!(spaces_dir.join("marketing.json").exists());
+    // Verify space.json files exist
+    assert!(default_dir.join("space.json").exists());
+    assert!(marketing_dir.join("space.json").exists());
 
     // Verify space files are valid JSON
-    let default_content = std::fs::read_to_string(spaces_dir.join("default.json"))?;
+    let default_content = std::fs::read_to_string(default_dir.join("space.json"))?;
     let default_space: serde_json::Value = serde_json::from_str(&default_content)?;
     assert_eq!(default_space["id"], "default");
 
@@ -142,9 +148,9 @@ fn test_spaces_manifest_yaml_format() -> Result<()> {
     let manifest_path = temp_dir.path().join("spaces.yml");
 
     let manifest = SpacesManifest::with_spaces(vec![
-        "default".to_string(),
-        "team-a".to_string(),
-        "team-b".to_string(),
+        SpaceEntry::new("default".to_string(), "Default".to_string()),
+        SpaceEntry::new("team-a".to_string(), "Team A".to_string()),
+        SpaceEntry::new("team-b".to_string(), "Team B".to_string()),
     ]);
 
     manifest.write(&manifest_path)?;
@@ -152,9 +158,12 @@ fn test_spaces_manifest_yaml_format() -> Result<()> {
     // Read the YAML file and verify format
     let content = std::fs::read_to_string(&manifest_path)?;
     assert!(content.contains("spaces:"));
-    assert!(content.contains("- default"));
-    assert!(content.contains("- team-a"));
-    assert!(content.contains("- team-b"));
+    assert!(content.contains("id: default"));
+    assert!(content.contains("name: Default"));
+    assert!(content.contains("id: team-a"));
+    assert!(content.contains("name: Team A"));
+    assert!(content.contains("id: team-b"));
+    assert!(content.contains("name: Team B"));
 
     // Verify it can be read back
     let loaded = SpacesManifest::read(&manifest_path)?;

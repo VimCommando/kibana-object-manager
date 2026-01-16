@@ -15,7 +15,7 @@ use serde_json::Value;
 ///
 /// # Example
 /// ```no_run
-/// use kibana_object_manager::kibana::spaces::{SpacesExtractor, SpacesManifest};
+/// use kibana_object_manager::kibana::spaces::{SpaceEntry, SpacesExtractor, SpacesManifest};
 /// use kibana_object_manager::client::{Auth, Kibana};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
@@ -23,7 +23,10 @@ use serde_json::Value;
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
 /// let client = Kibana::try_new(url, Auth::None)?;
-/// let manifest = SpacesManifest::with_spaces(vec!["default".to_string(), "marketing".to_string()]);
+/// let manifest = SpacesManifest::with_spaces(vec![
+///     SpaceEntry::new("default".to_string(), "Default".to_string()),
+///     SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
+/// ]);
 ///
 /// let extractor = SpacesExtractor::new(client, Some(manifest));
 /// let spaces = extractor.extract().await?;

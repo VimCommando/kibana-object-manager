@@ -25,7 +25,7 @@ async fn test_saved_objects_extract() -> Result<()> {
 
     // Create client
     let url = Url::parse("http://localhost:5601")?;
-    let client = Kibana::try_new(url, Auth::None, None)?;
+    let client = Kibana::try_new(url, Auth::None)?;
 
     // Create extractor for test space
     let extractor = SavedObjectsExtractor::new(client, manifest, "test");
@@ -65,7 +65,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 1: Extract from test space
     let manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;
     let url = Url::parse("http://localhost:5601")?;
-    let client = Kibana::try_new(url.clone(), Auth::None, None)?;
+    let client = Kibana::try_new(url.clone(), Auth::None)?;
 
     let extractor = SavedObjectsExtractor::new(client.clone(), manifest, "test");
     let objects = extractor.extract().await?;
@@ -85,10 +85,11 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
         object_type, object_id
     );
 
-    let delete_url = format!("/s/test/api/saved_objects/{}/{}", object_type, object_id);
+    let delete_url = format!("/api/saved_objects/{}/{}", object_type, object_id);
     let response = client
         .request(
             reqwest::Method::DELETE,
+            Some("test"),
             &std::collections::HashMap::new(),
             &delete_url,
             None,
@@ -109,7 +110,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 4: Verify it's back
     println!("Step 4: Verifying object exists again");
     let verify_url = Url::parse("http://localhost:5601")?;
-    let verify_client = Kibana::try_new(verify_url, Auth::None, None)?;
+    let verify_client = Kibana::try_new(verify_url, Auth::None)?;
 
     let verify_manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;
     let verify_extractor = SavedObjectsExtractor::new(verify_client, verify_manifest, "test");
