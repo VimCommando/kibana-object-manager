@@ -225,7 +225,9 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    dotenvy::from_filename(&cli.env)?;
+    if let Err(e) = dotenvy::from_filename(&cli.env) {
+        log::warn!("Failed to load environment variables: {}", e);
+    }
 
     let log_level = match cli.debug {
         true => "debug",

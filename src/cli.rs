@@ -11,8 +11,8 @@ use crate::{
     migration::load_saved_objects_manifest,
     storage::{self, DirectoryReader, DirectoryWriter},
     transform::{
-        FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, VegaSpecEscaper,
-        VegaSpecUnescaper,
+        FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, MultilineFieldFormatter,
+        VegaSpecEscaper, VegaSpecUnescaper,
     },
 };
 use eyre::{Context, Result};
@@ -1692,6 +1692,13 @@ async fn pull_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
     // Extract agents
     let agents = extractor.extract().await?;
 
+    // Transform agents - format multiline instructions field
+    let formatter = MultilineFieldFormatter::for_agents();
+    let agents: Vec<_> = agents
+        .into_iter()
+        .map(|agent| formatter.transform(agent))
+        .collect::<Result<_>>()?;
+
     // Write each agent to its own JSON file
     let agents_dir = project_dir.join("agents");
     std::fs::create_dir_all(&agents_dir)?;
@@ -1704,7 +1711,7 @@ async fn pull_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
             .ok_or_else(|| eyre::eyre!("Agent missing 'name' field"))?;
 
         let agent_file = agents_dir.join(format!("{}.json", agent_name));
-        let json = serde_json::to_string_pretty(agent)?;
+        let json = storage::to_string_with_multiline(agent)?;
         std::fs::write(&agent_file, json)?;
 
         log::debug!("Wrote agent: {}", agent_file.display());
@@ -1734,6 +1741,13 @@ pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
     // Extract agents
     let agents = extractor.extract().await?;
 
+    // Transform agents - format multiline instructions field
+    let formatter = MultilineFieldFormatter::for_agents();
+    let agents: Vec<_> = agents
+        .into_iter()
+        .map(|agent| formatter.transform(agent))
+        .collect::<Result<_>>()?;
+
     // Write each agent to its own JSON file
     let agents_dir = project_dir.join("agents");
     std::fs::create_dir_all(&agents_dir)?;
@@ -1746,7 +1760,7 @@ pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
             .ok_or_else(|| eyre::eyre!("Agent missing 'name' field"))?;
 
         let agent_file = agents_dir.join(format!("{}.json", agent_name));
-        let json = serde_json::to_string_pretty(agent)?;
+        let json = storage::to_string_with_multiline(agent)?;
         std::fs::write(&agent_file, json)?;
 
         log::debug!("Wrote agent: {}", agent_file.display());

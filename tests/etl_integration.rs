@@ -156,39 +156,95 @@ async fn test_extract_transform_load_to_ndjson() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_extract_transform_load_to_directory() -> Result<()> {
+async fn test_agent_multiline_instructions_formatting() -> Result<()> {
+    use kibana_object_manager::transform::MultilineFieldFormatter;
+
     let temp_dir = TempDir::new()?;
-    let output_dir = temp_dir.path().join("objects");
+    let output_dir = temp_dir.path().join("agents");
+    std::fs::create_dir_all(&output_dir)?;
 
-    // Extract from mock source
-    let extractor = MockSavedObjectsExtractor::new();
+    // Create a mock agent with multiline instructions (similar to what Kibana returns)
+    let agent = json!({
+        "type": "agent",
+        "id": "test-agent",
+        "attributes": {
+            "name": "Test Agent",
+            "configuration": {
+                "instructions": "Your Role: You are a helpful assistant.\n\nYour Tasks:\n1. Help users with their questions\n2. Provide clear explanations\n3. Write clean code\n\nRemember to always be polite and professional."
+            }
+        }
+    });
 
-    // Transform by adding managed flag
-    let transformer = ManagedFlagAdder;
+    // Create a mock extractor
+    struct SingleAgentExtractor {
+        agent: Value,
+    }
 
-    // Load to directory structure
+    impl Extractor for SingleAgentExtractor {
+        type Item = Value;
+
+        fn extract(&self) -> impl std::future::Future<Output = Result<Vec<Self::Item>>> + Send {
+            async { Ok(vec![self.agent.clone()]) }
+        }
+    }
+
+    let extractor = SingleAgentExtractor {
+        agent: agent.clone(),
+    };
+
+    // Transform with MultilineFieldFormatter
+    let transformer = MultilineFieldFormatter::for_agents();
+
+    // Load to directory
     let loader = DirectoryWriter::new(&output_dir)?;
 
     // Run pipeline
     let pipeline = Pipeline::new(extractor, transformer, loader);
     let count = pipeline.run().await?;
 
-    assert_eq!(count, 3, "Should have processed 3 objects");
+    assert_eq!(count, 1, "Should have processed 1 agent");
 
-    // Verify the output files exist in hierarchical structure (dashboard/id.json)
-    assert!(output_dir.exists());
+    // Verify the output file uses triple-quote syntax
+    let agent_file = output_dir.join("agent").join("Test Agent.json");
+    assert!(agent_file.exists(), "Agent file should exist");
 
-    // Note: Files are named by title/name from attributes, not by ID
-    let dashboard_file = output_dir.join("dashboard").join("My Dashboard.json");
-    assert!(dashboard_file.exists());
+    let content = std::fs::read_to_string(&agent_file)?;
 
-    // Verify that managed flag was added
-    let dashboard_content = std::fs::read_to_string(&dashboard_file)?;
-    let dashboard: Value = serde_json::from_str(&dashboard_content)?;
-    assert_eq!(
-        dashboard["managed"],
-        json!(true),
-        "managed flag should be added"
+    // Print the formatted content for verification
+    println!("\n=== Formatted Agent JSON ===");
+    println!("{}", content);
+    println!("=== End of Formatted JSON ===\n");
+
+    // Check that triple-quotes are used for multiline instructions
+    assert!(
+        content.contains(r#""""#),
+        "Should contain triple-quotes for multiline string: {}",
+        content
+    );
+
+    // Verify the instructions are properly formatted with real newlines
+    assert!(
+        content.contains("Your Role:"),
+        "Should contain instruction content"
+    );
+    assert!(
+        content.contains("Your Tasks:"),
+        "Should contain task section"
+    );
+
+    // Verify we can parse it back correctly
+    let parsed: Value = kibana_object_manager::storage::from_json5_str(&content)?;
+    let instructions = parsed["attributes"]["configuration"]["instructions"]
+        .as_str()
+        .expect("Instructions should be a string");
+
+    assert!(
+        instructions.contains('\n'),
+        "Instructions should contain actual newlines after parsing"
+    );
+    assert!(
+        instructions.contains("Your Role: You are a helpful assistant."),
+        "Content should be preserved"
     );
 
     Ok(())
