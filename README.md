@@ -221,11 +221,6 @@ export KIBANA_PASSWORD=changeme
 export KIBANA_APIKEY=your_base64_encoded_key
 ```
 
-### Custom Space
-```bash
-export KIBANA_SPACE=my-space  # Defaults to 'default'
-```
-
 ## Architecture
 
 kibob uses a modern ETL (Extract-Transform-Load) pipeline architecture:
@@ -335,7 +330,11 @@ See [Migration Guide](docs/MIGRATION.md) for details.
 | `KIBANA_USERNAME` | Basic auth username | Optional |
 | `KIBANA_PASSWORD` | Basic auth password | Optional |
 | `KIBANA_APIKEY` | API key (conflicts with user/pass) | Optional |
-| `KIBANA_SPACE` | Kibana space ID | `default` |
+
+## Support
+
+- **Issues**: https://github.com/VimCommando/kibana-object-manager/issues
+- **Discussions**: https://github.com/VimCommando/kibana-object-manager/discussions
 
 ## Contributing
 
@@ -344,14 +343,3 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for developmen
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
-
-## Support
-
-- **Issues**: https://github.com/VimCommando/kibana-object-manager/issues
-- **Discussions**: https://github.com/VimCommando/kibana-object-manager/discussions
-
-## Acknowledgments
-
-This is a complete rewrite of the original Bash-based Kibana Object Manager, reimagined with modern development practices and a robust architecture.
-
-Built by [Ryan Eno](https://github.com/VimCommando).

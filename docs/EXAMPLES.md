@@ -37,7 +37,7 @@ export KIBANA_APIKEY="your_prod_api_key"
 BACKUP_PATH="$BACKUP_DIR/$PROJECT_NAME-$DATE"
 mkdir -p "$BACKUP_PATH"
 
-# Pull from Kibana
+# Pull from Kibana (all spaces in spaces.yml)
 echo "Backing up dashboards from $KIBANA_URL..."
 kibob pull "$BACKUP_PATH"
 
@@ -68,8 +68,9 @@ git clone https://github.com/yourorg/kibana-dashboards.git
 cd kibana-dashboards
 
 # 2. Find the dashboard in your objects
-ls -la objects/dashboard/
-# Let's say the deleted dashboard is: sales-overview-abc123.json
+# With multi-space structure: {space_id}/objects/dashboard/
+ls -la default/objects/dashboard/
+# Let's say the deleted dashboard is: sales-overview.json
 
 # 3. Set production credentials
 export KIBANA_URL=https://prod-kibana.example.com
@@ -78,12 +79,12 @@ export KIBANA_APIKEY=prod_api_key
 # 4. Verify connection
 kibob auth
 
-# 5. Push the dashboard (it will be recreated)
+# 5. Push the dashboard (it will be recreated in the default space)
 kibob push . --managed true
 
 # 6. Verify restoration
 kibob pull ./verify-restore
-diff -r objects/ verify-restore/objects/
+diff -r default/objects/ verify-restore/default/objects/
 ```
 
 ---
@@ -93,17 +94,34 @@ diff -r objects/ verify-restore/objects/
 **Scenario:** Copy all dashboards from default space to a new team space.
 
 ```bash
-# 1. Pull from default space
+# 1. Set up your project with both spaces
 export KIBANA_URL=http://localhost:5601
 export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD=changeme
-export KIBANA_SPACE=default
 
-kibob pull ./dashboards
+# 2. Add both spaces to manifest
+cd my-dashboards
+kibob add spaces .
+# This creates spaces.yml with all available spaces
 
-# 2. Push to new space
-export KIBANA_SPACE=team-alpha
-kibob push ./dashboards --managed false  # Unmanaged so team can customize
+# 3. Edit spaces.yml to include only the spaces you want
+vim spaces.yml
+# Keep 'default' and 'team-alpha' spaces
+
+# 4. Pull from both spaces
+kibob pull .
+# Creates:
+#   default/objects/dashboard/...
+#   team-alpha/objects/dashboard/...
+
+# 5. Copy dashboards from default to team-alpha
+cp -r default/objects/dashboard/* team-alpha/objects/dashboard/
+
+# 6. Update manifest for team-alpha space
+# Add the new dashboards to team-alpha/manifest/saved_objects.json
+
+# 7. Push to team-alpha space
+kibob push . --managed false  # Unmanaged so team can customize
 
 echo "Dashboards cloned to team-alpha space"
 ```
@@ -147,23 +165,33 @@ kibob push ./migration-dashboards --managed true
 
 **Scenario:** Store observability dashboards in your application's Git repository.
 
-**Project Structure:**
+**Project Structure (Multi-Space):**
 ```
 my-application/
 ├── src/
 │   └── ... (application code)
 ├── tests/
 │   └── ...
-├── dashboards/          # Kibana dashboards
+├── dashboards/              # Kibana dashboards (multi-space)
 │   ├── .env.example
-│   ├── manifest/
-│   │   └── saved_objects.json
-│   └── objects/
-│       ├── dashboard/
-│       │   ├── app-overview.json
-│       │   └── error-tracking.json
-│       └── index-pattern/
-│           └── app-logs-*.json
+│   ├── spaces.yml           # Managed spaces
+│   ├── default/             # Default space
+│   │   ├── space.json
+│   │   ├── manifest/
+│   │   │   └── saved_objects.json
+│   │   └── objects/
+│   │       ├── dashboard/
+│   │       │   ├── app-overview.json
+│   │       │   └── error-tracking.json
+│   │       └── index-pattern/
+│   │           └── app-logs-*.json
+│   └── monitoring/          # Monitoring space (optional)
+│       ├── space.json
+│       ├── manifest/
+│       │   └── saved_objects.json
+│       └── objects/
+│           └── dashboard/
+│               └── system-health.json
 └── README.md
 ```
 
@@ -175,13 +203,15 @@ cd my-application/dashboards
 cp .env.example .env
 # Edit .env with your dev Kibana credentials
 
-# Deploy dashboards to dev Kibana
+# Deploy dashboards to dev Kibana (all spaces in spaces.yml)
 kibob push . --managed false
 
 # Make changes to dashboard in Kibana
 # Pull changes back
 kibob pull .
-git diff objects/
+
+# See what changed across all spaces
+git diff
 
 # Commit with application code
 git add .
@@ -206,7 +236,7 @@ jobs:
       - name: Install kibob
         run: cargo install kibana-object-manager
       
-      - name: Deploy Dashboards
+      - name: Deploy Dashboards (All Spaces)
         env:
           KIBANA_URL: ${{ secrets.KIBANA_URL }}
           KIBANA_APIKEY: ${{ secrets.KIBANA_APIKEY }}
@@ -234,12 +264,17 @@ jobs:
 # Create feature branch
 git checkout -b feature/new-metrics-dashboard
 
-# Create new dashboard in Kibana
+# Create new dashboard in Kibana (in default space)
 # Add it to manifest
-kibob add ./dashboards --objects "dashboard=new-metrics-abc123"
+kibob add objects ./dashboards --objects "dashboard=new-metrics-abc123"
+
+# This adds to default/manifest/saved_objects.json
+
+# Pull the new dashboard
+kibob pull ./dashboards
 
 # Commit changes
-git add dashboards/
+git add dashboards/default/
 git commit -m "Add new metrics dashboard"
 git push origin feature/new-metrics-dashboard
 
@@ -297,7 +332,7 @@ until curl -s http://localhost:5601/api/status | grep -q "available"; do
   sleep 5
 done
 
-# Deploy dashboards
+# Deploy dashboards (all spaces in spaces.yml)
 export KIBANA_URL=http://localhost:5601
 export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD=changeme
@@ -345,6 +380,7 @@ pipeline {
                 sh '''
                     cd $DASHBOARDS_DIR
                     kibob auth
+                    # Deploys all spaces defined in spaces.yml
                     kibob push . --managed true
                 '''
             }
@@ -359,7 +395,10 @@ pipeline {
                 sh '''
                     cd $DASHBOARDS_DIR
                     kibob pull ./verify
-                    diff -r objects/ verify/objects/
+                    # Compare all spaces
+                    for space in default monitoring; do
+                        diff -r $space/objects/ verify/$space/objects/
+                    done
                 '''
             }
         }
@@ -431,7 +470,9 @@ pipeline {
 ```
 kibana-gitops/
 ├── base/
-│   ├── dashboards/
+│   ├── spaces.yml           # Managed spaces
+│   ├── default/
+│   │   ├── space.json
 │   │   ├── manifest/
 │   │   │   └── saved_objects.json
 │   │   └── objects/
@@ -473,7 +514,8 @@ spec:
             - |
               cargo install kibana-object-manager
               git clone https://github.com/yourorg/kibana-gitops.git
-              cd kibana-gitops/base/dashboards
+              cd kibana-gitops/base
+              # Syncs all spaces in spaces.yml
               kibob push . --managed true
             env:
             - name: KIBANA_URL
@@ -499,8 +541,13 @@ spec:
 ```hcl
 resource "null_resource" "kibana_dashboards" {
   triggers = {
-    # Redeploy when manifest changes
-    manifest_hash = filemd5("${path.module}/dashboards/manifest/saved_objects.json")
+    # Redeploy when spaces manifest changes
+    spaces_hash = filemd5("${path.module}/dashboards/spaces.yml")
+    # Or when any manifest changes
+    manifests_hash = md5(join("", [
+      for f in fileset("${path.module}/dashboards", "*/manifest/saved_objects.json"):
+        filemd5("${path.module}/dashboards/${f}")
+    ]))
   }
   
   provisioner "local-exec" {
@@ -525,7 +572,7 @@ variable "kibana_apikey" {
 }
 
 output "dashboard_sync" {
-  value = "Dashboards synchronized"
+  value = "Dashboards synchronized across all spaces"
   depends_on = [null_resource.kibana_dashboards]
 }
 ```
@@ -542,62 +589,70 @@ terraform apply
 
 ## Advanced Scenarios
 
-### Example 11: Selective Object Management
+### Example 11: Selective Space Management
 
-**Scenario:** Manage only production dashboards, exclude development experiments.
+**Scenario:** Manage only production spaces, exclude development experiments.
 
 ```bash
 # Start with all objects
 kibob init export.ndjson ./dashboards
 
-# Edit manifest to remove experimental dashboards
-vim dashboards/manifest/saved_objects.json
-# Remove objects with "type": "dashboard" and title containing "[DEV]"
+# Discover all spaces
+kibob add spaces ./dashboards
 
-# Alternative: Use jq to filter programmatically
-jq '.objects |= map(select(
-  .type != "dashboard" or 
-  (.attributes.title | contains("[DEV]") | not)
-))' dashboards/manifest/saved_objects.json > filtered.json
-mv filtered.json dashboards/manifest/saved_objects.json
+# Edit spaces.yml to keep only production spaces
+vim dashboards/spaces.yml
+# Remove experimental spaces, keep only:
+#   - default
+#   - monitoring
+#   - security
 
-# Now only tracked objects are managed
+# Pull will now only fetch objects from these spaces
 kibob pull ./dashboards
+
+# Directory structure:
+#   dashboards/
+#   ├── spaces.yml          (only lists: default, monitoring, security)
+#   ├── default/...
+#   ├── monitoring/...
+#   └── security/...
+
+# Push only manages the spaces in spaces.yml
 kibob push ./dashboards --managed true
 ```
 
 ---
 
-### Example 12: Dashboard Templating
+### Example 12: Per-Space Dashboard Filtering
 
-**Scenario:** Create multiple similar dashboards from a template.
+**Scenario:** Different teams manage different spaces independently.
 
 ```bash
-# 1. Create template dashboard
-kibob pull ./template
+# Team A manages only their space
+cat > team-a-dashboards/spaces.yml << EOF
+spaces:
+- id: team-a
+  name: Team A
+EOF
 
-# 2. Copy and modify for different teams
-for team in alpha beta gamma; do
-  mkdir -p ./dashboards-${team}
-  cp -r template/manifest ./dashboards-${team}/
-  cp -r template/objects ./dashboards-${team}/
-  
-  # Update dashboard titles
-  find ./dashboards-${team}/objects -name "*.json" -type f -exec \
-    sed -i '' "s/Team Template/Team ${team^}/g" {} \;
-  
-  # Generate new IDs
-  for file in ./dashboards-${team}/objects/dashboard/*.json; do
-    new_id="${team}-$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    old_id=$(basename "$file" .json)
-    sed -i '' "s/$old_id/$new_id/g" "$file"
-    mv "$file" "./dashboards-${team}/objects/dashboard/${new_id}.json"
-  done
-  
-  # Deploy
-  export KIBANA_SPACE="team-${team}"
-  kibob push ./dashboards-${team} --managed false
-done
+kibob pull ./team-a-dashboards
+# Only pulls objects from team-a space
+
+# Team B manages their space
+cat > team-b-dashboards/spaces.yml << EOF
+spaces:
+- id: team-b
+  name: Team B
+EOF
+
+kibob pull ./team-b-dashboards
+# Only pulls objects from team-b space
+
+# Platform team manages all spaces
+kibob add spaces ./platform-dashboards
+# Creates spaces.yml with all spaces
+kibob pull ./platform-dashboards
+# Pulls from all spaces
 ```
 
 ---
@@ -615,35 +670,60 @@ DASHBOARDS_DIR="./dashboards"
 
 echo "Validating dashboard structure..."
 
-# Check manifest exists
-if [ ! -f "$DASHBOARDS_DIR/manifest/saved_objects.json" ]; then
-  echo "Error: Manifest not found"
+# Check spaces manifest exists
+if [ ! -f "$DASHBOARDS_DIR/spaces.yml" ]; then
+  echo "Error: spaces.yml not found"
   exit 1
 fi
 
-# Validate manifest JSON
-if ! jq empty "$DASHBOARDS_DIR/manifest/saved_objects.json"; then
-  echo "Error: Invalid manifest JSON"
+# Validate spaces.yml
+if ! yq eval '.' "$DASHBOARDS_DIR/spaces.yml" > /dev/null; then
+  echo "Error: Invalid spaces.yml"
   exit 1
 fi
 
-# Check all referenced objects exist
-missing_count=0
-while IFS= read -r object; do
-  type=$(echo "$object" | jq -r '.type')
-  id=$(echo "$object" | jq -r '.id')
-  file="$DASHBOARDS_DIR/objects/$type/$id.json"
+# Check each space's structure
+for space_dir in "$DASHBOARDS_DIR"/*/; do
+  space_id=$(basename "$space_dir")
   
-  if [ ! -f "$file" ]; then
-    echo "Error: Missing object file: $file"
-    ((missing_count++))
+  # Skip non-directory files
+  [ -d "$space_dir" ] || continue
+  
+  echo "Validating space: $space_id"
+  
+  # Check manifest exists
+  manifest="$space_dir/manifest/saved_objects.json"
+  if [ ! -f "$manifest" ]; then
+    echo "Error: Manifest not found for $space_id"
+    exit 1
   fi
-done < <(jq -c '.objects[]' "$DASHBOARDS_DIR/manifest/saved_objects.json")
-
-if [ $missing_count -gt 0 ]; then
-  echo "Validation failed: $missing_count missing objects"
-  exit 1
-fi
+  
+  # Validate manifest JSON
+  if ! jq empty "$manifest"; then
+    echo "Error: Invalid manifest JSON for $space_id"
+    exit 1
+  fi
+  
+  # Check all referenced objects exist
+  missing_count=0
+  while IFS= read -r object; do
+    type=$(echo "$object" | jq -r '.type')
+    id=$(echo "$object" | jq -r '.id')
+    file="$space_dir/objects/$type/$id.json"
+    
+    if [ ! -f "$file" ]; then
+      echo "Error: Missing object file: $file"
+      ((missing_count++))
+    fi
+  done < <(jq -c '.objects[]' "$manifest")
+  
+  if [ $missing_count -gt 0 ]; then
+    echo "Validation failed for $space_id: $missing_count missing objects"
+    exit 1
+  fi
+  
+  echo "✓ Space $space_id validated"
+done
 
 echo "✓ Dashboard validation passed"
 
@@ -676,7 +756,7 @@ jobs:
       - name: Install dependencies
         run: |
           cargo install kibana-object-manager
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq yq
       
       - name: Validate dashboards
         env:
@@ -695,6 +775,11 @@ jobs:
 ```
 # Dashboard changes require review from platform team
 /dashboards/ @yourorg/platform-team
+
+# Space-specific owners
+/dashboards/security/ @yourorg/security-team
+/dashboards/monitoring/ @yourorg/sre-team
+/dashboards/team-a/ @yourorg/team-a
 ```
 
 **Review checklist template (.github/pull_request_template.md):**
@@ -708,6 +793,14 @@ jobs:
 - [ ] Index patterns are documented
 - [ ] Changes tested in dev environment
 - [ ] Screenshots attached showing changes
+- [ ] spaces.yml updated if new spaces added
+
+## Affected Spaces
+
+- [ ] default
+- [ ] monitoring
+- [ ] security
+- [ ] Other: ___________
 
 ## Deployment Plan
 
@@ -741,6 +834,8 @@ export KIBANA_APIKEY=prod_key
 echo "Step 1: Backing up current state..."
 mkdir -p ./dr-drill/before
 kibob pull ./dr-drill/before
+
+# Calculate checksums for all spaces
 BEFORE_CHECKSUM=$(find ./dr-drill/before -type f -name "*.json" -exec md5sum {} \; | sort | md5sum)
 echo "Before checksum: $BEFORE_CHECKSUM"
 
@@ -802,7 +897,7 @@ alias kdev='export KIBANA_URL=http://localhost:5601 KIBANA_USERNAME=elastic KIBA
 alias kprod='export KIBANA_URL=https://prod.example.com KIBANA_APIKEY=$(pass kibana/prod)'
 alias kpull='kibob pull .'
 alias kpush='kibob push . --managed true'
-alias kdiff='kibob pull . && git diff objects/'
+alias kdiff='kibob pull . && git diff'
 ```
 
 ### Tip 2: Pre-commit Hook for Validation
@@ -812,7 +907,17 @@ alias kdiff='kibob pull . && git diff objects/'
 #!/bin/bash
 if git diff --cached --name-only | grep -q "^dashboards/"; then
   echo "Validating dashboard changes..."
-  jq empty dashboards/manifest/saved_objects.json || exit 1
+  
+  # Validate spaces.yml
+  if [ -f "dashboards/spaces.yml" ]; then
+    yq eval '.' dashboards/spaces.yml > /dev/null || exit 1
+  fi
+  
+  # Validate all space manifests
+  for manifest in dashboards/*/manifest/saved_objects.json; do
+    jq empty "$manifest" || exit 1
+  done
+  
   echo "✓ Dashboard validation passed"
 fi
 ```
@@ -827,8 +932,33 @@ fi
 kibob pull ./current
 if ! diff -r ./dashboards ./current > /dev/null; then
   echo "WARNING: Dashboard drift detected!"
+  
+  # Show which spaces have drifted
+  for space in dashboards/*/; do
+    space_id=$(basename "$space")
+    if ! diff -r "./dashboards/$space_id" "./current/$space_id" > /dev/null 2>&1; then
+      echo "  - Space '$space_id' has drifted"
+    fi
+  done
+  
   diff -r ./dashboards ./current | mail -s "Dashboard Drift Alert" ops@example.com
 fi
+```
+
+### Tip 4: Working with Specific Spaces
+
+```bash
+# Pull only a specific space by filtering spaces.yml
+cat > my-project/spaces.yml << EOF
+spaces:
+- id: default
+  name: Default
+EOF
+
+kibob pull my-project  # Only pulls 'default' space
+
+# Or use --space flag (if implemented) to filter during pull
+# kibob pull . --space default
 ```
 
 ---

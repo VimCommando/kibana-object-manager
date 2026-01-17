@@ -89,12 +89,6 @@ To create an API key in Kibana:
 2. Click "Create API key"
 3. Copy the encoded key and set it in `KIBANA_APIKEY`
 
-### Optional Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `KIBANA_SPACE` | Kibana space to operate in | `default` |
-
 ### Using .env Files
 
 Create a `.env` file in your project:
@@ -104,7 +98,6 @@ Create a `.env` file in your project:
 KIBANA_URL=http://localhost:5601
 KIBANA_USERNAME=elastic
 KIBANA_PASSWORD=dev_password
-KIBANA_SPACE=development
 ```
 
 Then use the `--env` flag to load it:

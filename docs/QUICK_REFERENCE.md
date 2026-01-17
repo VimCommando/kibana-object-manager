@@ -22,7 +22,6 @@ Fast reference for `kibob` commands and options.
 | `KIBANA_USERNAME` | No* | Basic auth username | `elastic` |
 | `KIBANA_PASSWORD` | No* | Basic auth password | `changeme` |
 | `KIBANA_APIKEY` | No* | API key (conflicts with user/pass) | `base64encodedkey` |
-| `KIBANA_SPACE` | No | Kibana space ID | `default` |
 
 *Must provide either USERNAME/PASSWORD or APIKEY
 

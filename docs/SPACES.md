@@ -287,12 +287,6 @@ Use the `description` field to explain the space's purpose:
   "description": "Production environment - monitored 24/7, contains live customer data"
 }
 ```
-
-### 6. Separate Concerns
-- **Spaces**: Organize namespaces and environments
-- **Saved Objects**: Store in appropriate space using `KIBANA_SPACE` env var
-- **Manifest**: Track which spaces and objects to manage
-
 ## Limitations
 
 ### Current Implementation

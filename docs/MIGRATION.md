@@ -82,14 +82,11 @@ kibob migrate /path/to/project
 
 # Migrate without backup
 kibob migrate /path/to/project --no-backup
-
-# Migrate to a custom space (uses KIBANA_SPACE env var)
-KIBANA_SPACE=production kibob migrate /path/to/project
 ```
 
 The migration process:
 1. Reads your existing `manifest.json` or `manifest/saved_objects.json`
-2. Creates a space directory (default: `default/`, or from `KIBANA_SPACE` env var)
+2. Creates a space directory (default: `default/`)
 3. Creates `{space}/manifest/saved_objects.json`
 4. Migrates object files to `{space}/objects/type/name.json`
 5. If spaces existed at `manifest/spaces.yml`, moves to root `spaces.yml`
