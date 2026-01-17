@@ -2590,6 +2590,13 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
     let extractor = AgentsExtractor::new(client.clone(), space_id, Some(manifest));
     let agents = extractor.extract().await?;
 
+    // Transform agents - format multiline instructions field
+    let formatter = MultilineFieldFormatter::for_agents();
+    let agents: Vec<_> = agents
+        .into_iter()
+        .map(|agent| formatter.transform(agent))
+        .collect::<Result<_>>()?;
+
     // Write each agent to its own JSON file
     let agents_dir = get_space_agents_dir(project_dir, space_id);
     std::fs::create_dir_all(&agents_dir)?;
@@ -2604,7 +2611,7 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
             .ok_or_else(|| eyre::eyre!("Agent missing both 'name' and 'id' fields"))?;
 
         let agent_file = agents_dir.join(format!("{}.json", agent_name));
-        let json = serde_json::to_string_pretty(agent)?;
+        let json = storage::to_string_with_multiline(agent)?;
         std::fs::write(&agent_file, json)?;
         count += 1;
     }
