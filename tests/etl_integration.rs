@@ -3,7 +3,6 @@
 //! These tests demonstrate end-to-end workflows using the ETL framework
 //! with real file I/O operations.
 
-use async_trait::async_trait;
 use eyre::Result;
 use kibana_object_manager::etl::{Extractor, Pipeline, Transformer};
 use kibana_object_manager::storage::{
@@ -56,7 +55,6 @@ impl MockSavedObjectsExtractor {
     }
 }
 
-#[async_trait]
 impl Extractor for MockSavedObjectsExtractor {
     type Item = Value;
 

@@ -14,10 +14,8 @@ use eyre::Result;
 /// ```no_run
 /// use kibana_object_manager::etl::Pipeline;
 /// # use kibana_object_manager::etl::{Extractor, Transformer, Loader};
-/// # use async_trait::async_trait;
 /// # use eyre::Result;
 /// # struct MyExtractor;
-/// # #[async_trait]
 /// # impl Extractor for MyExtractor {
 /// #     type Item = i32;
 /// #     async fn extract(&self) -> Result<Vec<Self::Item>> { Ok(vec![]) }
@@ -29,7 +27,6 @@ use eyre::Result;
 /// #     fn transform(&self, input: Self::Input) -> Result<Self::Output> { Ok(input) }
 /// # }
 /// # struct MyLoader;
-/// # #[async_trait]
 /// # impl Loader for MyLoader {
 /// #     type Item = i32;
 /// #     async fn load(&self, items: Vec<Self::Item>) -> Result<usize> { Ok(items.len()) }
@@ -109,12 +106,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use eyre::Result;
 
     struct MockExtractor(Vec<i32>);
 
-    #[async_trait]
     impl Extractor for MockExtractor {
         type Item = i32;
         async fn extract(&self) -> Result<Vec<Self::Item>> {
@@ -134,7 +129,6 @@ mod tests {
 
     struct SumLoader(std::sync::Arc<std::sync::Mutex<i32>>);
 
-    #[async_trait]
     impl Loader for SumLoader {
         type Item = i32;
         async fn load(&self, items: Vec<Self::Item>) -> Result<usize> {

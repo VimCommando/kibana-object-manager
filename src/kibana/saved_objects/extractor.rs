@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Extractor;
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 
@@ -100,7 +100,6 @@ impl SavedObjectsExtractor {
     }
 }
 
-#[async_trait]
 impl Extractor for SavedObjectsExtractor {
     type Item = Value;
 

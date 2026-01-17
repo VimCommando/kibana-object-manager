@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Extractor;
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 
@@ -164,7 +164,6 @@ impl AgentsExtractor {
     }
 }
 
-#[async_trait]
 impl Extractor for AgentsExtractor {
     type Item = Value;
 

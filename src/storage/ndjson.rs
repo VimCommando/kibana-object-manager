@@ -1,7 +1,7 @@
 //! NDJSON (Newline Delimited JSON) file operations
 
 use crate::etl::{Extractor, Loader};
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
@@ -47,7 +47,7 @@ impl NdjsonReader {
 }
 
 // Implement Extractor trait for reading NDJSON files
-#[async_trait]
+
 impl Extractor for NdjsonReader {
     type Item = Value;
 
@@ -107,7 +107,7 @@ impl NdjsonWriter {
 }
 
 // Implement Loader trait for writing NDJSON files
-#[async_trait]
+
 impl Loader for NdjsonWriter {
     type Item = Value;
 

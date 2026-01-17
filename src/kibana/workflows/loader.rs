@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Loader;
-use async_trait::async_trait;
+
 use eyre::Result;
 use serde_json::Value;
 
@@ -94,7 +94,6 @@ impl WorkflowsLoader {
     }
 }
 
-#[async_trait]
 impl Loader for WorkflowsLoader {
     type Item = Value;
 

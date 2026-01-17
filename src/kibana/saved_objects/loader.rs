@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Loader;
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 
@@ -102,7 +102,6 @@ impl SavedObjectsLoader {
     }
 }
 
-#[async_trait]
 impl Loader for SavedObjectsLoader {
     type Item = Value;
 

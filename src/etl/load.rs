@@ -1,6 +1,5 @@
 //! Loader trait for loading data to destinations
 
-use async_trait::async_trait;
 use eyre::Result;
 
 /// Loader trait for loading data to a destination
@@ -13,7 +12,6 @@ use eyre::Result;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::etl::Loader;
-/// use async_trait::async_trait;
 /// use eyre::Result;
 /// use std::path::PathBuf;
 ///
@@ -21,7 +19,6 @@ use eyre::Result;
 ///     output_dir: PathBuf,
 /// }
 ///
-/// #[async_trait]
 /// impl Loader for FileLoader {
 ///     type Item = String;
 ///     
@@ -31,7 +28,6 @@ use eyre::Result;
 ///     }
 /// }
 /// ```
-#[async_trait]
 pub trait Loader: Send + Sync {
     /// The type of items to load
     type Item: Send;
@@ -42,5 +38,8 @@ pub trait Loader: Send + Sync {
     ///
     /// # Errors
     /// Returns an error if loading fails (network, I/O, validation, etc.)
-    async fn load(&self, items: Vec<Self::Item>) -> Result<usize>;
+    fn load(
+        &self,
+        items: Vec<Self::Item>,
+    ) -> impl std::future::Future<Output = Result<usize>> + Send;
 }

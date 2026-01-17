@@ -1,6 +1,5 @@
 //! Extractor trait for data extraction from various sources
 
-use async_trait::async_trait;
 use eyre::Result;
 
 /// Extractor trait for extracting data from a source
@@ -13,7 +12,6 @@ use eyre::Result;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::etl::Extractor;
-/// use async_trait::async_trait;
 /// use eyre::Result;
 /// use std::path::PathBuf;
 ///
@@ -21,7 +19,6 @@ use eyre::Result;
 ///     path: PathBuf,
 /// }
 ///
-/// #[async_trait]
 /// impl Extractor for FileExtractor {
 ///     type Item = String;
 ///     
@@ -31,7 +28,6 @@ use eyre::Result;
 ///     }
 /// }
 /// ```
-#[async_trait]
 pub trait Extractor: Send + Sync {
     /// The type of items extracted
     type Item: Send;
@@ -40,5 +36,5 @@ pub trait Extractor: Send + Sync {
     ///
     /// # Errors
     /// Returns an error if extraction fails (network, I/O, parsing, etc.)
-    async fn extract(&self) -> Result<Vec<Self::Item>>;
+    fn extract(&self) -> impl std::future::Future<Output = Result<Vec<Self::Item>>> + Send;
 }

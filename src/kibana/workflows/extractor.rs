@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Extractor;
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 
@@ -183,7 +183,6 @@ impl WorkflowsExtractor {
     }
 }
 
-#[async_trait]
 impl Extractor for WorkflowsExtractor {
     type Item = Value;
 

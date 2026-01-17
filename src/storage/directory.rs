@@ -2,7 +2,7 @@
 
 use crate::etl::{Extractor, Loader};
 use crate::storage::{from_json5_str, to_string_with_multiline};
-use async_trait::async_trait;
+
 use eyre::{Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -82,7 +82,7 @@ impl DirectoryReader {
 }
 
 // Implement Extractor trait for reading from directories
-#[async_trait]
+
 impl Extractor for DirectoryReader {
     type Item = Value;
 
@@ -250,7 +250,7 @@ impl DirectoryWriter {
 }
 
 // Implement Loader trait for writing to directories
-#[async_trait]
+
 impl Loader for DirectoryWriter {
     type Item = Value;
 

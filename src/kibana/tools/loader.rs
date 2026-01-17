@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Loader;
-use async_trait::async_trait;
+
 use eyre::Result;
 use serde_json::Value;
 
@@ -166,7 +166,6 @@ impl ToolsLoader {
     }
 }
 
-#[async_trait]
 impl Loader for ToolsLoader {
     type Item = Value;
 

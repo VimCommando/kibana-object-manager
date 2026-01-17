@@ -4,7 +4,7 @@
 
 use crate::client::Kibana;
 use crate::etl::Loader;
-use async_trait::async_trait;
+
 use eyre::Result;
 use serde_json::Value;
 
@@ -176,7 +176,6 @@ impl AgentsLoader {
     }
 }
 
-#[async_trait]
 impl Loader for AgentsLoader {
     type Item = Value;
 
