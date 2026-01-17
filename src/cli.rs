@@ -855,7 +855,7 @@ pub async fn add_spaces_to_manifest(
 ///
 /// Reads `spaces.yml` from the project directory
 fn load_spaces_manifest(project_dir: impl AsRef<Path>) -> Result<SpacesManifest> {
-    let manifest_path = project_dir.as_ref().join("manifest").join("spaces.yml");
+    let manifest_path = project_dir.as_ref().join("spaces.yml");
 
     if !manifest_path.exists() {
         eyre::bail!("Spaces manifest not found: {}", manifest_path.display());
