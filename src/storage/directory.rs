@@ -1,6 +1,7 @@
 //! Directory-based object storage
 
 use crate::etl::{Extractor, Loader};
+use crate::storage::{from_json5_str, to_string_with_multiline};
 use async_trait::async_trait;
 use eyre::{Context, Result};
 use serde_json::Value;
@@ -45,7 +46,8 @@ impl DirectoryReader {
                 let content = std::fs::read_to_string(&path)
                     .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-                let value: Value = serde_json::from_str(&content)
+                // Use from_json5_str to support triple-quoted strings
+                let value: Value = from_json5_str(&content)
                     .with_context(|| format!("Failed to parse JSON: {}", path.display()))?;
 
                 objects.push(value);
@@ -146,7 +148,7 @@ impl DirectoryWriter {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let json = serde_json::to_string_pretty(item)?;
+            let json = to_string_with_multiline(item)?;
             std::fs::write(path, json)?;
             count += 1;
         }

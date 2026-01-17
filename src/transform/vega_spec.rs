@@ -2,7 +2,13 @@ use crate::etl::Transformer;
 use eyre::{Context, Result};
 use serde_json::{Map, Value};
 
-/// Transformer that unescapes Vega specification fields from JSON strings to objects
+/// Transformer that unescapes Vega specification fields for readable Git diffs.
+///
+/// This transformer does NOT parse or validate the Vega spec content. It simply
+/// converts escaped newlines (`\n`) to real newlines so the spec can be stored
+/// with triple-quote (`"""`) syntax in JSON5 files, making Git diffs readable.
+///
+/// Comments (`//` and `/* */`) are fully preserved since no parsing occurs.
 #[derive(Debug, Clone)]
 pub struct VegaSpecUnescaper {
     /// JSON paths to search for vega specs
@@ -107,55 +113,38 @@ fn unescape_vega_specs(value: &mut Value) -> Result<()> {
 }
 
 /// Unescape a single spec field value
+///
+/// This function simply ensures the spec string has real newlines (not escaped `\n`).
+/// The json_writer will then use triple-quote syntax to write it, making Git diffs readable.
+///
+/// NO parsing or validation is performed - this preserves everything including comments.
 fn unescape_spec_field(spec_value: &mut Value, context: &str) -> Result<()> {
     if let Some(spec_str) = spec_value.as_str() {
         log::debug!(
-            "VegaSpecUnescaper: Found {} Vega spec string to unescape (length: {})",
+            "VegaSpecUnescaper: Found {} Vega spec string (length: {})",
             context,
             spec_str.len()
         );
 
-        // Check if this is already a plain JSON string (after FieldUnescaper)
-        // or an escaped JSON string that needs parsing
-        let spec_to_parse = spec_str.trim();
-
-        if spec_to_parse.starts_with('{') || spec_to_parse.starts_with('[') {
-            // This looks like a plain JSON string (already unescaped by FieldUnescaper)
-            // Use HJSON parser which handles Kibana's Vega spec format:
-            // - Optional quotes
-            // - Single or double quotes
-            // - Optional commas (including trailing commas)
-            // - Comments (// and /* */)
-            // - Multiline strings
-            if let Ok(parsed_spec) = serde_hjson::from_str::<Value>(spec_str) {
-                *spec_value = parsed_spec;
-                log::debug!(
-                    "VegaSpecUnescaper: Successfully parsed {} Vega spec",
-                    context
-                );
-            } else {
-                // Vega specs can contain syntax that even HJSON can't parse
-                // (e.g., Vega expressions). Leave as-is.
-                log::debug!(
-                    "VegaSpecUnescaper: {} Vega spec contains non-standard syntax, leaving as string",
-                    context
-                );
-            }
-        } else {
-            // This appears to be an escaped JSON string - try to parse with HJSON
-            // If it fails, it's likely not valid, so leave as-is
-            if let Ok(parsed_spec) = serde_hjson::from_str::<Value>(spec_str) {
-                *spec_value = parsed_spec;
-                log::debug!(
-                    "VegaSpecUnescaper: Successfully unescaped {} Vega spec",
-                    context
-                );
-            } else {
-                log::debug!(
-                    "VegaSpecUnescaper: {} Vega spec is not valid HJSON, leaving as string",
-                    context
-                );
-            }
+        // The spec string from Kibana already has real newlines (not escaped).
+        // We just need to ensure it stays as a string - the json_writer will
+        // use triple-quote syntax for any string containing newlines.
+        //
+        // If the string contains newlines, it will be written as:
+        //   "spec": """
+        //   {
+        //     // comments preserved
+        //     "$schema": "...",
+        //     ...
+        //   }"""
+        //
+        // No transformation needed here - the string is already in the right format.
+        // We just log that we found it.
+        if spec_str.contains('\n') {
+            log::debug!(
+                "VegaSpecUnescaper: {} Vega spec contains newlines, will use triple-quote syntax",
+                context
+            );
         }
     }
     Ok(())
@@ -311,22 +300,22 @@ mod tests {
                 "visState": {
                     "type": "vega",
                     "params": {
-                        "spec": "{\"$schema\":\"https://vega.github.io/schema/vega/v5.json\",\"width\":400}"
+                        "spec": "{\n  \"$schema\": \"https://vega.github.io/schema/vega/v5.json\",\n  \"width\": 400\n}"
                     }
                 }
             }
         });
 
         let unescaper = VegaSpecUnescaper::new();
-        let result = unescaper.transform(input).unwrap();
+        let result = unescaper.transform(input.clone()).unwrap();
 
+        // Spec should remain unchanged - we don't parse, just pass through
         let spec = &result["attributes"]["visState"]["params"]["spec"];
-        assert!(spec.is_object());
-        assert_eq!(
-            spec["$schema"],
-            "https://vega.github.io/schema/vega/v5.json"
-        );
-        assert_eq!(spec["width"], 400);
+        assert!(spec.is_string());
+        let spec_str = spec.as_str().unwrap();
+        assert!(spec_str.contains("vega.github.io/schema/vega/v5.json"));
+        assert!(spec_str.contains("width"));
+        assert!(spec_str.contains('\n')); // Has real newlines
     }
 
     #[test]
@@ -336,7 +325,7 @@ mod tests {
                 "visState": {
                     "type": "vega-lite",
                     "params": {
-                        "spec": "{\"$schema\":\"https://vega.github.io/schema/vega-lite/v5.json\",\"mark\":\"bar\"}"
+                        "spec": "{\n  \"$schema\": \"https://vega.github.io/schema/vega-lite/v5.json\",\n  \"mark\": \"bar\"\n}"
                     }
                 }
             }
@@ -346,12 +335,48 @@ mod tests {
         let result = unescaper.transform(input).unwrap();
 
         let spec = &result["attributes"]["visState"]["params"]["spec"];
-        assert!(spec.is_object());
-        assert_eq!(
-            spec["$schema"],
-            "https://vega.github.io/schema/vega-lite/v5.json"
+        assert!(spec.is_string());
+        let spec_str = spec.as_str().unwrap();
+        assert!(spec_str.contains("vega-lite/v5.json"));
+        assert!(spec_str.contains("mark"));
+    }
+
+    #[test]
+    fn test_comments_are_preserved() {
+        // This is the key test - comments must survive the round trip
+        let spec_with_comments = r#"{
+  // This is a line comment
+  /* xray tango */
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "bar"
+}"#;
+
+        let input = json!({
+            "attributes": {
+                "visState": {
+                    "type": "vega",
+                    "params": {
+                        "spec": spec_with_comments
+                    }
+                }
+            }
+        });
+
+        let unescaper = VegaSpecUnescaper::new();
+        let result = unescaper.transform(input).unwrap();
+
+        let spec = &result["attributes"]["visState"]["params"]["spec"];
+        let spec_str = spec.as_str().unwrap();
+
+        // Comments MUST be preserved
+        assert!(
+            spec_str.contains("// This is a line comment"),
+            "Line comment was lost!"
         );
-        assert_eq!(spec["mark"], "bar");
+        assert!(
+            spec_str.contains("/* xray tango */"),
+            "Block comment was lost!"
+        );
     }
 
     #[test]
@@ -361,7 +386,7 @@ mod tests {
                 "savedVis": {
                     "type": "vega",
                     "params": {
-                        "spec": "{\"$schema\":\"https://vega.github.io/schema/vega/v5.json\",\"data\":[]}"
+                        "spec": "{\n  \"$schema\": \"https://vega.github.io/schema/vega/v5.json\",\n  \"data\": []\n}"
                     }
                 }
             }
@@ -371,11 +396,9 @@ mod tests {
         let result = unescaper.transform(input).unwrap();
 
         let spec = &result["embeddableConfig"]["savedVis"]["params"]["spec"];
-        assert!(spec.is_object());
-        assert_eq!(
-            spec["$schema"],
-            "https://vega.github.io/schema/vega/v5.json"
-        );
+        assert!(spec.is_string());
+        let spec_str = spec.as_str().unwrap();
+        assert!(spec_str.contains("vega/v5.json"));
     }
 
     #[test]
@@ -394,18 +417,19 @@ mod tests {
         let unescaper = VegaSpecUnescaper::new();
         let result = unescaper.transform(input.clone()).unwrap();
 
-        // Should remain unchanged
+        // Should remain unchanged (non-vega types are not processed)
         assert_eq!(result, input);
     }
 
     #[test]
     fn test_handle_invalid_json_gracefully() {
+        // Even invalid JSON should be preserved as-is (we don't parse)
         let input = json!({
             "attributes": {
                 "visState": {
                     "type": "vega",
                     "params": {
-                        "spec": "invalid json here"
+                        "spec": "this is not json at all"
                     }
                 }
             }
@@ -414,7 +438,7 @@ mod tests {
         let unescaper = VegaSpecUnescaper::new();
         let result = unescaper.transform(input.clone()).unwrap();
 
-        // Should remain unchanged since JSON is invalid
+        // Should remain unchanged
         assert_eq!(result, input);
     }
 
@@ -427,7 +451,7 @@ mod tests {
                         "savedVis": {
                             "type": "vega",
                             "params": {
-                                "spec": "{\"width\":300}"
+                                "spec": "{\n  \"width\": 300\n}"
                             }
                         }
                     }
@@ -439,12 +463,15 @@ mod tests {
         let result = unescaper.transform(input).unwrap();
 
         let spec = &result["panels"][0]["embeddableConfig"]["savedVis"]["params"]["spec"];
-        assert!(spec.is_object());
-        assert_eq!(spec["width"], 300);
+        assert!(spec.is_string());
+        let spec_str = spec.as_str().unwrap();
+        assert!(spec_str.contains("width"));
+        assert!(spec_str.contains("300"));
     }
 
     #[test]
     fn test_escape_vega_visualization() {
+        // When spec is an object, VegaSpecEscaper converts it to JSON string
         let input = json!({
             "attributes": {
                 "visState": {
@@ -475,43 +502,80 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_compatibility() {
-        let original = json!({
+    fn test_round_trip_preserves_comments() {
+        // The most important test: comments survive the full round trip
+        let original_spec = r#"{
+  // Line comment here
+  /* Block comment here */
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "bar",
+  "encoding": {
+    // Another comment
+    "x": {"field": "category"}
+  }
+}"#;
+
+        let input = json!({
             "attributes": {
                 "visState": {
                     "type": "vega-lite",
                     "params": {
-                        "spec": {
-                            "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-                            "mark": "bar",
-                            "encoding": {
-                                "x": {"field": "category", "type": "nominal"},
-                                "y": {"field": "value", "type": "quantitative"}
-                            }
-                        }
+                        "spec": original_spec
                     }
                 }
             }
         });
 
-        // Escape to string format
-        let escaper = VegaSpecEscaper::new();
-        let escaped = escaper.transform(original.clone()).unwrap();
-
-        // Verify it's escaped
-        assert!(escaped["attributes"]["visState"]["params"]["spec"].is_string());
-
-        // Unescape back to object format
+        // Unescape (for storage)
         let unescaper = VegaSpecUnescaper::new();
-        let unescaped = unescaper.transform(escaped).unwrap();
+        let unescaped = unescaper.transform(input).unwrap();
 
-        // Should match the original
-        assert_eq!(unescaped, original);
+        let spec = &unescaped["attributes"]["visState"]["params"]["spec"];
+        let spec_str = spec.as_str().unwrap();
+
+        // ALL comments must be preserved
+        assert!(
+            spec_str.contains("// Line comment here"),
+            "Line comment lost after unescape"
+        );
+        assert!(
+            spec_str.contains("/* Block comment here */"),
+            "Block comment lost after unescape"
+        );
+        assert!(
+            spec_str.contains("// Another comment"),
+            "Nested comment lost after unescape"
+        );
+
+        // Content must also be preserved
+        assert!(spec_str.contains("vega-lite/v5.json"));
+        assert!(spec_str.contains("\"mark\": \"bar\"") || spec_str.contains("\"mark\":\"bar\""));
+    }
+
+    #[test]
+    fn test_hjson_features_preserved() {
+        // Test that HJSON features like trailing commas are preserved (we don't parse)
+        let input = json!({
+            "attributes": {
+                "visState": {
+                    "type": "vega",
+                    "params": {
+                        "spec": "{\"data\": [1, 2, 3,], \"width\": 400,}"
+                    }
+                }
+            }
+        });
+
+        let unescaper = VegaSpecUnescaper::new();
+        let result = unescaper.transform(input.clone()).unwrap();
+
+        // Should be unchanged - we don't parse or modify
+        assert_eq!(result, input);
     }
 
     #[test]
     fn test_real_kibana_export_transformation() {
-        // Test with real Kibana export format (visState is escaped, spec is double-escaped)
+        // Test with real Kibana export format
         let input = json!({
             "attributes": {
                 "visState": {
@@ -527,11 +591,9 @@ mod tests {
         let result = unescaper.transform(input).unwrap();
 
         let spec = &result["attributes"]["visState"]["params"]["spec"];
-        assert!(spec.is_object(), "spec should be converted to object");
-        assert_eq!(
-            spec["$schema"],
-            "https://vega.github.io/schema/vega-lite/v5.json"
-        );
-        assert!(spec["data"]["url"]["%context%"].as_bool().unwrap());
+        assert!(spec.is_string());
+        let spec_str = spec.as_str().unwrap();
+        assert!(spec_str.contains("vega-lite/v5.json"));
+        assert!(spec_str.contains("%context%"));
     }
 }

@@ -29,7 +29,7 @@ mod integration_test {
             .transform(value)
             .expect("FieldUnescaper failed");
 
-        // Verify visState is now an object but spec is still escaped
+        // Verify visState is now an object but spec is still a string
         let vis_state_after_field = &value["attributes"]["visState"];
         assert!(
             vis_state_after_field.is_object(),
@@ -48,82 +48,77 @@ mod integration_test {
             "spec should still be a string after FieldUnescaper"
         );
 
-        println!("DEBUG: spec after FieldUnescaper:");
-        println!(
-            "  type: {}",
-            if spec_after_field.is_string() {
-                "string"
-            } else {
-                "object"
-            }
-        );
-        if let Some(s) = spec_after_field.as_str() {
-            println!("  length: {}", s.len());
-            println!("  starts_with: {}", &s[..50.min(s.len())]);
-        }
-
         // Now apply VegaSpecUnescaper
         let vega_unescaper = VegaSpecUnescaper::new();
         value = vega_unescaper
             .transform(value)
             .expect("VegaSpecUnescaper failed");
 
-        println!("DEBUG: after VegaSpecUnescaper:");
         let vis_state_final = &value["attributes"]["visState"];
         let vis_state_final_obj = vis_state_final.as_object().unwrap();
         let spec_final = &vis_state_final_obj["params"]["spec"];
-        println!(
-            "  spec type: {}",
-            if spec_final.is_string() {
-                "string"
-            } else {
-                "object"
-            }
-        );
-        if let Some(s) = spec_final.as_str() {
-            println!("  spec string length: {}", s.len());
-        }
-        if let Some(o) = spec_final.as_object() {
-            println!("  spec object keys: {}", o.len());
-        }
 
+        // Spec should remain a string
         assert!(
-            spec_final.is_object(),
-            "spec should now be an object after VegaSpecUnescaper"
+            spec_final.is_string(),
+            "spec should remain a string after VegaSpecUnescaper"
         );
 
-        // Now apply VegaSpecUnescaper
+        let spec_str = spec_final.as_str().unwrap();
+
+        // Verify the content is correct by checking key fields are present
+        assert!(
+            spec_str.contains("vega-lite/v5.json") || spec_str.contains("vega/v5.json"),
+            "spec should contain vega schema reference"
+        );
+        assert!(spec_str.contains("data"), "spec should contain data field");
+    }
+
+    #[test]
+    fn test_vega_pipeline_preserves_comments() {
+        // Read the actual raw Kibana export - line 3 has a vega vis with comments
+        let test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/ironhide/export.ndjson");
+
+        let raw_data = fs::read_to_string(test_file).expect("Failed to read export file");
+
+        // Get line 3 (index 2) which has the commented visualization
+        let third_line = raw_data
+            .lines()
+            .nth(2)
+            .expect("Export file should have at least 3 lines");
+
+        let mut value: Value = serde_json::from_str(third_line).expect("Failed to parse JSON");
+
+        // Apply FieldUnescaper first
+        let field_unescaper = FieldUnescaper::default_kibana_fields();
+        value = field_unescaper
+            .transform(value)
+            .expect("FieldUnescaper failed");
+
+        // Apply VegaSpecUnescaper
         let vega_unescaper = VegaSpecUnescaper::new();
         value = vega_unescaper
             .transform(value)
             .expect("VegaSpecUnescaper failed");
 
-        // Verify spec is now an object
-        let vis_state_final = &value["attributes"]["visState"];
-        let vis_state_final_obj = vis_state_final.as_object().unwrap();
-        let spec_final = &vis_state_final_obj["params"]["spec"];
+        let vis_state = &value["attributes"]["visState"];
+        let vis_state_obj = vis_state.as_object().unwrap();
+        let spec = &vis_state_obj["params"]["spec"];
+        let spec_str = spec.as_str().expect("spec should be a string");
 
+        // THE CRITICAL TEST: Comments MUST be preserved!
         assert!(
-            spec_final.is_object(),
-            "spec should now be an object after VegaSpecUnescaper"
+            spec_str.contains("/* xray tango */"),
+            "Block comment '/* xray tango */' was stripped! Got:\n{}",
+            &spec_str[..500.min(spec_str.len())]
+        );
+        assert!(
+            spec_str.contains("// Node load percent"),
+            "Line comment was stripped! Got:\n{}",
+            &spec_str[..500.min(spec_str.len())]
         );
 
-        let spec_obj = spec_final.as_object().unwrap();
-        assert!(spec_obj.contains_key("$schema"), "spec should have $schema");
-        assert!(spec_obj.contains_key("data"), "spec should have data");
-        assert_eq!(
-            spec_obj["$schema"], "https://vega.github.io/schema/vega-lite/v5.json",
-            "Should be vega-lite v5"
-        );
-
-        println!("✅ SUCCESS: VegaSpec pipeline transformation complete!");
-        println!(
-            "   - Raw visState (string) → FieldUnescaper → visState (object) with spec (string)"
-        );
-        println!(
-            "   - spec (string) → VegaSpecUnescaper → spec (object with {} properties)",
-            spec_obj.len()
-        );
-        println!("   - Spec $schema: {}", spec_obj["$schema"]);
+        println!("✅ SUCCESS: Comments preserved in Vega spec!");
     }
 }
