@@ -8,16 +8,12 @@ use tempfile::TempDir;
 
 /// Create a test project with spaces manifest
 fn create_test_project_with_spaces(dir: &Path) -> Result<()> {
-    // Create manifest directory
-    let manifest_dir = dir.join("manifest");
-    std::fs::create_dir_all(&manifest_dir)?;
-
-    // Create spaces manifest
+    // Create spaces manifest at project root (spaces.yml)
     let manifest = SpacesManifest::with_spaces(vec![
         SpaceEntry::new("default".to_string(), "Default".to_string()),
         SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
     ]);
-    manifest.write(manifest_dir.join("spaces.yml"))?;
+    manifest.write(dir.join("spaces.yml"))?;
 
     // Create space directories and write space.json files
     let default_space = serde_json::json!({
@@ -57,7 +53,7 @@ fn test_spaces_manifest_creation() -> Result<()> {
     create_test_project_with_spaces(temp_dir.path())?;
 
     // Verify manifest was created
-    let manifest_path = temp_dir.path().join("manifest/spaces.yml");
+    let manifest_path = temp_dir.path().join("spaces.yml");
     assert!(manifest_path.exists());
 
     // Verify manifest can be read
