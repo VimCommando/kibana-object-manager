@@ -167,11 +167,9 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
     let agent = json!({
         "type": "agent",
         "id": "test-agent",
-        "attributes": {
-            "name": "Test Agent",
-            "configuration": {
-                "instructions": "Your Role: You are a helpful assistant.\n\nYour Tasks:\n1. Help users with their questions\n2. Provide clear explanations\n3. Write clean code\n\nRemember to always be polite and professional."
-            }
+        "name": "Test Agent",
+        "configuration": {
+            "instructions": "Your Role: You are a helpful assistant.\n\nYour Tasks:\n1. Help users with their questions\n2. Provide clear explanations\n3. Write clean code\n\nRemember to always be polite and professional."
         }
     });
 
@@ -205,8 +203,12 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
     assert_eq!(count, 1, "Should have processed 1 agent");
 
     // Verify the output file uses triple-quote syntax
-    let agent_file = output_dir.join("agent").join("Test Agent.json");
-    assert!(agent_file.exists(), "Agent file should exist");
+    let agent_file = output_dir.join("agent").join("test-agent.json");
+    assert!(
+        agent_file.exists(),
+        "Agent file should exist at {}",
+        agent_file.display()
+    );
 
     let content = std::fs::read_to_string(&agent_file)?;
 
@@ -234,7 +236,7 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
 
     // Verify we can parse it back correctly
     let parsed: Value = kibana_object_manager::storage::from_json5_str(&content)?;
-    let instructions = parsed["attributes"]["configuration"]["instructions"]
+    let instructions = parsed["configuration"]["instructions"]
         .as_str()
         .expect("Instructions should be a string");
 
