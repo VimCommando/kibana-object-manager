@@ -1,8 +1,0 @@
-{
-  "configuration": {},
-  "description": "Generate an ES|QL query from a natural language query.",
-  "id": "platform.core.generate_esql",
-  "readonly": true,
-  "tags": [],
-  "type": "builtin"
-}

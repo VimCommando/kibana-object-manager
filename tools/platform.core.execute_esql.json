@@ -1,8 +1,0 @@
-{
-  "configuration": {},
-  "description": "Execute an ES|QL query and return the results in a tabular format.\n\n**IMPORTANT**: This tool only **runs** queries; it does not write them.\nThink of this as the final step after a query has been prepared.\n\nYou **must** get the query from one of two sources before calling this tool:\n1.  The output of the `platform.core.generate_esql` tool (if the tool is available).\n2.  A verbatim query provided directly by the user.\n\nUnder no circumstances should you invent, guess, or modify a query yourself for this tool.\nIf you need a query, use the `platform.core.generate_esql` tool first.",
-  "id": "platform.core.execute_esql",
-  "readonly": true,
-  "tags": [],
-  "type": "builtin"
-}

@@ -1,8 +1,0 @@
-{
-  "configuration": {},
-  "description": "A powerful tool for searching and analyzing data within your Elasticsearch cluster.\nIt supports both full-text relevance searches and structured analytical queries.\n\nUse this tool for any query that involves finding documents, counting, aggregating, or summarizing data from a known index.\n\nExamples of queries:\n- \"find articles about serverless architecture\"\n- \"search for support tickets mentioning 'billing issue' or 'refund request'\"\n- \"what is our policy on parental leave?\"\n- \"list all products where the category is 'electronics'\"\n- \"show me the last 5 documents from that index\"\n- \"show me the sales over the last year break down by month\"\n\nNote:\n- The 'index' parameter can be used to specify which index to search against.\n If not provided, the tool will decide itself which is the best index to use.\n- It is perfectly fine not to specify the 'index' parameter. It should only be specified when you already\n know about the index and fields you want to search on, e.g. if the user explicitly specified it.\n    ",
-  "id": "platform.core.search",
-  "readonly": true,
-  "tags": [],
-  "type": "builtin"
-}

@@ -1,8 +1,0 @@
-{
-  "configuration": {},
-  "description": "Retrieve the status of a workflow execution.\n\nIf the workflow execution has completed, the final output will be returned. Otherwise, the execution status will be returned.\n\n**important**: do **NOT** call this tool directly after calling a workflow tool.\nInstead, if the workflow didn't complete, tell the user they can ask you to check the execution.",
-  "id": "platform.core.get_workflow_execution_status",
-  "readonly": true,
-  "tags": [],
-  "type": "builtin"
-}
