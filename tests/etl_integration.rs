@@ -253,6 +253,100 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_tool_multiline_query_formatting() -> Result<()> {
+    use kibana_object_manager::transform::MultilineFieldFormatter;
+
+    let temp_dir = TempDir::new()?;
+    let output_dir = temp_dir.path().join("tools");
+    std::fs::create_dir_all(&output_dir)?;
+
+    // Create a mock tool with multiline ES|QL query (similar to what Kibana returns)
+    let tool = json!({
+        "type": "esql",
+        "id": "test-tool",
+        "configuration": {
+            "query": "FROM settings-ilm-esdiag\n/* Check for hot phases > 30d */\n| WHERE diagnostic.id == ?diagnostic_id\n| LIMIT 10"
+        }
+    });
+
+    // Create a mock extractor
+    struct SingleToolExtractor {
+        tool: Value,
+    }
+
+    impl Extractor for SingleToolExtractor {
+        type Item = Value;
+
+        fn extract(&self) -> impl std::future::Future<Output = Result<Vec<Self::Item>>> + Send {
+            async { Ok(vec![self.tool.clone()]) }
+        }
+    }
+
+    let extractor = SingleToolExtractor { tool: tool.clone() };
+
+    // Transform with MultilineFieldFormatter
+    let transformer = MultilineFieldFormatter::for_tools();
+
+    // Load to directory
+    let loader = DirectoryWriter::new(&output_dir)?;
+
+    // Run pipeline
+    let pipeline = Pipeline::new(extractor, transformer, loader);
+    let count = pipeline.run().await?;
+
+    assert_eq!(count, 1, "Should have processed 1 tool");
+
+    // Verify the output file uses triple-quote syntax
+    let tool_file = output_dir.join("esql").join("test-tool.json");
+    assert!(
+        tool_file.exists(),
+        "Tool file should exist at {}",
+        tool_file.display()
+    );
+
+    let content = std::fs::read_to_string(&tool_file)?;
+
+    // Print the formatted content for verification
+    println!("\n=== Formatted Tool JSON ===");
+    println!("{}", content);
+    println!("=== End of Formatted JSON ===\n");
+
+    // Check that triple-quotes are used for multiline query
+    assert!(
+        content.contains(r#""""#),
+        "Should contain triple-quotes for multiline string: {}",
+        content
+    );
+
+    // Verify the query is properly formatted with real newlines
+    assert!(
+        content.contains("FROM settings-ilm-esdiag"),
+        "Should contain query content"
+    );
+    assert!(
+        content.contains("/* Check for hot phases > 30d */"),
+        "Should contain comment section"
+    );
+
+    // Verify we can parse it back correctly
+    let parsed: Value = kibana_object_manager::storage::from_json5_str(&content)?;
+    let query = parsed["configuration"]["query"]
+        .as_str()
+        .expect("Query should be a string");
+
+    assert!(
+        query.contains('\n'),
+        "Query should contain actual newlines after parsing"
+    );
+    assert!(
+        query.contains("FROM settings-ilm-esdiag"),
+        "Content should be preserved"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_ndjson_to_directory_pipeline() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let input_file = temp_dir.path().join("input.ndjson");

@@ -37,6 +37,11 @@ impl MultilineFieldFormatter {
         Self::new(vec!["configuration.instructions"])
     }
 
+    /// Create formatter configured for tool queries
+    pub fn for_tools() -> Self {
+        Self::new(vec!["configuration.query"])
+    }
+
     /// Get a nested mutable field by dot-separated path
     fn get_nested_mut<'a>(obj: &'a mut Value, path: &str) -> Option<&'a mut Value> {
         let parts: Vec<&str> = path.split('.').collect();
@@ -211,5 +216,32 @@ mod tests {
 
         // Should be unchanged
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_tool_query_preserved() {
+        let query = "FROM settings-ilm-esdiag\n/* Check for hot phases > 30d */\n| WHERE diagnostic.id == ?diagnostic_id\n| LIMIT 10";
+
+        let input = json!({
+            "id": "tool-1",
+            "type": "esql",
+            "configuration": {
+                "query": query
+            }
+        });
+
+        let formatter = MultilineFieldFormatter::for_tools();
+        let result = formatter.transform(input.clone()).unwrap();
+
+        // Query should be unchanged - we don't modify content
+        assert_eq!(result["configuration"]["query"].as_str().unwrap(), query);
+
+        // The string should still contain newlines
+        assert!(
+            result["configuration"]["query"]
+                .as_str()
+                .unwrap()
+                .contains('\n')
+        );
     }
 }

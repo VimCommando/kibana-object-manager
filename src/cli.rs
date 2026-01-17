@@ -2244,6 +2244,13 @@ pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
     // Extract tools
     let tools = extractor.extract().await?;
 
+    // Transform tools - format multiline query field
+    let formatter = MultilineFieldFormatter::for_tools();
+    let tools: Vec<_> = tools
+        .into_iter()
+        .map(|tool| formatter.transform(tool))
+        .collect::<Result<_>>()?;
+
     // Write each tool to its own JSON file
     let tools_dir = project_dir.join("tools");
     std::fs::create_dir_all(&tools_dir)?;
@@ -2260,7 +2267,7 @@ pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
         let filename = tool.get("name").and_then(|v| v.as_str()).unwrap_or(tool_id);
 
         let tool_file = tools_dir.join(format!("{}.json", filename));
-        let json = serde_json::to_string_pretty(tool)?;
+        let json = storage::to_string_with_multiline(tool)?;
         std::fs::write(&tool_file, json)?;
 
         log::debug!("Wrote tool: {}", tool_file.display());
@@ -2636,6 +2643,13 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
     let extractor = ToolsExtractor::new(client.clone(), space_id, Some(manifest));
     let tools = extractor.extract().await?;
 
+    // Transform tools - format multiline query field
+    let formatter = MultilineFieldFormatter::for_tools();
+    let tools: Vec<_> = tools
+        .into_iter()
+        .map(|tool| formatter.transform(tool))
+        .collect::<Result<_>>()?;
+
     // Write each tool to its own JSON file
     let tools_dir = get_space_tools_dir(project_dir, space_id);
     std::fs::create_dir_all(&tools_dir)?;
@@ -2650,7 +2664,7 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
             .ok_or_else(|| eyre::eyre!("Tool missing both 'name' and 'id' fields"))?;
 
         let tool_file = tools_dir.join(format!("{}.json", tool_name));
-        let json = serde_json::to_string_pretty(tool)?;
+        let json = storage::to_string_with_multiline(tool)?;
         std::fs::write(&tool_file, json)?;
         count += 1;
     }
