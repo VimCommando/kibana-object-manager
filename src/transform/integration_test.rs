@@ -2,19 +2,19 @@
 mod integration_test {
     use crate::etl::Transformer;
     use crate::transform::{FieldUnescaper, VegaSpecUnescaper};
-    use serde_json::Value;
-    use std::fs;
+    use serde_json::json;
 
     #[test]
     fn test_full_vega_pipeline_with_real_data() {
-        // Read the actual raw Kibana export
-        let test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/ironhide/export.ndjson");
-
-        let raw_data = fs::read_to_string(test_file).expect("Failed to read export file");
-        let first_line = raw_data.lines().next().expect("Export file is empty");
-
-        let mut value: Value = serde_json::from_str(first_line).expect("Failed to parse JSON");
+        // Create a mock Kibana visualization export with escaped visState
+        let mut value = json!({
+            "type": "visualization",
+            "id": "test-vega-vis",
+            "attributes": {
+                "title": "Test Vega Visualization",
+                "visState": "{\"type\":\"vega\",\"params\":{\"spec\":\"{\\\"$schema\\\":\\\"https://vega.github.io/schema/vega-lite/v5.json\\\",\\\"data\\\":{\\\"values\\\":[{\\\"x\\\":1,\\\"y\\\":2}]},\\\"mark\\\":\\\"point\\\",\\\"encoding\\\":{\\\"x\\\":{\\\"field\\\":\\\"x\\\",\\\"type\\\":\\\"quantitative\\\"},\\\"y\\\":{\\\"field\\\":\\\"y\\\",\\\"type\\\":\\\"quantitative\\\"}}}\"}}"
+            }
+        });
 
         // Verify original state
         let vis_state_original = &value["attributes"]["visState"];
@@ -76,19 +76,43 @@ mod integration_test {
 
     #[test]
     fn test_vega_pipeline_preserves_comments() {
-        // Read the actual raw Kibana export - line 3 has a vega vis with comments
-        let test_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/ironhide/export.ndjson");
+        // Create a mock Kibana visualization with comments in the Vega spec
+        // The spec is escaped as a string within visState (which is also escaped)
+        let vega_spec_with_comments = r#"{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  /* xray tango */
+  // Node load percent by tier
+  "data": {
+    "values": [{"tier": "hot", "load": 75}, {"tier": "warm", "load": 45}]
+  },
+  "mark": "bar",
+  "encoding": {
+    "x": {"field": "tier", "type": "nominal"},
+    "y": {"field": "load", "type": "quantitative"}
+  }
+}"#;
 
-        let raw_data = fs::read_to_string(test_file).expect("Failed to read export file");
+        // Escape the spec for inclusion in visState JSON string
+        let escaped_spec = vega_spec_with_comments
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
 
-        // Get line 3 (index 2) which has the commented visualization
-        let third_line = raw_data
-            .lines()
-            .nth(2)
-            .expect("Export file should have at least 3 lines");
+        // Create visState JSON as a string
+        let vis_state_json = format!(
+            r#"{{"type":"vega","params":{{"spec":"{}"}}}}"#,
+            escaped_spec
+        );
 
-        let mut value: Value = serde_json::from_str(third_line).expect("Failed to parse JSON");
+        // Create the full saved object with escaped visState
+        let mut value = json!({
+            "type": "visualization",
+            "id": "test-vega-commented",
+            "attributes": {
+                "title": "Vega with Comments",
+                "visState": vis_state_json
+            }
+        });
 
         // Apply FieldUnescaper first
         let field_unescaper = FieldUnescaper::default_kibana_fields();
