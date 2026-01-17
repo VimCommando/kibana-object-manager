@@ -10,7 +10,10 @@ use crate::{
     kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
     migration::load_saved_objects_manifest,
     storage::{self, DirectoryReader, DirectoryWriter},
-    transform::{FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder},
+    transform::{
+        FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, VegaSpecEscaper,
+        VegaSpecUnescaper,
+    },
 };
 use eyre::{Context, Result};
 use std::path::Path;
@@ -113,7 +116,7 @@ pub async fn pull_saved_objects(
 
 /// Push saved objects from local directory to Kibana
 ///
-/// Pipeline: DirectoryReader → FieldEscaper → ManagedFlagAdder → SavedObjectsLoader
+/// Pipeline: DirectoryReader → VegaSpecEscaper → FieldEscaper → ManagedFlagAdder → SavedObjectsLoader
 /// Also pushes spaces if spaces.yml exists
 ///
 /// # Arguments
@@ -184,7 +187,7 @@ pub async fn push_saved_objects(
 
 /// Bundle saved objects to NDJSON file for distribution
 ///
-/// Pipeline: DirectoryReader → FieldEscaper → ManagedFlagAdder → Write to NDJSON
+/// Pipeline: DirectoryReader → VegaSpecEscaper → FieldEscaper → ManagedFlagAdder → Write to NDJSON
 /// Creates per-space bundles in bundle/{space_id}/ directories
 ///
 /// # Arguments
@@ -317,13 +320,15 @@ pub async fn init_from_export(
     // Transform: Drop metadata and unescape
     let drop_fields = FieldDropper::default_kibana_fields();
     let unescape = FieldUnescaper::default_kibana_fields();
+    let vega_unescape = VegaSpecUnescaper::new();
 
     let dropped = drop_fields.transform_many(objects)?;
     let unescaped = unescape.transform_many(dropped)?;
+    let vega_unescaped = vega_unescape.transform_many(unescaped)?;
 
     // Load to directory
     use crate::etl::Loader;
-    let count = writer.load(unescaped).await?;
+    let count = writer.load(vega_unescaped).await?;
 
     log::info!("  Objects: {}", objects_dir.display());
     log::info!("✓ Wrote {} object files", count);
@@ -424,10 +429,12 @@ pub async fn add_objects_to_manifest(
     // Transform: Drop metadata and unescape
     let drop_fields = FieldDropper::default_kibana_fields();
     let unescape = FieldUnescaper::default_kibana_fields();
+    let vega_unescape = VegaSpecUnescaper::new();
 
     let dropped = drop_fields.transform_many(new_objects)?;
     let unescaped = unescape.transform_many(dropped)?;
-    let count = writer.load(unescaped).await?;
+    let vega_unescaped = vega_unescape.transform_many(unescaped)?;
+    let count = writer.load(vega_unescaped).await?;
 
     log::info!("✓ Wrote {} new object file(s)", count);
 
@@ -2477,6 +2484,7 @@ async fn pull_space_saved_objects(
     // Transform: Drop metadata fields and unescape JSON strings
     let drop_fields = FieldDropper::default_kibana_fields();
     let unescape = FieldUnescaper::default_kibana_fields();
+    let vega_unescape = VegaSpecUnescaper::new();
 
     // Load to space-specific directory
     let objects_dir = get_space_objects_dir(project_dir, space_id);
@@ -2485,11 +2493,12 @@ async fn pull_space_saved_objects(
     // Clear directory before writing
     writer.clear()?;
 
-    // Extract → Drop → Unescape → Load
+    // Extract → Drop → Unescape → VegaUnescape → Load
     let objects = extractor.extract().await?;
     let dropped = drop_fields.transform_many(objects)?;
     let unescaped = unescape.transform_many(dropped)?;
-    let count = writer.load(unescaped).await?;
+    let vega_unescaped = vega_unescape.transform_many(unescaped)?;
+    let count = writer.load(vega_unescaped).await?;
 
     log::info!(
         "✓ Pulled {} saved object(s) for space '{}'",
@@ -2650,15 +2659,17 @@ async fn push_space_saved_objects(
     log::info!("Pushing saved objects for space '{}'", space_id);
     let reader = DirectoryReader::new(&objects_dir);
 
-    // Transform: Escape JSON strings and add managed flag
+    // Transform: Escape Vega specs, escape JSON strings, and add managed flag
+    let vega_escaper = VegaSpecEscaper::new();
     let escaper = FieldEscaper::default_kibana_fields();
     let managed_flag = ManagedFlagAdder::new(managed);
 
     let loader = SavedObjectsLoader::new(client.clone(), space_id);
 
-    // Read → Escape → Add Managed Flag → Load
+    // Read → Vega Escape → Field Escape → Add Managed Flag → Load
     let objects = reader.extract().await?;
-    let escaped = escaper.transform_many(objects)?;
+    let vega_escaped = vega_escaper.transform_many(objects)?;
+    let escaped = escaper.transform_many(vega_escaped)?;
     let flagged = managed_flag.transform_many(escaped)?;
     let count = loader.load(flagged).await?;
 
@@ -2787,13 +2798,15 @@ async fn bundle_space_saved_objects(
 
     let reader = DirectoryReader::new(&objects_dir);
 
-    // Transform: Escape JSON strings and add managed flag
+    // Transform: Escape Vega specs, escape JSON strings, and add managed flag
+    let vega_escaper = VegaSpecEscaper::new();
     let escaper = FieldEscaper::default_kibana_fields();
     let managed_flag = ManagedFlagAdder::new(managed);
 
-    // Read → Escape → Add Managed Flag
+    // Read → Vega Escape → Field Escape → Add Managed Flag
     let objects = reader.extract().await?;
-    let escaped = escaper.transform_many(objects)?;
+    let vega_escaped = vega_escaper.transform_many(objects)?;
+    let escaped = escaper.transform_many(vega_escaped)?;
     let flagged = managed_flag.transform_many(escaped)?;
 
     // Write to NDJSON file
