@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Workflows Loader Payload Sanitization
 The `WorkflowsLoader` MUST sanitize workflow JSON payloads before sending them to the Kibana API. It MUST remove read-only system fields to prevent 400 Bad Request errors.
