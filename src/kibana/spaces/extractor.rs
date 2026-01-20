@@ -2,7 +2,7 @@
 //!
 //! Extracts space definitions from Kibana via GET /api/spaces/space
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Extractor;
 
 use eyre::{Context, Result};
@@ -16,13 +16,14 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::spaces::{SpaceEntry, SpacesExtractor, SpacesManifest};
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
 /// let manifest = SpacesManifest::with_spaces(vec![
 ///     SpaceEntry::new("default".to_string(), "Default".to_string()),
 ///     SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
@@ -34,7 +35,7 @@ use serde_json::Value;
 /// # }
 /// ```
 pub struct SpacesExtractor {
-    client: Kibana,
+    client: KibanaClient,
     manifest: Option<super::SpacesManifest>,
 }
 
@@ -42,14 +43,14 @@ impl SpacesExtractor {
     /// Create a new spaces extractor
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
+    /// * `client` - Kibana client (spaces are global, not space-scoped)
     /// * `manifest` - Optional manifest to filter which spaces to extract
-    pub fn new(client: Kibana, manifest: Option<super::SpacesManifest>) -> Self {
+    pub fn new(client: KibanaClient, manifest: Option<super::SpacesManifest>) -> Self {
         Self { client, manifest }
     }
 
     /// Create an extractor that fetches all spaces
-    pub fn all(client: Kibana) -> Self {
+    pub fn all(client: KibanaClient) -> Self {
         Self::new(client, None)
     }
 
@@ -201,12 +202,14 @@ mod tests {
     use super::*;
     use crate::client::Auth;
     use serde_json::json;
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_filter_with_manifest() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
         let manifest = super::super::SpacesManifest::with_spaces(vec![
             super::super::SpaceEntry::new("default".to_string(), "Default".to_string()),
             super::super::SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
@@ -235,8 +238,9 @@ mod tests {
 
     #[test]
     fn test_filter_without_manifest() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
         let extractor = SpacesExtractor::all(client);
 
         let spaces = vec![

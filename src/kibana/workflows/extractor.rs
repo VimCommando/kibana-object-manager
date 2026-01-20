@@ -2,7 +2,7 @@
 //!
 //! Extracts workflow definitions from Kibana via GET /api/workflows/<id>
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Extractor;
 
 use eyre::{Context, Result};
@@ -16,26 +16,27 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::workflows::{WorkflowsExtractor, WorkflowsManifest, WorkflowEntry};
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
 /// let manifest = WorkflowsManifest::with_workflows(vec![
 ///     WorkflowEntry::new("workflow-123", "my-workflow"),
 ///     WorkflowEntry::new("workflow-456", "alert-workflow")
 /// ]);
 ///
-/// let extractor = WorkflowsExtractor::new(client, "default", Some(manifest));
+/// let extractor = WorkflowsExtractor::new(space_client, Some(manifest));
 /// let workflows = extractor.extract().await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct WorkflowsExtractor {
-    client: Kibana,
-    space_id: String,
+    client: KibanaClient,
     manifest: Option<super::WorkflowsManifest>,
 }
 
@@ -43,19 +44,10 @@ impl WorkflowsExtractor {
     /// Create a new workflows extractor
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space_id` - Space ID to extract from
+    /// * `client` - Space-scoped Kibana client
     /// * `manifest` - Manifest containing workflow IDs to extract
-    pub fn new(
-        client: Kibana,
-        space_id: impl Into<String>,
-        manifest: Option<super::WorkflowsManifest>,
-    ) -> Self {
-        Self {
-            client,
-            space_id: space_id.into(),
-            manifest,
-        }
+    pub fn new(client: KibanaClient, manifest: Option<super::WorkflowsManifest>) -> Self {
+        Self { client, manifest }
     }
 
     /// Search for workflows via the Workflows API
@@ -82,16 +74,12 @@ impl WorkflowsExtractor {
         log::debug!(
             "Searching workflows with query: {:?} in space '{}'",
             query,
-            self.space_id
+            self.client.space_id()
         );
 
         let response = self
             .client
-            .post_json_value_internal_with_space(
-                &self.space_id,
-                "api/workflows/search",
-                &search_body,
-            )
+            .post_json_value_internal("api/workflows/search", &search_body)
             .await
             .context("Failed to search workflows")?;
 
@@ -125,12 +113,12 @@ impl WorkflowsExtractor {
         log::debug!(
             "Fetching workflow '{}' from space '{}'",
             workflow_id,
-            self.space_id
+            self.client.space_id()
         );
 
         let response = self
             .client
-            .get_internal_with_space(&self.space_id, &path)
+            .get_internal(&path)
             .await
             .with_context(|| format!("Failed to fetch workflow '{}'", workflow_id))?;
 
@@ -214,13 +202,16 @@ impl Extractor for WorkflowsExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_extractor_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let _extractor = WorkflowsExtractor::new(client, "default", None);
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let _extractor = WorkflowsExtractor::new(space_client, None);
     }
 }

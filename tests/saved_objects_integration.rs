@@ -9,7 +9,7 @@
 
 use eyre::Result;
 use kibana_object_manager::{
-    client::{Auth, Kibana},
+    client::{Auth, KibanaClient},
     etl::{Extractor, Loader},
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader, SavedObjectsManifest},
 };
@@ -23,12 +23,13 @@ async fn test_saved_objects_extract() -> Result<()> {
 
     println!("Manifest loaded: {} objects", manifest.count());
 
-    // Create client
+    // Create client and get space client for "test" space
     let url = Url::parse("http://localhost:5601")?;
-    let client = Kibana::try_new(url, Auth::None)?;
+    let client = KibanaClient::try_new(url, Auth::None, ".")?;
+    let space_client = client.space("test")?;
 
     // Create extractor for test space
-    let extractor = SavedObjectsExtractor::new(client, manifest, "test");
+    let extractor = SavedObjectsExtractor::new(space_client, manifest);
 
     // Extract objects
     let objects = extractor.extract().await?;
@@ -65,9 +66,10 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 1: Extract from test space
     let manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;
     let url = Url::parse("http://localhost:5601")?;
-    let client = Kibana::try_new(url.clone(), Auth::None)?;
+    let client = KibanaClient::try_new(url.clone(), Auth::None, ".")?;
+    let space_client = client.space("test")?;
 
-    let extractor = SavedObjectsExtractor::new(client.clone(), manifest, "test");
+    let extractor = SavedObjectsExtractor::new(space_client.clone(), manifest);
     let objects = extractor.extract().await?;
 
     println!(
@@ -86,10 +88,9 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     );
 
     let delete_url = format!("/api/saved_objects/{}/{}", object_type, object_id);
-    let response = client
+    let response = space_client
         .request(
             reqwest::Method::DELETE,
-            Some("test"),
             &std::collections::HashMap::new(),
             &delete_url,
             None,
@@ -101,7 +102,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
 
     // Step 3: Re-import the object
     println!("Step 3: Re-importing object to test space");
-    let loader = SavedObjectsLoader::new(client, "test").with_overwrite(true);
+    let loader = SavedObjectsLoader::new(space_client.clone()).with_overwrite(true);
     let count = loader.load(objects.clone()).await?;
 
     println!("   Imported {} object(s)", count);
@@ -110,10 +111,11 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 4: Verify it's back
     println!("Step 4: Verifying object exists again");
     let verify_url = Url::parse("http://localhost:5601")?;
-    let verify_client = Kibana::try_new(verify_url, Auth::None)?;
+    let verify_client = KibanaClient::try_new(verify_url, Auth::None, ".")?;
+    let verify_space_client = verify_client.space("test")?;
 
     let verify_manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;
-    let verify_extractor = SavedObjectsExtractor::new(verify_client, verify_manifest, "test");
+    let verify_extractor = SavedObjectsExtractor::new(verify_space_client, verify_manifest);
     let verify_objects = verify_extractor.extract().await?;
 
     assert_eq!(verify_objects.len(), 1, "Object should exist again");

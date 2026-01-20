@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
         Commands::Auth => {
             log::info!("Testing authorization to Kibana");
 
-            match load_kibana_client() {
+            match load_kibana_client(".") {
                 Ok(client) => match client.test_connection().await {
                     Ok(response) => {
                         if response.status().is_success() {

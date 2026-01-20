@@ -1,7 +1,7 @@
 //! CLI helper functions
 
 use crate::{
-    client::{Auth, Kibana},
+    client::{Auth, KibanaClient},
     etl::{Extractor, Loader, Transformer},
     kibana::agents::{AgentsExtractor, AgentsLoader, AgentsManifest},
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
@@ -27,7 +27,10 @@ use url::Url;
 /// - KIBANA_USERNAME: Username for basic auth (optional)
 /// - KIBANA_PASSWORD: Password for basic auth (optional)
 /// - KIBANA_APIKEY: API key for auth (optional, conflicts with username/password)
-pub fn load_kibana_client() -> Result<Kibana> {
+///
+/// # Arguments
+/// * `project_dir` - Project directory path containing spaces.yml
+pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient> {
     let url_str = std::env::var("KIBANA_URL").context("KIBANA_URL environment variable not set")?;
     let url = Url::parse(&url_str).with_context(|| format!("Invalid KIBANA_URL: {}", url_str))?;
 
@@ -42,7 +45,7 @@ pub fn load_kibana_client() -> Result<Kibana> {
         Auth::None
     };
 
-    Kibana::try_new(url, auth).context("Failed to create Kibana client")
+    KibanaClient::try_new(url, auth, project_dir).context("Failed to create Kibana client")
 }
 
 /// Pull saved objects from Kibana to local directory
@@ -60,14 +63,14 @@ pub async fn pull_saved_objects(
     let project_dir = project_dir.as_ref();
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
 
     // Pull space definitions FIRST (before any other operations)
     // This ensures space definitions are up-to-date before pulling resources
     let spaces_manifest_path = project_dir.join("spaces.yml");
     if spaces_manifest_path.exists() {
         log::info!("Pulling space definitions...");
-        match pull_spaces_internal(project_dir, client.clone()).await {
+        match pull_spaces_internal(project_dir, &client).await {
             Ok(space_count) => {
                 log::info!("✓ Pulled {} space definition(s)", space_count);
             }
@@ -77,33 +80,35 @@ pub async fn pull_saved_objects(
         }
     }
 
-    // Load space context - determines which spaces to operate on
-    // If no spaces.yml exists, defaults to ["default"]
-    let space_context = crate::space_context::SpaceContext::load(project_dir, space_filter)?;
+    // Determine which spaces to operate on
+    let target_space_ids = get_target_space_ids(&client, space_filter);
 
     let mut total_count = 0;
 
     // Pull each managed space
-    for space_id in space_context.target_space_ids() {
+    for space_id in &target_space_ids {
         log::info!("Processing space: {}", space_id.cyan());
 
+        // Get space client for this space
+        let space_client = client.space(space_id)?;
+
         // Pull saved objects for this space
-        if let Ok(count) = pull_space_saved_objects(project_dir, &client, space_id).await {
+        if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
             total_count += count;
         }
 
         // Pull workflows for this space
-        if let Ok(count) = pull_space_workflows(project_dir, &client, space_id).await {
+        if let Ok(count) = pull_space_workflows(project_dir, &space_client).await {
             log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
         }
 
         // Pull agents for this space
-        if let Ok(count) = pull_space_agents(project_dir, &client, space_id).await {
+        if let Ok(count) = pull_space_agents(project_dir, &space_client).await {
             log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
         }
 
         // Pull tools for this space
-        if let Ok(count) = pull_space_tools(project_dir, &client, space_id).await {
+        if let Ok(count) = pull_space_tools(project_dir, &space_client).await {
             log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
         }
     }
@@ -132,14 +137,14 @@ pub async fn push_saved_objects(
     let project_dir = project_dir.as_ref();
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
 
     // Push space definitions FIRST (before any other operations)
     // This ensures spaces exist in Kibana before pushing resources to them
     let spaces_manifest_path = project_dir.join("spaces.yml");
     if spaces_manifest_path.exists() {
         log::info!("Pushing space definitions...");
-        match push_spaces_internal(project_dir, client.clone()).await {
+        match push_spaces_internal(project_dir, &client).await {
             Ok(space_count) => {
                 log::info!("✓ Pushed {} space definition(s)", space_count);
             }
@@ -149,8 +154,8 @@ pub async fn push_saved_objects(
         }
     }
 
-    // Load space context
-    let space_context = crate::space_context::SpaceContext::load(project_dir, space_filter)?;
+    // Determine which spaces to operate on
+    let target_space_ids = get_target_space_ids(&client, space_filter);
 
     let mut total_saved_objects = 0;
     let mut total_workflows = 0;
@@ -158,11 +163,14 @@ pub async fn push_saved_objects(
     let mut total_tools = 0;
 
     // Push each managed space
-    for space_id in space_context.target_space_ids() {
+    for space_id in &target_space_ids {
         log::info!("Processing space: {}", space_id.cyan());
 
+        // Get space client for this space
+        let space_client = client.space(space_id)?;
+
         // Push saved objects for this space
-        match push_space_saved_objects(project_dir, &client, space_id, managed).await {
+        match push_space_saved_objects(project_dir, &space_client, managed).await {
             Ok(count) => {
                 total_saved_objects += count;
             }
@@ -176,7 +184,7 @@ pub async fn push_saved_objects(
         }
 
         // Push workflows for this space
-        match push_space_workflows(project_dir, &client, space_id).await {
+        match push_space_workflows(project_dir, &space_client).await {
             Ok(count) => {
                 total_workflows += count;
             }
@@ -190,7 +198,7 @@ pub async fn push_saved_objects(
         }
 
         // Push agents for this space
-        match push_space_agents(project_dir, &client, space_id).await {
+        match push_space_agents(project_dir, &space_client).await {
             Ok(count) => {
                 total_agents += count;
             }
@@ -200,7 +208,7 @@ pub async fn push_saved_objects(
         }
 
         // Push tools for this space
-        match push_space_tools(project_dir, &client, space_id).await {
+        match push_space_tools(project_dir, &space_client).await {
             Ok(count) => {
                 total_tools += count;
             }
@@ -239,13 +247,13 @@ pub async fn bundle_to_ndjson(
     let project_dir = project_dir.as_ref();
     let _output_file = output_file.as_ref(); // Keep for backward compatibility
 
-    // Load space context
-    let space_context = crate::space_context::SpaceContext::load(project_dir, space_filter)?;
+    // Determine which spaces to operate on (reads from spaces.yml directly)
+    let target_space_ids = get_target_space_ids_from_manifest(project_dir, space_filter);
 
     let mut total_count = 0;
 
     // Bundle each managed space
-    for space_id in space_context.target_space_ids() {
+    for space_id in &target_space_ids {
         log::info!("Bundling space: {}", space_id.cyan());
 
         // Bundle saved objects for this space
@@ -414,10 +422,10 @@ pub async fn add_objects_to_manifest(
     } else if let Some(object_specs) = objects_to_add {
         // Fetch from Kibana
         log::info!("Fetching {} object(s) from Kibana", object_specs.len());
-        let client = load_kibana_client()?;
+        let client = load_kibana_client(project_dir)?;
         // TODO: This needs to be refactored for multi-space support
         // For now, hardcode "default" space until multi-space architecture is complete
-        let space = "default";
+        let space_client = client.space("default")?;
 
         // Parse object specs (format: "type=id" or "type:id")
         let mut saved_objects = Vec::new();
@@ -436,7 +444,7 @@ pub async fn add_objects_to_manifest(
         let temp_manifest = SavedObjectsManifest::with_objects(saved_objects);
 
         // Use extractor to fetch these specific objects
-        let extractor = SavedObjectsExtractor::new(client, temp_manifest, space);
+        let extractor = SavedObjectsExtractor::new(space_client, temp_manifest);
         extractor.extract().await?
     } else {
         eyre::bail!("Must specify either --objects or --file");
@@ -499,8 +507,8 @@ pub async fn add_workflows_to_manifest(
     // Validate that space is managed (if spaces.yml exists)
     let spaces_manifest_path = project_dir.join("spaces.yml");
     if spaces_manifest_path.exists() {
-        let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
-        if !space_context.is_space_managed(space_id) {
+        let manifest = SpacesManifest::read(&spaces_manifest_path)?;
+        if !manifest.spaces.iter().any(|s| s.id == space_id) {
             eyre::bail!(
                 "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
                 space_id.cyan(),
@@ -588,8 +596,9 @@ pub async fn add_workflows_to_manifest(
             "Searching workflows via API in space {}...",
             space_id.cyan()
         );
-        let client = load_kibana_client()?;
-        let extractor = WorkflowsExtractor::new(client, space_id, None);
+        let client = load_kibana_client(project_dir)?;
+        let space_client = client.space(space_id)?;
+        let extractor = WorkflowsExtractor::new(space_client, None);
 
         extractor.search_workflows(query.as_deref(), None).await?
     };
@@ -789,7 +798,7 @@ pub async fn add_spaces_to_manifest(
             log::warn!("Spaces API doesn't support query filtering - fetching all spaces");
         }
         log::info!("Fetching spaces via API...");
-        let client = load_kibana_client()?;
+        let client = load_kibana_client(project_dir)?;
         let extractor = SpacesExtractor::new(client, None);
 
         extractor.search_spaces(query.as_deref()).await?
@@ -906,10 +915,61 @@ fn load_spaces_manifest(project_dir: impl AsRef<Path>) -> Result<SpacesManifest>
     SpacesManifest::read(&manifest_path)
 }
 
+/// Get target space IDs to operate on from KibanaClient
+///
+/// If `space_filter` is provided, returns only those space IDs.
+/// Otherwise, returns all space IDs from the client.
+fn get_target_space_ids(client: &KibanaClient, space_filter: Option<&str>) -> Vec<String> {
+    if let Some(filter) = space_filter {
+        // Parse comma-separated list
+        filter
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        // Return all space IDs from the client
+        client.space_ids().into_iter().map(String::from).collect()
+    }
+}
+
+/// Get target space IDs to operate on from the spaces manifest file directly
+///
+/// If `space_filter` is provided, returns only those space IDs.
+/// Otherwise, returns all space IDs from the manifest file.
+/// Falls back to ["default"] if no manifest exists.
+fn get_target_space_ids_from_manifest(
+    project_dir: &Path,
+    space_filter: Option<&str>,
+) -> Vec<String> {
+    if let Some(filter) = space_filter {
+        // Parse comma-separated list
+        return filter
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
+    // Try to load from spaces.yml
+    let manifest_path = project_dir.join("spaces.yml");
+    if manifest_path.exists() {
+        if let Ok(manifest) = SpacesManifest::read(&manifest_path) {
+            return manifest.spaces.into_iter().map(|s| s.id).collect();
+        }
+    }
+
+    // Default to ["default"]
+    vec!["default".to_string()]
+}
+
 /// Pull spaces from Kibana to local directory (internal)
 ///
 /// Pipeline: SpacesExtractor → Write to {space_id}/space.json files
-async fn pull_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn pull_spaces_internal(
+    project_dir: impl AsRef<Path>,
+    client: &KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading spaces manifest from {}", project_dir.display());
@@ -918,7 +978,7 @@ async fn pull_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
     // Build the extract pipeline
     log::debug!("Extracting spaces from Kibana...");
-    let extractor = SpacesExtractor::new(client, Some(manifest));
+    let extractor = SpacesExtractor::new(client.clone(), Some(manifest));
 
     // Extract spaces
     let spaces = extractor.extract().await?;
@@ -961,7 +1021,7 @@ pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Manifest loaded: {} space(s)", manifest.count());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
 
     // Build the extract pipeline
     log::info!("Extracting spaces from Kibana...");
@@ -1002,7 +1062,10 @@ pub async fn pull_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
 /// Push spaces from local directory to Kibana (internal)
 ///
 /// Pipeline: Read from {space_id}/space.json → SpacesLoader
-async fn push_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn push_spaces_internal(
+    project_dir: impl AsRef<Path>,
+    client: &KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading spaces from {}", project_dir.display());
@@ -1031,7 +1094,7 @@ async fn push_spaces_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
     log::debug!("Read {} space(s) from disk", spaces.len());
 
-    let loader = SpacesLoader::new(client);
+    let loader = SpacesLoader::new(client.clone());
 
     // Load spaces to Kibana
     let count = loader.load(spaces).await?;
@@ -1072,7 +1135,7 @@ pub async fn push_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Read {} space(s) from disk", spaces.len());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
 
     let loader = SpacesLoader::new(client);
 
@@ -1199,7 +1262,10 @@ fn load_workflows_manifest(project_dir: impl AsRef<Path>) -> Result<WorkflowsMan
 ///
 /// Pipeline: WorkflowsExtractor → Write to workflows/<name>.json files
 #[allow(dead_code)]
-async fn pull_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn pull_workflows_internal(
+    project_dir: impl AsRef<Path>,
+    client: KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading workflows manifest from {}", project_dir.display());
@@ -1208,8 +1274,7 @@ async fn pull_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) 
 
     // Build the extract pipeline
     log::debug!("Extracting workflows from Kibana...");
-    // TODO: This needs to be refactored for multi-space support
-    let extractor = WorkflowsExtractor::new(client, "default", Some(manifest));
+    let extractor = WorkflowsExtractor::new(client, Some(manifest));
 
     // Extract workflows
     let workflows = extractor.extract().await?;
@@ -1264,12 +1329,13 @@ pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Manifest loaded: {} workflow(s)", manifest.count());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
+    // TODO: This needs to be refactored for multi-space support
+    let space_client = client.space("default")?;
 
     // Build the extract pipeline
     log::info!("Extracting workflows from Kibana...");
-    // TODO: This needs to be refactored for multi-space support
-    let extractor = WorkflowsExtractor::new(client, "default", Some(manifest));
+    let extractor = WorkflowsExtractor::new(space_client, Some(manifest));
 
     // Extract workflows
     let workflows = extractor.extract().await?;
@@ -1317,7 +1383,10 @@ pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
 ///
 /// Pipeline: Read from workflows/<name>.json → WorkflowsLoader
 #[allow(dead_code)]
-async fn push_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn push_workflows_internal(
+    project_dir: impl AsRef<Path>,
+    client: KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading workflows from {}", project_dir.display());
@@ -1341,8 +1410,7 @@ async fn push_workflows_internal(project_dir: impl AsRef<Path>, client: Kibana) 
 
     log::debug!("Read {} workflow(s) from disk", workflows.len());
 
-    // TODO: This needs to be refactored for multi-space support
-    let loader = WorkflowsLoader::new(client, "default");
+    let loader = WorkflowsLoader::new(client);
 
     // Load workflows to Kibana
     let count = loader.load(workflows).await?;
@@ -1378,10 +1446,11 @@ pub async fn push_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Read {} workflow(s) from disk", workflows.len());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
-
+    let client = load_kibana_client(project_dir)?;
     // TODO: This needs to be refactored for multi-space support
-    let loader = WorkflowsLoader::new(client, "default");
+    let space_client = client.space("default")?;
+
+    let loader = WorkflowsLoader::new(space_client);
 
     // Load workflows to Kibana
     let count = loader.load(workflows).await?;
@@ -1524,8 +1593,8 @@ pub async fn add_agents_to_manifest(
     // Validate that space is managed (if spaces.yml exists)
     let spaces_manifest_path = project_dir.join("spaces.yml");
     if spaces_manifest_path.exists() {
-        let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
-        if !space_context.is_space_managed(space_id) {
+        let manifest = SpacesManifest::read(&spaces_manifest_path)?;
+        if !manifest.spaces.iter().any(|s| s.id == space_id) {
             eyre::bail!(
                 "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
                 space_id.cyan(),
@@ -1606,8 +1675,9 @@ pub async fn add_agents_to_manifest(
     } else {
         // Search via API
         log::info!("Searching agents via API in space {}...", space_id.cyan());
-        let client = load_kibana_client()?;
-        let extractor = AgentsExtractor::new(client, space_id, None);
+        let client = load_kibana_client(project_dir)?;
+        let space_client = client.space(space_id)?;
+        let extractor = AgentsExtractor::new(space_client, None);
 
         extractor.search_agents(query.as_deref()).await?
     };
@@ -1720,7 +1790,10 @@ pub async fn add_agents_to_manifest(
 ///
 /// Pipeline: AgentsExtractor → Write to agents/<name>.json files
 #[allow(dead_code)]
-async fn pull_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn pull_agents_internal(
+    project_dir: impl AsRef<Path>,
+    client: KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading agents manifest from {}", project_dir.display());
@@ -1729,7 +1802,7 @@ async fn pull_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
     // Build the extract pipeline
     log::debug!("Extracting agents from Kibana...");
-    let extractor = AgentsExtractor::new(client, "default", Some(manifest));
+    let extractor = AgentsExtractor::new(client, Some(manifest));
 
     // Extract agents
     let agents = extractor.extract().await?;
@@ -1774,11 +1847,13 @@ pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Manifest loaded: {} agent(s)", manifest.count());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
+    // TODO: This needs to be refactored for multi-space support
+    let space_client = client.space("default")?;
 
     // Build the extract pipeline
     log::info!("Extracting agents from Kibana...");
-    let extractor = AgentsExtractor::new(client, "default", Some(manifest));
+    let extractor = AgentsExtractor::new(space_client, Some(manifest));
 
     // Extract agents
     let agents = extractor.extract().await?;
@@ -1818,7 +1893,10 @@ pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
 ///
 /// Pipeline: Read from agents/<name>.json → AgentsLoader
 #[allow(dead_code)]
-async fn push_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn push_agents_internal(
+    project_dir: impl AsRef<Path>,
+    client: KibanaClient,
+) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading agents from {}", project_dir.display());
@@ -1843,7 +1921,7 @@ async fn push_agents_internal(project_dir: impl AsRef<Path>, client: Kibana) -> 
 
     log::debug!("Read {} agent(s) from disk", agents.len());
 
-    let loader = AgentsLoader::new(client, "default");
+    let loader = AgentsLoader::new(client);
 
     // Load agents to Kibana
     let count = loader.load(agents).await?;
@@ -1880,9 +1958,10 @@ pub async fn push_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Read {} agent(s) from disk", agents.len());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
+    let space_client = client.space("default")?;
 
-    let loader = AgentsLoader::new(client, "default");
+    let loader = AgentsLoader::new(space_client);
 
     // Load agents to Kibana
     let count = loader.load(agents).await?;
@@ -2020,11 +2099,12 @@ pub async fn add_tools_to_manifest(
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
-    // Validate that space is managed (if spaces.yml exists)
+    // Validate that space is managed by attempting to create a space client
+    // This will fail if the space is not in spaces.yml
     let spaces_manifest_path = project_dir.join("spaces.yml");
     if spaces_manifest_path.exists() {
-        let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
-        if !space_context.is_space_managed(space_id) {
+        let client = load_kibana_client(project_dir)?;
+        if client.space(space_id).is_err() {
             eyre::bail!(
                 "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
                 space_id.cyan(),
@@ -2105,8 +2185,9 @@ pub async fn add_tools_to_manifest(
     } else {
         // Search via API
         log::info!("Searching tools via API in space {}...", space_id.cyan());
-        let client = load_kibana_client()?;
-        let extractor = ToolsExtractor::new(client, space_id, None);
+        let client = load_kibana_client(project_dir)?;
+        let space_client = client.space(space_id)?;
+        let extractor = ToolsExtractor::new(space_client, None);
 
         extractor.search_tools(query.as_deref()).await?
     };
@@ -2224,7 +2305,7 @@ pub async fn add_tools_to_manifest(
 ///
 /// Pipeline: ToolsExtractor → Write to tools/<name or id>.json files
 #[allow(dead_code)]
-async fn pull_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn pull_tools_internal(project_dir: impl AsRef<Path>, client: KibanaClient) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading tools manifest from {}", project_dir.display());
@@ -2233,8 +2314,7 @@ async fn pull_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> R
 
     // Build the extract pipeline
     log::debug!("Extracting tools from Kibana...");
-    // TODO: Refactor to support multi-space - currently hardcoded to "default"
-    let extractor = ToolsExtractor::new(client, "default", Some(manifest));
+    let extractor = ToolsExtractor::new(client, Some(manifest));
 
     // Extract tools
     let tools = extractor.extract().await?;
@@ -2276,12 +2356,12 @@ pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Manifest loaded: {} tool(s)", manifest.count());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
+    let space_client = client.space("default")?;
 
     // Build the extract pipeline
     log::info!("Extracting tools from Kibana...");
-    // TODO: Refactor to support multi-space - currently hardcoded to "default"
-    let extractor = ToolsExtractor::new(client, "default", Some(manifest));
+    let extractor = ToolsExtractor::new(space_client, Some(manifest));
 
     // Extract tools
     let tools = extractor.extract().await?;
@@ -2325,7 +2405,7 @@ pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
 ///
 /// Pipeline: Read from tools/<name or id>.json → ToolsLoader
 #[allow(dead_code)]
-async fn push_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> Result<usize> {
+async fn push_tools_internal(project_dir: impl AsRef<Path>, client: KibanaClient) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
     log::debug!("Loading tools from {}", project_dir.display());
@@ -2350,8 +2430,7 @@ async fn push_tools_internal(project_dir: impl AsRef<Path>, client: Kibana) -> R
 
     log::debug!("Read {} tool(s) from disk", tools.len());
 
-    // TODO: Refactor to support multi-space - currently hardcoded to "default"
-    let loader = ToolsLoader::new(client, "default");
+    let loader = ToolsLoader::new(client);
 
     // Load tools to Kibana
     let count = loader.load(tools).await?;
@@ -2388,10 +2467,10 @@ pub async fn push_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
     log::info!("Read {} tool(s) from disk", tools.len());
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client()?;
+    let client = load_kibana_client(project_dir)?;
+    let space_client = client.space("default")?;
 
-    // TODO: Refactor to support multi-space - currently hardcoded to "default"
-    let loader = ToolsLoader::new(client, "default");
+    let loader = ToolsLoader::new(space_client);
 
     // Load tools to Kibana
     let count = loader.load(tools).await?;
@@ -2523,11 +2602,8 @@ fn load_space_saved_objects_manifest(
 }
 
 /// Pull saved objects for a specific space
-async fn pull_space_saved_objects(
-    project_dir: &Path,
-    client: &Kibana,
-    space_id: &str,
-) -> Result<usize> {
+async fn pull_space_saved_objects(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let manifest_path = get_space_saved_objects_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
@@ -2542,7 +2618,7 @@ async fn pull_space_saved_objects(
     let manifest = crate::kibana::saved_objects::SavedObjectsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} object(s) from manifest", manifest.count());
 
-    let extractor = SavedObjectsExtractor::new(client.clone(), manifest, space_id);
+    let extractor = SavedObjectsExtractor::new(client.clone(), manifest);
 
     // Transform: Drop metadata fields and unescape JSON strings
     let drop_fields = FieldDropper::default_kibana_fields();
@@ -2572,11 +2648,8 @@ async fn pull_space_saved_objects(
 }
 
 /// Pull workflows for a specific space
-async fn pull_space_workflows(
-    project_dir: &Path,
-    client: &Kibana,
-    space_id: &str,
-) -> Result<usize> {
+async fn pull_space_workflows(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let manifest_path = get_space_workflows_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
@@ -2591,7 +2664,7 @@ async fn pull_space_workflows(
     let manifest = WorkflowsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} workflow(s) from manifest", manifest.count());
 
-    let extractor = WorkflowsExtractor::new(client.clone(), space_id, Some(manifest));
+    let extractor = WorkflowsExtractor::new(client.clone(), Some(manifest));
     let workflows = extractor.extract().await?;
 
     // Apply YAML formatting transform
@@ -2631,7 +2704,8 @@ async fn pull_space_workflows(
 }
 
 /// Pull agents for a specific space
-async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) -> Result<usize> {
+async fn pull_space_agents(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let manifest_path = get_space_agents_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
@@ -2643,7 +2717,7 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
     let manifest = AgentsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} agent(s) from manifest", manifest.count());
 
-    let extractor = AgentsExtractor::new(client.clone(), space_id, Some(manifest));
+    let extractor = AgentsExtractor::new(client.clone(), Some(manifest));
     let agents = extractor.extract().await?;
 
     // Transform agents - format multiline instructions field
@@ -2677,7 +2751,8 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
 }
 
 /// Pull tools for a specific space
-async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -> Result<usize> {
+async fn pull_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let manifest_path = get_space_tools_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
@@ -2689,7 +2764,7 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
     let manifest = ToolsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} tool(s) from manifest", manifest.count());
 
-    let extractor = ToolsExtractor::new(client.clone(), space_id, Some(manifest));
+    let extractor = ToolsExtractor::new(client.clone(), Some(manifest));
     let tools = extractor.extract().await?;
 
     // Transform tools - format multiline query field
@@ -2729,10 +2804,10 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
 /// Push saved objects for a specific space
 async fn push_space_saved_objects(
     project_dir: &Path,
-    client: &Kibana,
-    space_id: &str,
+    client: &KibanaClient,
     managed: bool,
 ) -> Result<usize> {
+    let space_id = client.space_id();
     let objects_dir = get_space_objects_dir(project_dir, space_id);
 
     if !objects_dir.exists() {
@@ -2751,7 +2826,7 @@ async fn push_space_saved_objects(
     let escaper = FieldEscaper::default_kibana_fields();
     let managed_flag = ManagedFlagAdder::new(managed);
 
-    let loader = SavedObjectsLoader::new(client.clone(), space_id);
+    let loader = SavedObjectsLoader::new(client.clone());
 
     // Read → Vega Escape → Field Escape → Add Managed Flag → Load
     let objects = reader.extract().await?;
@@ -2769,11 +2844,8 @@ async fn push_space_saved_objects(
 }
 
 /// Push workflows for a specific space
-async fn push_space_workflows(
-    project_dir: &Path,
-    client: &Kibana,
-    space_id: &str,
-) -> Result<usize> {
+async fn push_space_workflows(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let workflows_dir = get_space_workflows_dir(project_dir, space_id);
 
     if !workflows_dir.exists() {
@@ -2798,7 +2870,7 @@ async fn push_space_workflows(
         }
     }
 
-    let loader = WorkflowsLoader::new(client.clone(), space_id);
+    let loader = WorkflowsLoader::new(client.clone());
     let count = loader.load(workflows).await?;
 
     log::info!(
@@ -2810,7 +2882,8 @@ async fn push_space_workflows(
 }
 
 /// Push agents for a specific space
-async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) -> Result<usize> {
+async fn push_space_agents(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let agents_dir = get_space_agents_dir(project_dir, space_id);
 
     if !agents_dir.exists() {
@@ -2835,7 +2908,7 @@ async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
         }
     }
 
-    let loader = AgentsLoader::new(client.clone(), space_id);
+    let loader = AgentsLoader::new(client.clone());
     let count = loader.load(agents).await?;
 
     log::info!("✓ Pushed {} agent(s) for space {}", count, space_id.cyan());
@@ -2843,7 +2916,8 @@ async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
 }
 
 /// Push tools for a specific space
-async fn push_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -> Result<usize> {
+async fn push_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
     let tools_dir = get_space_tools_dir(project_dir, space_id);
 
     if !tools_dir.exists() {
@@ -2865,7 +2939,7 @@ async fn push_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
         }
     }
 
-    let loader = ToolsLoader::new(client.clone(), space_id);
+    let loader = ToolsLoader::new(client.clone());
     let count = loader.load(tools).await?;
 
     log::info!("✓ Pushed {} tool(s) for space {}", count, space_id.cyan());
@@ -3174,7 +3248,7 @@ mod tests {
             std::env::remove_var("KIBANA_APIKEY");
         }
 
-        let result = load_kibana_client();
+        let result = load_kibana_client(".");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("KIBANA_URL"));
     }
@@ -3189,7 +3263,7 @@ mod tests {
             std::env::remove_var("KIBANA_APIKEY");
         }
 
-        let result = load_kibana_client();
+        let result = load_kibana_client(".");
         assert!(result.is_ok());
 
         unsafe {
@@ -3204,7 +3278,7 @@ mod tests {
             std::env::set_var("KIBANA_URL", "not-a-valid-url");
         }
 
-        let result = load_kibana_client();
+        let result = load_kibana_client(".");
         assert!(result.is_err());
         assert!(
             result

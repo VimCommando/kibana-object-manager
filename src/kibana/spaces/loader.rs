@@ -2,7 +2,7 @@
 //!
 //! Loads space definitions to Kibana via POST/PUT /api/spaces/space
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Loader;
 
 use eyre::Result;
@@ -17,14 +17,15 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::spaces::SpacesLoader;
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Loader;
 /// use serde_json::json;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
 /// let loader = SpacesLoader::new(client);
 ///
 /// let spaces = vec![
@@ -40,7 +41,7 @@ use serde_json::Value;
 /// # }
 /// ```
 pub struct SpacesLoader {
-    client: Kibana,
+    client: KibanaClient,
     overwrite: bool,
 }
 
@@ -48,8 +49,8 @@ impl SpacesLoader {
     /// Create a new spaces loader
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    pub fn new(client: Kibana) -> Self {
+    /// * `client` - Kibana client (spaces are global, not space-scoped)
+    pub fn new(client: KibanaClient) -> Self {
         Self {
             client,
             overwrite: true,
@@ -68,7 +69,7 @@ impl SpacesLoader {
 
         log::debug!("{} {}", "HEAD".green(), path);
 
-        let response = self.client.head(&path).await?;
+        let response = self.client.get(&path).await?;
 
         match response.status().as_u16() {
             200 => {
@@ -171,28 +172,32 @@ mod tests {
     use super::*;
     use crate::client::Auth;
     use serde_json::json;
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_loader_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
         let loader = SpacesLoader::new(client);
         assert!(loader.overwrite);
     }
 
     #[test]
     fn test_with_overwrite() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
         let loader = SpacesLoader::new(client).with_overwrite(false);
         assert!(!loader.overwrite);
     }
 
     #[tokio::test]
     async fn test_missing_id_fails() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
         let loader = SpacesLoader::new(client);
 
         let space = json!({"name": "No ID"});

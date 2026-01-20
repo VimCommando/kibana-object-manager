@@ -2,7 +2,7 @@
 //!
 //! Extracts saved objects from Kibana via POST /api/saved_objects/_export
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Extractor;
 
 use eyre::{Context, Result};
@@ -16,44 +16,36 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsManifest, SavedObject};
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
 /// let mut manifest = SavedObjectsManifest::new();
 /// manifest.add_object(SavedObject::new("dashboard", "my-dashboard-id"));
 ///
-/// let extractor = SavedObjectsExtractor::new(client, manifest, "default");
+/// let extractor = SavedObjectsExtractor::new(space_client, manifest);
 /// let objects = extractor.extract().await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct SavedObjectsExtractor {
-    client: Kibana,
+    client: KibanaClient,
     manifest: super::SavedObjectsManifest,
-    space: String,
 }
 
 impl SavedObjectsExtractor {
     /// Create a new saved objects extractor
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
+    /// * `client` - Space-scoped Kibana client
     /// * `manifest` - Manifest defining which objects to export
-    /// * `space` - Space ID to export from (default: "default")
-    pub fn new(
-        client: Kibana,
-        manifest: super::SavedObjectsManifest,
-        space: impl Into<String>,
-    ) -> Self {
-        Self {
-            client,
-            manifest,
-            space: space.into(),
-        }
+    pub fn new(client: KibanaClient, manifest: super::SavedObjectsManifest) -> Self {
+        Self { client, manifest }
     }
 
     /// Export saved objects from Kibana
@@ -66,12 +58,12 @@ impl SavedObjectsExtractor {
         log::debug!(
             "Exporting {} object(s) from space '{}'",
             self.manifest.count(),
-            self.space
+            self.client.space_id()
         );
 
         let response = self
             .client
-            .post_json_value_with_space(&self.space, path, &serde_json::to_value(&self.manifest)?)
+            .post_json_value(path, &serde_json::to_value(&self.manifest)?)
             .await
             .with_context(|| "Failed to export saved objects from Kibana")?;
 
@@ -115,30 +107,46 @@ impl Extractor for SavedObjectsExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
     use crate::kibana::saved_objects::SavedObjectsManifest;
     use crate::kibana::saved_objects::manifest::SavedObject;
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_extractor_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
         let manifest = SavedObjectsManifest::new();
-        let extractor = SavedObjectsExtractor::new(client, manifest, "default");
-        assert_eq!(extractor.space, "default");
+        let extractor = SavedObjectsExtractor::new(space_client, manifest);
+        assert_eq!(extractor.client.space_id(), "default");
     }
 
     #[test]
     fn test_extractor_with_manifest() {
-        let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let mut manifest = SavedObjectsManifest::new();
-        manifest.add_object(SavedObject::new("dashboard", "test-dashboard"));
-        manifest.add_object(SavedObject::new("visualization", "test-viz"));
+        let temp_dir = TempDir::new().unwrap();
+        // Create spaces.yml with marketing space
+        let manifest = crate::kibana::spaces::SpacesManifest::with_spaces(vec![
+            crate::kibana::spaces::SpaceEntry::new("default".to_string(), "Default".to_string()),
+            crate::kibana::spaces::SpaceEntry::new(
+                "marketing".to_string(),
+                "Marketing".to_string(),
+            ),
+        ]);
+        manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
 
-        let extractor = SavedObjectsExtractor::new(client, manifest.clone(), "marketing");
-        assert_eq!(extractor.space, "marketing");
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("marketing").unwrap();
+
+        let mut so_manifest = SavedObjectsManifest::new();
+        so_manifest.add_object(SavedObject::new("dashboard", "test-dashboard"));
+        so_manifest.add_object(SavedObject::new("visualization", "test-viz"));
+
+        let extractor = SavedObjectsExtractor::new(space_client, so_manifest.clone());
+        assert_eq!(extractor.client.space_id(), "marketing");
         assert_eq!(extractor.manifest.count(), 2);
     }
 }

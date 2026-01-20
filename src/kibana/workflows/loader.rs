@@ -2,7 +2,7 @@
 //!
 //! Loads workflow definitions to Kibana via POST /api/workflows/<id>
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Loader;
 
 use eyre::Result;
@@ -16,15 +16,17 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::workflows::WorkflowsLoader;
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Loader;
 /// use serde_json::json;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
-/// let loader = WorkflowsLoader::new(client, "default");
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
+/// let loader = WorkflowsLoader::new(space_client);
 ///
 /// let workflows = vec![
 ///     json!({
@@ -39,43 +41,25 @@ use serde_json::Value;
 /// # }
 /// ```
 pub struct WorkflowsLoader {
-    client: Kibana,
-    space_id: String,
+    client: KibanaClient,
 }
 
 impl WorkflowsLoader {
     /// Create a new workflows loader
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space_id` - Space ID to load workflows into
-    pub fn new(client: Kibana, space_id: impl Into<String>) -> Self {
-        Self {
-            client,
-            space_id: space_id.into(),
-        }
-    }
-
-    /// Build the space-qualified API path
-    fn space_path(&self, endpoint: &str) -> String {
-        if self.space_id == "default" {
-            format!("/{}", endpoint)
-        } else {
-            format!("/s/{}/{}", self.space_id, endpoint)
-        }
+    /// * `client` - Space-scoped Kibana client
+    pub fn new(client: KibanaClient) -> Self {
+        Self { client }
     }
 
     /// Check if a workflow exists using HEAD request
     async fn workflow_exists(&self, workflow_id: &str) -> Result<bool> {
         let path = format!("api/workflows/{}", workflow_id);
-        let display_path = self.space_path(&path);
 
-        log::debug!("{} {}", "HEAD".green(), display_path);
+        log::debug!("{} {}", "HEAD".green(), path);
 
-        let response = self
-            .client
-            .head_internal_with_space(&self.space_id, &path)
-            .await?;
+        let response = self.client.head_internal(&path).await?;
 
         match response.status().as_u16() {
             200 => {
@@ -120,13 +104,12 @@ impl WorkflowsLoader {
             .unwrap_or("unknown");
 
         let path = format!("api/workflows/{}", workflow_id);
-        let display_path = self.space_path(&path);
 
-        log::debug!("{} {}", "POST".green(), display_path);
+        log::debug!("{} {}", "POST".green(), path);
 
         let response = self
             .client
-            .post_json_value_internal_with_space(&self.space_id, &path, workflow)
+            .post_json_value_internal(&path, workflow)
             .await?;
 
         if !response.status().is_success() {
@@ -163,13 +146,12 @@ impl WorkflowsLoader {
             .unwrap_or("unknown");
 
         let path = format!("api/workflows/{}", workflow_id);
-        let display_path = self.space_path(&path);
 
-        log::debug!("{} {}", "POST".green(), display_path);
+        log::debug!("{} {}", "POST".green(), path);
 
         let response = self
             .client
-            .post_json_value_internal_with_space(&self.space_id, &path, workflow)
+            .post_json_value_internal(&path, workflow)
             .await?;
 
         if !response.status().is_success() {
@@ -230,22 +212,27 @@ impl Loader for WorkflowsLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
     use serde_json::json;
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_loader_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let _loader = WorkflowsLoader::new(client, "default");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let _loader = WorkflowsLoader::new(space_client);
     }
 
     #[tokio::test]
     async fn test_missing_id_fails() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = WorkflowsLoader::new(client, "default");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let loader = WorkflowsLoader::new(space_client);
 
         let workflow = json!({"name": "No ID"});
 
@@ -257,27 +244,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing 'id' field")
-        );
-    }
-
-    #[test]
-    fn test_space_path_default() {
-        let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = WorkflowsLoader::new(client, "default");
-
-        assert_eq!(loader.space_path("api/workflows/123"), "/api/workflows/123");
-    }
-
-    #[test]
-    fn test_space_path_non_default() {
-        let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = WorkflowsLoader::new(client, "shanks");
-
-        assert_eq!(
-            loader.space_path("api/workflows/123"),
-            "/s/shanks/api/workflows/123"
         );
     }
 }

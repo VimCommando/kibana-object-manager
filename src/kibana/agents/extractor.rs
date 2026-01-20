@@ -2,7 +2,7 @@
 //!
 //! Extracts agent definitions from Kibana via GET /api/agent_builder/agents
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Extractor;
 
 use eyre::{Context, Result};
@@ -16,26 +16,27 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::agents::{AgentsExtractor, AgentsManifest, AgentEntry};
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
 /// let manifest = AgentsManifest::with_agents(vec![
 ///     AgentEntry::new("agent-123", "my-agent"),
 ///     AgentEntry::new("agent-456", "customer-support-agent")
 /// ]);
 ///
-/// let extractor = AgentsExtractor::new(client, "default", Some(manifest));
+/// let extractor = AgentsExtractor::new(space_client, Some(manifest));
 /// let agents = extractor.extract().await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct AgentsExtractor {
-    client: Kibana,
-    space_id: String,
+    client: KibanaClient,
     manifest: Option<super::AgentsManifest>,
 }
 
@@ -43,19 +44,10 @@ impl AgentsExtractor {
     /// Create a new agents extractor
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space_id` - Space ID to extract from
+    /// * `client` - Space-scoped Kibana client
     /// * `manifest` - Manifest containing agent IDs to extract
-    pub fn new(
-        client: Kibana,
-        space_id: impl Into<String>,
-        manifest: Option<super::AgentsManifest>,
-    ) -> Self {
-        Self {
-            client,
-            space_id: space_id.into(),
-            manifest,
-        }
+    pub fn new(client: KibanaClient, manifest: Option<super::AgentsManifest>) -> Self {
+        Self { client, manifest }
     }
 
     /// Search for agents via the Agents API
@@ -71,11 +63,15 @@ impl AgentsExtractor {
     pub async fn search_agents(&self, _query: Option<&str>) -> Result<Vec<Value>> {
         let path = "api/agent_builder/agents";
 
-        log::debug!("Fetching agents from {} in space '{}'", path, self.space_id);
+        log::debug!(
+            "Fetching agents from {} in space '{}'",
+            path,
+            self.client.space_id()
+        );
 
         let response = self
             .client
-            .get_with_space(&self.space_id, path)
+            .get(path)
             .await
             .context("Failed to fetch agents")?;
 
@@ -109,12 +105,12 @@ impl AgentsExtractor {
         log::debug!(
             "Fetching agent '{}' from space '{}'",
             agent_id,
-            self.space_id
+            self.client.space_id()
         );
 
         let response = self
             .client
-            .get_with_space(&self.space_id, &path)
+            .get(&path)
             .await
             .with_context(|| format!("Failed to fetch agent '{}'", agent_id))?;
 
@@ -195,13 +191,16 @@ impl Extractor for AgentsExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_extractor_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let _extractor = AgentsExtractor::new(client, "default", None);
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let _extractor = AgentsExtractor::new(space_client, None);
     }
 }

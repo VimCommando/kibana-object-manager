@@ -2,7 +2,7 @@
 //!
 //! Loads saved objects to Kibana via POST /api/saved_objects/_import
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Loader;
 
 use eyre::{Context, Result};
@@ -16,15 +16,17 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::saved_objects::SavedObjectsLoader;
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Loader;
 /// use serde_json::json;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
-/// let loader = SavedObjectsLoader::new(client, "default");
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
+/// let loader = SavedObjectsLoader::new(space_client);
 ///
 /// let objects = vec![
 ///     json!({
@@ -39,8 +41,7 @@ use serde_json::Value;
 /// # }
 /// ```
 pub struct SavedObjectsLoader {
-    client: Kibana,
-    space: String,
+    client: KibanaClient,
     overwrite: bool,
 }
 
@@ -48,12 +49,10 @@ impl SavedObjectsLoader {
     /// Create a new saved objects loader
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space` - Space ID to import into (default: "default")
-    pub fn new(client: Kibana, space: impl Into<String>) -> Self {
+    /// * `client` - Space-scoped Kibana client
+    pub fn new(client: KibanaClient) -> Self {
         Self {
             client,
-            space: space.into(),
             overwrite: true,
         }
     }
@@ -81,12 +80,12 @@ impl SavedObjectsLoader {
         log::debug!(
             "Importing {} object(s) to space '{}'",
             objects.len(),
-            self.space
+            self.client.space_id()
         );
 
         let response = self
             .client
-            .post_form_with_space(&self.space, &path, ndjson.as_bytes())
+            .post_form(&path, ndjson.as_bytes())
             .await
             .with_context(|| "Failed to import saved objects to Kibana")?;
 
@@ -121,31 +120,47 @@ impl Loader for SavedObjectsLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_loader_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = SavedObjectsLoader::new(client, "default");
-        assert_eq!(loader.space, "default");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let loader = SavedObjectsLoader::new(space_client);
         assert!(loader.overwrite);
     }
 
     #[test]
     fn test_with_overwrite() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = SavedObjectsLoader::new(client, "default").with_overwrite(false);
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let loader = SavedObjectsLoader::new(space_client).with_overwrite(false);
         assert!(!loader.overwrite);
     }
 
     #[test]
     fn test_custom_space() {
+        let temp_dir = TempDir::new().unwrap();
+        // Create spaces.yml with marketing space
+        let manifest = crate::kibana::spaces::SpacesManifest::with_spaces(vec![
+            crate::kibana::spaces::SpaceEntry::new("default".to_string(), "Default".to_string()),
+            crate::kibana::spaces::SpaceEntry::new(
+                "marketing".to_string(),
+                "Marketing".to_string(),
+            ),
+        ]);
+        manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
+
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = SavedObjectsLoader::new(client, "marketing");
-        assert_eq!(loader.space, "marketing");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("marketing").unwrap();
+        let loader = SavedObjectsLoader::new(space_client);
+        assert_eq!(loader.client.space_id(), "marketing");
     }
 }

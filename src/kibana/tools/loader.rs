@@ -2,7 +2,7 @@
 //!
 //! Loads tool definitions to Kibana via POST/PUT /api/agent_builder/tools
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Loader;
 
 use eyre::Result;
@@ -16,15 +16,17 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::tools::ToolsLoader;
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Loader;
 /// use serde_json::json;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
-/// let loader = ToolsLoader::new(client, "default");
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
+/// let loader = ToolsLoader::new(space_client);
 ///
 /// let tools = vec![
 ///     json!({
@@ -39,30 +41,16 @@ use serde_json::Value;
 /// # }
 /// ```
 pub struct ToolsLoader {
-    client: Kibana,
-    space_id: String,
+    client: KibanaClient,
 }
 
 impl ToolsLoader {
     /// Create a new tools loader
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space_id` - Space ID to load tools into
-    pub fn new(client: Kibana, space_id: impl Into<String>) -> Self {
-        Self {
-            client,
-            space_id: space_id.into(),
-        }
-    }
-
-    /// Build the space-qualified API path
-    fn space_path(&self, endpoint: &str) -> String {
-        if self.space_id == "default" {
-            format!("/{}", endpoint)
-        } else {
-            format!("/s/{}/{}", self.space_id, endpoint)
-        }
+    /// * `client` - Space-scoped Kibana client
+    pub fn new(client: KibanaClient) -> Self {
+        Self { client }
     }
 
     /// Check if a tool exists by ID using HEAD request
@@ -70,11 +58,10 @@ impl ToolsLoader {
     /// Returns true if the tool exists, false if it returns 404
     async fn tool_exists(&self, tool_id: &str) -> Result<bool> {
         let path = format!("api/agent_builder/tools/{}", tool_id);
-        let display_path = self.space_path(&path);
 
-        log::debug!("{} {}", "HEAD".green(), display_path);
+        log::debug!("{} {}", "HEAD".green(), path);
 
-        let response = self.client.head_with_space(&self.space_id, &path).await?;
+        let response = self.client.head(&path).await?;
 
         match response.status().as_u16() {
             200 => {
@@ -114,14 +101,10 @@ impl ToolsLoader {
             .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
 
         let path = "api/agent_builder/tools/";
-        let display_path = self.space_path(path);
 
-        log::debug!("{} {}", "POST".green(), display_path);
+        log::debug!("{} {}", "POST".green(), path);
 
-        let response = self
-            .client
-            .post_json_value_with_space(&self.space_id, path, tool)
-            .await?;
+        let response = self.client.post_json_value(path, tool).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -151,14 +134,10 @@ impl ToolsLoader {
         }
 
         let path = format!("api/agent_builder/tools/{}", tool_id);
-        let display_path = self.space_path(&path);
 
-        log::debug!("{} {}", "PUT".green(), display_path);
+        log::debug!("{} {}", "PUT".green(), path);
 
-        let response = self
-            .client
-            .put_json_value_with_space(&self.space_id, &path, &tool_body)
-            .await?;
+        let response = self.client.put_json_value(&path, &tool_body).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -226,22 +205,27 @@ impl Loader for ToolsLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
     use serde_json::json;
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_loader_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let _loader = ToolsLoader::new(client, "default");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let _loader = ToolsLoader::new(space_client);
     }
 
     #[tokio::test]
     async fn test_missing_id_fails() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = ToolsLoader::new(client, "default");
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let loader = ToolsLoader::new(space_client);
 
         let tool = json!({"description": "No ID"});
 
@@ -253,30 +237,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing 'id' field")
-        );
-    }
-
-    #[test]
-    fn test_space_path_default() {
-        let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = ToolsLoader::new(client, "default");
-
-        assert_eq!(
-            loader.space_path("api/agent_builder/tools/123"),
-            "/api/agent_builder/tools/123"
-        );
-    }
-
-    #[test]
-    fn test_space_path_non_default() {
-        let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let loader = ToolsLoader::new(client, "shanks");
-
-        assert_eq!(
-            loader.space_path("api/agent_builder/tools/123"),
-            "/s/shanks/api/agent_builder/tools/123"
         );
     }
 }

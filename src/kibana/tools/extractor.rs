@@ -2,7 +2,7 @@
 //!
 //! Extracts tool definitions from Kibana via GET /api/agent_builder/tools
 
-use crate::client::Kibana;
+use crate::client::KibanaClient;
 use crate::etl::Extractor;
 
 use eyre::{Context, Result};
@@ -16,26 +16,27 @@ use serde_json::Value;
 /// # Example
 /// ```no_run
 /// use kibana_object_manager::kibana::tools::{ToolsExtractor, ToolsManifest};
-/// use kibana_object_manager::client::{Auth, Kibana};
+/// use kibana_object_manager::client::{Auth, KibanaClient};
 /// use kibana_object_manager::etl::Extractor;
 /// use url::Url;
+/// use std::path::Path;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = Kibana::try_new(url, Auth::None)?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let space_client = client.space("default")?;
 /// let manifest = ToolsManifest::with_tools(vec![
 ///     "platform.core.search".to_string(),
 ///     "platform.core.get_document_by_id".to_string()
 /// ]);
 ///
-/// let extractor = ToolsExtractor::new(client, "default", Some(manifest));
+/// let extractor = ToolsExtractor::new(space_client, Some(manifest));
 /// let tools = extractor.extract().await?;
 /// # Ok(())
 /// # }
 /// ```
 pub struct ToolsExtractor {
-    client: Kibana,
-    space_id: String,
+    client: KibanaClient,
     manifest: Option<super::ToolsManifest>,
 }
 
@@ -43,19 +44,10 @@ impl ToolsExtractor {
     /// Create a new tools extractor
     ///
     /// # Arguments
-    /// * `client` - Kibana HTTP client
-    /// * `space_id` - Space ID to extract from
+    /// * `client` - Space-scoped Kibana client
     /// * `manifest` - Manifest containing tool IDs to extract
-    pub fn new(
-        client: Kibana,
-        space_id: impl Into<String>,
-        manifest: Option<super::ToolsManifest>,
-    ) -> Self {
-        Self {
-            client,
-            space_id: space_id.into(),
-            manifest,
-        }
+    pub fn new(client: KibanaClient, manifest: Option<super::ToolsManifest>) -> Self {
+        Self { client, manifest }
     }
 
     /// Search for tools via the Tools API
@@ -71,11 +63,15 @@ impl ToolsExtractor {
     pub async fn search_tools(&self, _query: Option<&str>) -> Result<Vec<Value>> {
         let path = "api/agent_builder/tools";
 
-        log::debug!("Fetching tools from {} in space '{}'", path, self.space_id);
+        log::debug!(
+            "Fetching tools from {} in space '{}'",
+            path,
+            self.client.space_id()
+        );
 
         let response = self
             .client
-            .get_with_space(&self.space_id, path)
+            .get(path)
             .await
             .context("Failed to fetch tools")?;
 
@@ -106,11 +102,15 @@ impl ToolsExtractor {
     async fn fetch_tool(&self, tool_id: &str) -> Result<Value> {
         let path = format!("api/agent_builder/tools/{}", tool_id);
 
-        log::debug!("Fetching tool '{}' from space '{}'", tool_id, self.space_id);
+        log::debug!(
+            "Fetching tool '{}' from space '{}'",
+            tool_id,
+            self.client.space_id()
+        );
 
         let response = self
             .client
-            .get_with_space(&self.space_id, &path)
+            .get(&path)
             .await
             .with_context(|| format!("Failed to fetch tool '{}'", tool_id))?;
 
@@ -181,13 +181,16 @@ impl Extractor for ToolsExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::Auth;
+    use crate::client::{Auth, KibanaClient};
+    use tempfile::TempDir;
     use url::Url;
 
     #[test]
     fn test_extractor_creation() {
+        let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = Kibana::try_new(url, Auth::None).unwrap();
-        let _extractor = ToolsExtractor::new(client, "default", None);
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let space_client = client.space("default").unwrap();
+        let _extractor = ToolsExtractor::new(space_client, None);
     }
 }
