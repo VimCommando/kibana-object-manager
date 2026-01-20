@@ -380,6 +380,23 @@ impl KibanaClient {
         self.request(Method::PUT, &headers, path, Some(&body)).await
     }
 
+    /// Helper for PUT requests with JSON value for internal Kibana APIs.
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows).
+    pub async fn put_json_value_internal(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_vec(value)?;
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::PUT, &headers, path, Some(&body)).await
+    }
+
     /// Helper for POST requests with multipart form data.
     pub async fn post_form(&self, path: &str, body: &[u8]) -> Result<reqwest::Response> {
         let mut headers = HashMap::new();

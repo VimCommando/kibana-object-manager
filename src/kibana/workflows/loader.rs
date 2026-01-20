@@ -91,7 +91,22 @@ impl WorkflowsLoader {
         }
     }
 
-    /// Create a new workflow using POST /api/workflows/<id>
+    /// Sanitize workflow payload by removing read-only system fields
+    fn sanitize_workflow(workflow: &Value) -> Value {
+        let mut sanitized = workflow.clone();
+        if let Value::Object(ref mut map) = sanitized {
+            map.remove("createdAt");
+            map.remove("lastUpdatedAt");
+            map.remove("createdBy");
+            map.remove("lastUpdatedBy");
+            map.remove("valid");
+            map.remove("validationErrors");
+            map.remove("history");
+        }
+        sanitized
+    }
+
+    /// Create a new workflow using POST /api/workflows
     async fn create_workflow(&self, workflow: &Value) -> Result<()> {
         let workflow_id = workflow
             .get("id")
@@ -103,13 +118,14 @@ impl WorkflowsLoader {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        let path = format!("api/workflows/{}", workflow_id);
+        let path = "api/workflows";
+        let sanitized_workflow = Self::sanitize_workflow(workflow);
 
         log::debug!("{} {}", "POST".green(), path);
 
         let response = self
             .client
-            .post_json_value_internal(&path, workflow)
+            .post_json_value_internal(path, &sanitized_workflow)
             .await?;
 
         if !response.status().is_success() {
@@ -133,7 +149,7 @@ impl WorkflowsLoader {
         Ok(())
     }
 
-    /// Update an existing workflow using POST /api/workflows/<id>
+    /// Update an existing workflow using PUT /api/workflows/<id>
     async fn update_workflow(&self, workflow: &Value) -> Result<()> {
         let workflow_id = workflow
             .get("id")
@@ -146,12 +162,13 @@ impl WorkflowsLoader {
             .unwrap_or("unknown");
 
         let path = format!("api/workflows/{}", workflow_id);
+        let sanitized_workflow = Self::sanitize_workflow(workflow);
 
-        log::debug!("{} {}", "POST".green(), path);
+        log::debug!("{} {}", "PUT".green(), path);
 
         let response = self
             .client
-            .post_json_value_internal(&path, workflow)
+            .put_json_value_internal(&path, &sanitized_workflow)
             .await?;
 
         if !response.status().is_success() {
@@ -245,5 +262,38 @@ mod tests {
                 .to_string()
                 .contains("missing 'id' field")
         );
+    }
+
+    #[test]
+    fn test_sanitize_workflow() {
+        let workflow = json!({
+            "id": "workflow-123",
+            "name": "test-workflow",
+            "createdAt": "2023-01-01T00:00:00Z",
+            "lastUpdatedAt": "2023-01-02T00:00:00Z",
+            "createdBy": "user",
+            "lastUpdatedBy": "user",
+            "valid": true,
+            "validationErrors": [],
+            "history": [],
+            "definition": {"some": "data"},
+            "yaml": "name: test"
+        });
+
+        let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
+        let sanitized_obj = sanitized.as_object().unwrap();
+
+        assert!(sanitized_obj.contains_key("id"));
+        assert!(sanitized_obj.contains_key("name"));
+        assert!(sanitized_obj.contains_key("yaml"));
+        assert!(sanitized_obj.contains_key("definition"));
+
+        assert!(!sanitized_obj.contains_key("createdAt"));
+        assert!(!sanitized_obj.contains_key("lastUpdatedAt"));
+        assert!(!sanitized_obj.contains_key("createdBy"));
+        assert!(!sanitized_obj.contains_key("lastUpdatedBy"));
+        assert!(!sanitized_obj.contains_key("valid"));
+        assert!(!sanitized_obj.contains_key("validationErrors"));
+        assert!(!sanitized_obj.contains_key("history"));
     }
 }
