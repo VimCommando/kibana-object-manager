@@ -105,11 +105,21 @@ impl AgentsLoader {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        let path = "api/agent_builder/agents/";
+        // Use the collection resource /api/agent_builder/agents
+        let path = "api/agent_builder/agents";
 
-        log::debug!("{} {}", "POST".green(), path);
+        // Remove 'readonly', 'schema', and 'type' fields if present, as they cannot be sent in creation requests
+        let mut agent_body = agent.clone();
+        if let Some(obj) = agent_body.as_object_mut() {
+            obj.remove("readonly");
+            obj.remove("schema");
+            obj.remove("type");
+        }
 
-        let response = self.client.post_json_value(path, agent).await?;
+        // Client logs the full path now, so we don't need to log the relative path here
+        // log::debug!("{} {}", "POST".green(), path);
+
+        let response = self.client.post_json_value(path, &agent_body).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -141,9 +151,18 @@ impl AgentsLoader {
 
         let path = format!("api/agent_builder/agents/{}", agent_id);
 
+        // Remove 'id', 'readonly', 'schema', and 'type' fields as they cannot be sent in update requests
+        let mut agent_body = agent.clone();
+        if let Some(obj) = agent_body.as_object_mut() {
+            obj.remove("id");
+            obj.remove("readonly");
+            obj.remove("schema");
+            obj.remove("type");
+        }
+
         log::debug!("{} {}", "PUT".green(), path);
 
-        let response = self.client.put_json_value(&path, agent).await?;
+        let response = self.client.put_json_value(&path, &agent_body).await?;
 
         if !response.status().is_success() {
             let status = response.status();

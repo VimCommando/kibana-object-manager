@@ -139,12 +139,13 @@ impl ToolsLoader {
     /// include the 'id' field in the request body - it's only in the URL path.
     async fn update_tool(&self, tool_id: &str, tool: &Value) -> Result<()> {
         // Remove the 'id' field from the body since it shouldn't be in PUT requests
-        // Also remove 'readonly' and 'schema' fields as they cannot be modified
+        // Also remove 'readonly', 'schema', and 'type' fields as they cannot be modified
         let mut tool_body = tool.clone();
         if let Some(obj) = tool_body.as_object_mut() {
             obj.remove("id");
             obj.remove("readonly");
             obj.remove("schema");
+            obj.remove("type");
         }
 
         let path = format!("api/agent_builder/tools/{}", tool_id);

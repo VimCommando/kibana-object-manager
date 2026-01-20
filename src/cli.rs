@@ -48,6 +48,29 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
     KibanaClient::try_new(url, auth, project_dir).context("Failed to create Kibana client")
 }
 
+/// Check if an API should be processed based on the filter
+fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
+    match filter {
+        None => true, // No filter means process everything
+        Some(apis) => apis.iter().any(|api| {
+            let api = api.to_lowercase();
+            match api_name {
+                "saved_objects" => {
+                    api == "saved_objects"
+                        || api == "objects"
+                        || api == "object"
+                        || api == "saved_object"
+                }
+                "workflows" => api == "workflows" || api == "workflow",
+                "agents" => api == "agents" || api == "agent",
+                "tools" => api == "tools" || api == "tool",
+                "spaces" => api == "spaces" || api == "space",
+                _ => false,
+            }
+        }),
+    }
+}
+
 /// Pull saved objects from Kibana to local directory
 ///
 /// Pipeline: SavedObjectsExtractor → FieldDropper → FieldUnescaper → DirectoryWriter
@@ -56,9 +79,11 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
 /// # Arguments
 /// * `project_dir` - Project directory path
 /// * `space_filter` - Optional comma-separated list of space IDs to pull (e.g., "default,marketing")
+/// * `api_filter` - Optional list of APIs to pull (e.g., ["tools", "agents"])
 pub async fn pull_saved_objects(
     project_dir: impl AsRef<Path>,
     space_filter: Option<&str>,
+    api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -67,17 +92,21 @@ pub async fn pull_saved_objects(
 
     // Pull space definitions FIRST (before any other operations)
     // This ensures space definitions are up-to-date before pulling resources
-    let spaces_manifest_path = project_dir.join("spaces.yml");
-    if spaces_manifest_path.exists() {
-        log::info!("Pulling space definitions...");
-        match pull_spaces_internal(project_dir, &client).await {
-            Ok(space_count) => {
-                log::info!("✓ Pulled {} space definition(s)", space_count);
-            }
-            Err(e) => {
-                log::warn!("Failed to pull space definitions: {}", e);
+    if should_process_api("spaces", api_filter) {
+        let spaces_manifest_path = project_dir.join("spaces.yml");
+        if spaces_manifest_path.exists() {
+            log::info!("Pulling space definitions...");
+            match pull_spaces_internal(project_dir, &client).await {
+                Ok(space_count) => {
+                    log::info!("✓ Pulled {} space definition(s)", space_count);
+                }
+                Err(e) => {
+                    log::warn!("Failed to pull space definitions: {}", e);
+                }
             }
         }
+    } else {
+        log::debug!("Skipping spaces pull (filtered out)");
     }
 
     // Determine which spaces to operate on
@@ -93,23 +122,31 @@ pub async fn pull_saved_objects(
         let space_client = client.space(space_id)?;
 
         // Pull saved objects for this space
-        if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
-            total_count += count;
+        if should_process_api("saved_objects", api_filter) {
+            if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
+                total_count += count;
+            }
         }
 
         // Pull workflows for this space
-        if let Ok(count) = pull_space_workflows(project_dir, &space_client).await {
-            log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
+        if should_process_api("workflows", api_filter) {
+            if let Ok(count) = pull_space_workflows(project_dir, &space_client).await {
+                log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
+            }
         }
 
         // Pull agents for this space
-        if let Ok(count) = pull_space_agents(project_dir, &space_client).await {
-            log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
+        if should_process_api("agents", api_filter) {
+            if let Ok(count) = pull_space_agents(project_dir, &space_client).await {
+                log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
+            }
         }
 
         // Pull tools for this space
-        if let Ok(count) = pull_space_tools(project_dir, &space_client).await {
-            log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
+        if should_process_api("tools", api_filter) {
+            if let Ok(count) = pull_space_tools(project_dir, &space_client).await {
+                log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
+            }
         }
     }
 
@@ -129,10 +166,12 @@ pub async fn pull_saved_objects(
 /// * `project_dir` - Project directory path
 /// * `managed` - Whether to mark objects as managed (read-only in Kibana UI)
 /// * `space_filter` - Optional comma-separated list of space IDs to push (e.g., "default,marketing")
+/// * `api_filter` - Optional list of APIs to push (e.g., ["tools", "agents"])
 pub async fn push_saved_objects(
     project_dir: impl AsRef<Path>,
     managed: bool,
     space_filter: Option<&str>,
+    api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -141,17 +180,21 @@ pub async fn push_saved_objects(
 
     // Push space definitions FIRST (before any other operations)
     // This ensures spaces exist in Kibana before pushing resources to them
-    let spaces_manifest_path = project_dir.join("spaces.yml");
-    if spaces_manifest_path.exists() {
-        log::info!("Pushing space definitions...");
-        match push_spaces_internal(project_dir, &client).await {
-            Ok(space_count) => {
-                log::info!("✓ Pushed {} space definition(s)", space_count);
-            }
-            Err(e) => {
-                log::warn!("Failed to push space definitions: {}", e);
+    if should_process_api("spaces", api_filter) {
+        let spaces_manifest_path = project_dir.join("spaces.yml");
+        if spaces_manifest_path.exists() {
+            log::info!("Pushing space definitions...");
+            match push_spaces_internal(project_dir, &client).await {
+                Ok(space_count) => {
+                    log::info!("✓ Pushed {} space definition(s)", space_count);
+                }
+                Err(e) => {
+                    log::warn!("Failed to push space definitions: {}", e);
+                }
             }
         }
+    } else {
+        log::debug!("Skipping spaces push (filtered out)");
     }
 
     // Determine which spaces to operate on
@@ -170,50 +213,58 @@ pub async fn push_saved_objects(
         let space_client = client.space(space_id)?;
 
         // Push saved objects for this space
-        match push_space_saved_objects(project_dir, &space_client, managed).await {
-            Ok(count) => {
-                total_saved_objects += count;
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to push saved objects for space {}: {}",
-                    space_id.cyan(),
-                    e
-                );
+        if should_process_api("saved_objects", api_filter) {
+            match push_space_saved_objects(project_dir, &space_client, managed).await {
+                Ok(count) => {
+                    total_saved_objects += count;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to push saved objects for space {}: {}",
+                        space_id.cyan(),
+                        e
+                    );
+                }
             }
         }
 
         // Push workflows for this space
-        match push_space_workflows(project_dir, &space_client).await {
-            Ok(count) => {
-                total_workflows += count;
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to push workflows for space {}: {}",
-                    space_id.cyan(),
-                    e
-                );
+        if should_process_api("workflows", api_filter) {
+            match push_space_workflows(project_dir, &space_client).await {
+                Ok(count) => {
+                    total_workflows += count;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to push workflows for space {}: {}",
+                        space_id.cyan(),
+                        e
+                    );
+                }
             }
         }
 
         // Push agents for this space
-        match push_space_agents(project_dir, &space_client).await {
-            Ok(count) => {
-                total_agents += count;
-            }
-            Err(e) => {
-                log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
+        if should_process_api("agents", api_filter) {
+            match push_space_agents(project_dir, &space_client).await {
+                Ok(count) => {
+                    total_agents += count;
+                }
+                Err(e) => {
+                    log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
+                }
             }
         }
 
         // Push tools for this space
-        match push_space_tools(project_dir, &space_client).await {
-            Ok(count) => {
-                total_tools += count;
-            }
-            Err(e) => {
-                log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+        if should_process_api("tools", api_filter) {
+            match push_space_tools(project_dir, &space_client).await {
+                Ok(count) => {
+                    total_tools += count;
+                }
+                Err(e) => {
+                    log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+                }
             }
         }
     }
@@ -238,11 +289,13 @@ pub async fn push_saved_objects(
 /// * `output_file` - Output file path (kept for backward compatibility, not used)
 /// * `managed` - Whether to mark objects as managed
 /// * `space_filter` - Optional comma-separated list of space IDs to bundle (e.g., "default,marketing")
+/// * `api_filter` - Optional list of APIs to bundle (e.g., ["tools", "agents"])
 pub async fn bundle_to_ndjson(
     project_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
     managed: bool,
     space_filter: Option<&str>,
+    api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
     let _output_file = output_file.as_ref(); // Keep for backward compatibility
@@ -257,41 +310,51 @@ pub async fn bundle_to_ndjson(
         log::info!("Bundling space: {}", space_id.cyan());
 
         // Bundle saved objects for this space
-        if let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await {
-            total_count += count;
+        if should_process_api("saved_objects", api_filter) {
+            if let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await {
+                total_count += count;
+            }
         }
 
         // Bundle workflows for this space
-        if let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
-            log::debug!(
-                "Bundled {} workflow(s) for space {}",
-                count,
-                space_id.cyan()
-            );
+        if should_process_api("workflows", api_filter) {
+            if let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
+                log::debug!(
+                    "Bundled {} workflow(s) for space {}",
+                    count,
+                    space_id.cyan()
+                );
+            }
         }
 
         // Bundle agents for this space
-        if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
-            log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
+        if should_process_api("agents", api_filter) {
+            if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
+                log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
+            }
         }
 
         // Bundle tools for this space
-        if let Ok(count) = bundle_space_tools(project_dir, space_id).await {
-            log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
+        if should_process_api("tools", api_filter) {
+            if let Ok(count) = bundle_space_tools(project_dir, space_id).await {
+                log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
+            }
         }
     }
 
     // Bundle space definitions (global)
-    let spaces_manifest_path = project_dir.join("spaces.yml");
-    if spaces_manifest_path.exists() {
-        log::info!("Bundling space definitions...");
-        let spaces_output = project_dir.join("bundle/spaces.ndjson");
-        match bundle_spaces_to_ndjson_internal(project_dir, &spaces_output).await {
-            Ok(space_count) => {
-                log::info!("✓ Bundled {} space definition(s)", space_count);
-            }
-            Err(e) => {
-                log::warn!("Failed to bundle space definitions: {}", e);
+    if should_process_api("spaces", api_filter) {
+        let spaces_manifest_path = project_dir.join("spaces.yml");
+        if spaces_manifest_path.exists() {
+            log::info!("Bundling space definitions...");
+            let spaces_output = project_dir.join("bundle/spaces.ndjson");
+            match bundle_spaces_to_ndjson_internal(project_dir, &spaces_output).await {
+                Ok(space_count) => {
+                    log::info!("✓ Bundled {} space definition(s)", space_count);
+                }
+                Err(e) => {
+                    log::warn!("Failed to bundle space definitions: {}", e);
+                }
             }
         }
     }

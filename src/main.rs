@@ -85,6 +85,7 @@ enum Commands {
     /// Examples:
     ///   kibob pull ./my-dashboards
     ///   kibob pull ./my-dashboards --space esdiag
+    ///   kibob pull ./my-dashboards --api tools,agents
     Pull {
         /// Project directory containing manifest (default: current directory)
         #[arg(default_value = ".")]
@@ -93,6 +94,10 @@ enum Commands {
         /// Kibana space to pull from (overrides KIBANA_SPACE env var)
         #[arg(long)]
         space: Option<String>,
+
+        /// Comma-separated list of APIs to pull (e.g., "saved_objects,workflows,agents,tools,spaces")
+        #[arg(long, value_delimiter = ',')]
+        api: Option<Vec<String>>,
     },
 
     /// Push (upload) local saved objects to Kibana
@@ -104,6 +109,7 @@ enum Commands {
     ///   kibob push . --managed true    # Read-only in Kibana (recommended for production)
     ///   kibob push . --managed false   # Editable in Kibana
     ///   kibob push . --space esdiag    # Push to specific space
+    ///   kibob push . --api tools       # Push only tools
     Push {
         /// Project directory containing objects to upload
         #[arg(default_value = ".")]
@@ -116,6 +122,10 @@ enum Commands {
         /// Kibana space to push to (overrides KIBANA_SPACE env var)
         #[arg(long)]
         space: Option<String>,
+
+        /// Comma-separated list of APIs to push (e.g., "saved_objects,workflows,agents,tools,spaces")
+        #[arg(long, value_delimiter = ',')]
+        api: Option<Vec<String>>,
     },
 
     /// Add items to an existing manifest
@@ -198,6 +208,10 @@ enum Commands {
         /// Kibana space(s) to bundle (comma-separated, e.g., "default,marketing")
         #[arg(long)]
         space: Option<String>,
+
+        /// Comma-separated list of APIs to bundle (e.g., "saved_objects,workflows,agents,tools,spaces")
+        #[arg(long, value_delimiter = ',')]
+        api: Option<Vec<String>>,
     },
 
     /// Migrate legacy structure to multi-space format
@@ -305,7 +319,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Pull { output_dir, space } => {
+        Commands::Pull {
+            output_dir,
+            space,
+            api,
+        } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
 
             // Convert space flag to space_filter string
@@ -315,7 +333,11 @@ async fn main() -> Result<()> {
                 log::info!("Filtering to space(s): {}", spaces.cyan());
             }
 
-            match pull_saved_objects(&output_dir, space_filter).await {
+            if let Some(apis) = &api {
+                log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
+            }
+
+            match pull_saved_objects(&output_dir, space_filter, api.as_deref()).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pulled {} object(s)", count);
                 }
@@ -329,6 +351,7 @@ async fn main() -> Result<()> {
             input_dir,
             managed,
             space,
+            api,
         } => {
             log::info!(
                 "Pushing {} objects from: {}",
@@ -347,7 +370,11 @@ async fn main() -> Result<()> {
                 log::info!("Filtering to space(s): {}", spaces.cyan());
             }
 
-            match push_saved_objects(&input_dir, managed, space_filter).await {
+            if let Some(apis) = &api {
+                log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
+            }
+
+            match push_saved_objects(&input_dir, managed, space_filter, api.as_deref()).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pushed {} object(s)", count);
                 }
@@ -416,6 +443,7 @@ async fn main() -> Result<()> {
             input_dir,
             managed,
             space,
+            api,
         } => {
             log::info!(
                 "Creating to-go bundle from: {}, managed: {}",
@@ -430,6 +458,10 @@ async fn main() -> Result<()> {
                 log::info!("Filtering to space(s): {}", spaces.cyan());
             }
 
+            if let Some(apis) = &api {
+                log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
+            }
+
             // Create bundle directory
             let bundle_dir = std::path::Path::new(&input_dir).join("bundle");
             std::fs::create_dir_all(&bundle_dir)?;
@@ -437,7 +469,15 @@ async fn main() -> Result<()> {
 
             // Bundle saved objects (now creates per-space bundles)
             let saved_objects_file = bundle_dir.join("saved_objects.ndjson");
-            match bundle_to_ndjson(&input_dir, &saved_objects_file, managed, space_filter).await {
+            match bundle_to_ndjson(
+                &input_dir,
+                &saved_objects_file,
+                managed,
+                space_filter,
+                api.as_deref(),
+            )
+            .await
+            {
                 Ok(count) => {
                     log::info!("✓ Bundled {} saved object(s)", count);
                 }
