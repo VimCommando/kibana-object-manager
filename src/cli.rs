@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use eyre::{Context, Result};
+use owo_colors::OwoColorize;
 use std::path::Path;
 use url::Url;
 
@@ -84,7 +85,7 @@ pub async fn pull_saved_objects(
 
     // Pull each managed space
     for space_id in space_context.target_space_ids() {
-        log::info!("Processing space: {}", space_id);
+        log::info!("Processing space: {}", space_id.cyan());
 
         // Pull saved objects for this space
         if let Ok(count) = pull_space_saved_objects(project_dir, &client, space_id).await {
@@ -93,17 +94,17 @@ pub async fn pull_saved_objects(
 
         // Pull workflows for this space
         if let Ok(count) = pull_space_workflows(project_dir, &client, space_id).await {
-            log::debug!("Pulled {} workflow(s) for space '{}'", count, space_id);
+            log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
         }
 
         // Pull agents for this space
         if let Ok(count) = pull_space_agents(project_dir, &client, space_id).await {
-            log::debug!("Pulled {} agent(s) for space '{}'", count, space_id);
+            log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
         }
 
         // Pull tools for this space
         if let Ok(count) = pull_space_tools(project_dir, &client, space_id).await {
-            log::debug!("Pulled {} tool(s) for space '{}'", count, space_id);
+            log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
         }
     }
 
@@ -151,38 +152,72 @@ pub async fn push_saved_objects(
     // Load space context
     let space_context = crate::space_context::SpaceContext::load(project_dir, space_filter)?;
 
-    let mut total_count = 0;
+    let mut total_saved_objects = 0;
+    let mut total_workflows = 0;
+    let mut total_agents = 0;
+    let mut total_tools = 0;
 
     // Push each managed space
     for space_id in space_context.target_space_ids() {
-        log::info!("Processing space: {}", space_id);
+        log::info!("Processing space: {}", space_id.cyan());
 
         // Push saved objects for this space
-        if let Ok(count) = push_space_saved_objects(project_dir, &client, space_id, managed).await {
-            total_count += count;
+        match push_space_saved_objects(project_dir, &client, space_id, managed).await {
+            Ok(count) => {
+                total_saved_objects += count;
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to push saved objects for space {}: {}",
+                    space_id.cyan(),
+                    e
+                );
+            }
         }
 
         // Push workflows for this space
-        if let Ok(count) = push_space_workflows(project_dir, &client, space_id).await {
-            log::debug!("Pushed {} workflow(s) for space '{}'", count, space_id);
+        match push_space_workflows(project_dir, &client, space_id).await {
+            Ok(count) => {
+                total_workflows += count;
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to push workflows for space {}: {}",
+                    space_id.cyan(),
+                    e
+                );
+            }
         }
 
         // Push agents for this space
-        if let Ok(count) = push_space_agents(project_dir, &client, space_id).await {
-            log::debug!("Pushed {} agent(s) for space '{}'", count, space_id);
+        match push_space_agents(project_dir, &client, space_id).await {
+            Ok(count) => {
+                total_agents += count;
+            }
+            Err(e) => {
+                log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
+            }
         }
 
         // Push tools for this space
-        if let Ok(count) = push_space_tools(project_dir, &client, space_id).await {
-            log::debug!("Pushed {} tool(s) for space '{}'", count, space_id);
+        match push_space_tools(project_dir, &client, space_id).await {
+            Ok(count) => {
+                total_tools += count;
+            }
+            Err(e) => {
+                log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+            }
         }
     }
 
     log::info!(
-        "✓ Push complete: {} total saved object(s) across all spaces",
-        total_count
+        "✓ Push complete: {} saved object(s), {} workflow(s), {} agent(s), {} tool(s)",
+        total_saved_objects,
+        total_workflows,
+        total_agents,
+        total_tools
     );
-    Ok(total_count)
+    Ok(total_saved_objects + total_workflows + total_agents + total_tools)
 }
 
 /// Bundle saved objects to NDJSON file for distribution
@@ -211,7 +246,7 @@ pub async fn bundle_to_ndjson(
 
     // Bundle each managed space
     for space_id in space_context.target_space_ids() {
-        log::info!("Bundling space: {}", space_id);
+        log::info!("Bundling space: {}", space_id.cyan());
 
         // Bundle saved objects for this space
         if let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await {
@@ -220,17 +255,21 @@ pub async fn bundle_to_ndjson(
 
         // Bundle workflows for this space
         if let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
-            log::debug!("Bundled {} workflow(s) for space '{}'", count, space_id);
+            log::debug!(
+                "Bundled {} workflow(s) for space {}",
+                count,
+                space_id.cyan()
+            );
         }
 
         // Bundle agents for this space
         if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
-            log::debug!("Bundled {} agent(s) for space '{}'", count, space_id);
+            log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
         }
 
         // Bundle tools for this space
         if let Ok(count) = bundle_space_tools(project_dir, space_id).await {
-            log::debug!("Bundled {} tool(s) for space '{}'", count, space_id);
+            log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
         }
     }
 
@@ -463,8 +502,8 @@ pub async fn add_workflows_to_manifest(
         let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
         if !space_context.is_space_managed(space_id) {
             eyre::bail!(
-                "Space '{}' is not managed. Add it first with: kibob add spaces . --include '^{}$'",
-                space_id,
+                "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
+                space_id.cyan(),
                 space_id
             );
         }
@@ -472,8 +511,8 @@ pub async fn add_workflows_to_manifest(
 
     // Load or create manifest for this space
     log::info!(
-        "Loading workflows manifest for space '{}' from {}",
-        space_id,
+        "Loading workflows manifest for space {} from {}",
+        space_id.cyan(),
         project_dir.display()
     );
     let manifest_path = get_space_workflows_manifest(project_dir, space_id);
@@ -545,7 +584,10 @@ pub async fn add_workflows_to_manifest(
         }
     } else {
         // Search via API
-        log::info!("Searching workflows via API in space '{}'...", space_id);
+        log::info!(
+            "Searching workflows via API in space {}...",
+            space_id.cyan()
+        );
         let client = load_kibana_client()?;
         let extractor = WorkflowsExtractor::new(client, space_id, None);
 
@@ -654,8 +696,8 @@ pub async fn add_workflows_to_manifest(
     // Save updated manifest
     manifest.write(&manifest_path)?;
     log::info!(
-        "✓ Updated manifest for space '{}' now has {} workflow(s)",
-        space_id,
+        "✓ Updated manifest for space {} now has {} workflow(s)",
+        space_id.cyan(),
         manifest.count()
     );
     log::info!("✓ Added {} new workflow(s)", added_count);
@@ -1485,8 +1527,8 @@ pub async fn add_agents_to_manifest(
         let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
         if !space_context.is_space_managed(space_id) {
             eyre::bail!(
-                "Space '{}' is not managed. Add it first with: kibob add spaces . --include '^{}$'",
-                space_id,
+                "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
+                space_id.cyan(),
                 space_id
             );
         }
@@ -1494,8 +1536,8 @@ pub async fn add_agents_to_manifest(
 
     // Load or create manifest for this space
     log::info!(
-        "Loading agents manifest for space '{}' from {}",
-        space_id,
+        "Loading agents manifest for space {} from {}",
+        space_id.cyan(),
         project_dir.display()
     );
     let manifest_path = get_space_agents_manifest(project_dir, space_id);
@@ -1563,7 +1605,7 @@ pub async fn add_agents_to_manifest(
         }
     } else {
         // Search via API
-        log::info!("Searching agents via API in space '{}'...", space_id);
+        log::info!("Searching agents via API in space {}...", space_id.cyan());
         let client = load_kibana_client()?;
         let extractor = AgentsExtractor::new(client, space_id, None);
 
@@ -1665,8 +1707,8 @@ pub async fn add_agents_to_manifest(
     // Save updated manifest
     manifest.write(&manifest_path)?;
     log::info!(
-        "✓ Updated manifest for space '{}' now has {} agent(s)",
-        space_id,
+        "✓ Updated manifest for space {} now has {} agent(s)",
+        space_id.cyan(),
         manifest.count()
     );
     log::info!("✓ Added {} new agent(s)", added_count);
@@ -1984,8 +2026,8 @@ pub async fn add_tools_to_manifest(
         let space_context = crate::space_context::SpaceContext::load(project_dir, None)?;
         if !space_context.is_space_managed(space_id) {
             eyre::bail!(
-                "Space '{}' is not managed. Add it first with: kibob add spaces . --include '^{}$'",
-                space_id,
+                "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
+                space_id.cyan(),
                 space_id
             );
         }
@@ -1993,8 +2035,8 @@ pub async fn add_tools_to_manifest(
 
     // Load or create manifest for this space
     log::info!(
-        "Loading tools manifest for space '{}' from {}",
-        space_id,
+        "Loading tools manifest for space {} from {}",
+        space_id.cyan(),
         project_dir.display()
     );
     let manifest_path = get_space_tools_manifest(project_dir, space_id);
@@ -2062,7 +2104,7 @@ pub async fn add_tools_to_manifest(
         }
     } else {
         // Search via API
-        log::info!("Searching tools via API in space '{}'...", space_id);
+        log::info!("Searching tools via API in space {}...", space_id.cyan());
         let client = load_kibana_client()?;
         let extractor = ToolsExtractor::new(client, space_id, None);
 
@@ -2169,8 +2211,8 @@ pub async fn add_tools_to_manifest(
     // Save updated manifest
     manifest.write(&manifest_path)?;
     log::info!(
-        "✓ Updated manifest for space '{}' now has {} tool(s)",
-        space_id,
+        "✓ Updated manifest for space {} now has {} tool(s)",
+        space_id.cyan(),
         manifest.count()
     );
     log::info!("✓ Added {} new tool(s)", added_count);
@@ -2474,8 +2516,8 @@ fn load_space_saved_objects_manifest(
         .map(Some)
         .with_context(|| {
             format!(
-                "Failed to load saved objects manifest for space '{}'",
-                space_id
+                "Failed to load saved objects manifest for space {}",
+                space_id.cyan()
             )
         })
 }
@@ -2490,13 +2532,13 @@ async fn pull_space_saved_objects(
 
     if !manifest_path.exists() {
         log::debug!(
-            "No saved objects manifest for space '{}', skipping",
-            space_id
+            "No saved objects manifest for space {}, skipping",
+            space_id.cyan()
         );
         return Ok(0);
     }
 
-    log::info!("Pulling saved objects for space '{}'", space_id);
+    log::info!("Pulling saved objects for space {}", space_id.cyan());
     let manifest = crate::kibana::saved_objects::SavedObjectsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} object(s) from manifest", manifest.count());
 
@@ -2522,9 +2564,9 @@ async fn pull_space_saved_objects(
     let count = writer.load(vega_unescaped).await?;
 
     log::info!(
-        "✓ Pulled {} saved object(s) for space '{}'",
+        "✓ Pulled {} saved object(s) for space {}",
         count,
-        space_id
+        space_id.cyan()
     );
     Ok(count)
 }
@@ -2538,11 +2580,14 @@ async fn pull_space_workflows(
     let manifest_path = get_space_workflows_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
-        log::debug!("No workflows manifest for space '{}', skipping", space_id);
+        log::debug!(
+            "No workflows manifest for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Pulling workflows for space '{}'", space_id);
+    log::info!("Pulling workflows for space {}", space_id.cyan());
     let manifest = WorkflowsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} workflow(s) from manifest", manifest.count());
 
@@ -2577,7 +2622,11 @@ async fn pull_space_workflows(
         count += 1;
     }
 
-    log::info!("✓ Pulled {} workflow(s) for space '{}'", count, space_id);
+    log::info!(
+        "✓ Pulled {} workflow(s) for space {}",
+        count,
+        space_id.cyan()
+    );
     Ok(count)
 }
 
@@ -2586,11 +2635,11 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
     let manifest_path = get_space_agents_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
-        log::debug!("No agents manifest for space '{}', skipping", space_id);
+        log::debug!("No agents manifest for space {}, skipping", space_id.cyan());
         return Ok(0);
     }
 
-    log::info!("Pulling agents for space '{}'", space_id);
+    log::info!("Pulling agents for space {}", space_id.cyan());
     let manifest = AgentsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} agent(s) from manifest", manifest.count());
 
@@ -2623,7 +2672,7 @@ async fn pull_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
         count += 1;
     }
 
-    log::info!("✓ Pulled {} agent(s) for space '{}'", count, space_id);
+    log::info!("✓ Pulled {} agent(s) for space {}", count, space_id.cyan());
     Ok(count)
 }
 
@@ -2632,11 +2681,11 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
     let manifest_path = get_space_tools_manifest(project_dir, space_id);
 
     if !manifest_path.exists() {
-        log::debug!("No tools manifest for space '{}', skipping", space_id);
+        log::debug!("No tools manifest for space {}, skipping", space_id.cyan());
         return Ok(0);
     }
 
-    log::info!("Pulling tools for space '{}'", space_id);
+    log::info!("Pulling tools for space {}", space_id.cyan());
     let manifest = ToolsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} tool(s) from manifest", manifest.count());
 
@@ -2669,7 +2718,7 @@ async fn pull_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
         count += 1;
     }
 
-    log::info!("✓ Pulled {} tool(s) for space '{}'", count, space_id);
+    log::info!("✓ Pulled {} tool(s) for space {}", count, space_id.cyan());
     Ok(count)
 }
 
@@ -2687,11 +2736,14 @@ async fn push_space_saved_objects(
     let objects_dir = get_space_objects_dir(project_dir, space_id);
 
     if !objects_dir.exists() {
-        log::debug!("No objects directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No objects directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Pushing saved objects for space '{}'", space_id);
+    log::info!("Pushing saved objects for space {}", space_id.cyan());
     let reader = DirectoryReader::new(&objects_dir);
 
     // Transform: Escape Vega specs, escape JSON strings, and add managed flag
@@ -2709,9 +2761,9 @@ async fn push_space_saved_objects(
     let count = loader.load(flagged).await?;
 
     log::info!(
-        "✓ Pushed {} saved object(s) for space '{}'",
+        "✓ Pushed {} saved object(s) for space {}",
         count,
-        space_id
+        space_id.cyan()
     );
     Ok(count)
 }
@@ -2725,11 +2777,14 @@ async fn push_space_workflows(
     let workflows_dir = get_space_workflows_dir(project_dir, space_id);
 
     if !workflows_dir.exists() {
-        log::debug!("No workflows directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No workflows directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Pushing workflows for space '{}'", space_id);
+    log::info!("Pushing workflows for space {}", space_id.cyan());
 
     // Read all JSON files from workflows directory
     let mut workflows = Vec::new();
@@ -2746,7 +2801,11 @@ async fn push_space_workflows(
     let loader = WorkflowsLoader::new(client.clone(), space_id);
     let count = loader.load(workflows).await?;
 
-    log::info!("✓ Pushed {} workflow(s) for space '{}'", count, space_id);
+    log::info!(
+        "✓ Pushed {} workflow(s) for space {}",
+        count,
+        space_id.cyan()
+    );
     Ok(count)
 }
 
@@ -2755,11 +2814,14 @@ async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
     let agents_dir = get_space_agents_dir(project_dir, space_id);
 
     if !agents_dir.exists() {
-        log::debug!("No agents directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No agents directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Pushing agents for space '{}'", space_id);
+    log::info!("Pushing agents for space {}", space_id.cyan());
 
     // Read all JSON files from agents directory
     let mut agents = Vec::new();
@@ -2768,8 +2830,7 @@ async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -2777,7 +2838,7 @@ async fn push_space_agents(project_dir: &Path, client: &Kibana, space_id: &str) 
     let loader = AgentsLoader::new(client.clone(), space_id);
     let count = loader.load(agents).await?;
 
-    log::info!("✓ Pushed {} agent(s) for space '{}'", count, space_id);
+    log::info!("✓ Pushed {} agent(s) for space {}", count, space_id.cyan());
     Ok(count)
 }
 
@@ -2786,11 +2847,11 @@ async fn push_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
     let tools_dir = get_space_tools_dir(project_dir, space_id);
 
     if !tools_dir.exists() {
-        log::debug!("No tools directory for space '{}', skipping", space_id);
+        log::debug!("No tools directory for space {}, skipping", space_id.cyan());
         return Ok(0);
     }
 
-    log::info!("Pushing tools for space '{}'", space_id);
+    log::info!("Pushing tools for space {}", space_id.cyan());
 
     // Read all JSON files from tools directory
     let mut tools = Vec::new();
@@ -2799,8 +2860,7 @@ async fn push_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }
@@ -2808,7 +2868,7 @@ async fn push_space_tools(project_dir: &Path, client: &Kibana, space_id: &str) -
     let loader = ToolsLoader::new(client.clone(), space_id);
     let count = loader.load(tools).await?;
 
-    log::info!("✓ Pushed {} tool(s) for space '{}'", count, space_id);
+    log::info!("✓ Pushed {} tool(s) for space {}", count, space_id.cyan());
     Ok(count)
 }
 
@@ -2825,11 +2885,14 @@ async fn bundle_space_saved_objects(
     let objects_dir = get_space_objects_dir(project_dir, space_id);
 
     if !objects_dir.exists() {
-        log::debug!("No objects directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No objects directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Bundling saved objects for space '{}'", space_id);
+    log::info!("Bundling saved objects for space {}", space_id.cyan());
 
     let reader = DirectoryReader::new(&objects_dir);
 
@@ -2857,9 +2920,9 @@ async fn bundle_space_saved_objects(
     }
 
     log::info!(
-        "✓ Bundled {} saved object(s) for space '{}' to {}",
+        "✓ Bundled {} saved object(s) for space {} to {}",
         flagged.len(),
-        space_id,
+        space_id.cyan(),
         output_file.display()
     );
     Ok(flagged.len())
@@ -2870,11 +2933,14 @@ async fn bundle_space_workflows(project_dir: &Path, space_id: &str) -> Result<us
     let workflows_dir = get_space_workflows_dir(project_dir, space_id);
 
     if !workflows_dir.exists() {
-        log::debug!("No workflows directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No workflows directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Bundling workflows for space '{}'", space_id);
+    log::info!("Bundling workflows for space {}", space_id.cyan());
 
     // Read all JSON files from workflows directory
     let mut workflows = Vec::new();
@@ -2902,9 +2968,9 @@ async fn bundle_space_workflows(project_dir: &Path, space_id: &str) -> Result<us
     }
 
     log::info!(
-        "✓ Bundled {} workflow(s) for space '{}' to {}",
+        "✓ Bundled {} workflow(s) for space {} to {}",
         workflows.len(),
-        space_id,
+        space_id.cyan(),
         output_file.display()
     );
     Ok(workflows.len())
@@ -2915,11 +2981,14 @@ async fn bundle_space_agents(project_dir: &Path, space_id: &str) -> Result<usize
     let agents_dir = get_space_agents_dir(project_dir, space_id);
 
     if !agents_dir.exists() {
-        log::debug!("No agents directory for space '{}', skipping", space_id);
+        log::debug!(
+            "No agents directory for space {}, skipping",
+            space_id.cyan()
+        );
         return Ok(0);
     }
 
-    log::info!("Bundling agents for space '{}'", space_id);
+    log::info!("Bundling agents for space {}", space_id.cyan());
 
     // Read all JSON files from agents directory
     let mut agents = Vec::new();
@@ -2947,9 +3016,9 @@ async fn bundle_space_agents(project_dir: &Path, space_id: &str) -> Result<usize
     }
 
     log::info!(
-        "✓ Bundled {} agent(s) for space '{}' to {}",
+        "✓ Bundled {} agent(s) for space {} to {}",
         agents.len(),
-        space_id,
+        space_id.cyan(),
         output_file.display()
     );
     Ok(agents.len())
@@ -2960,11 +3029,11 @@ async fn bundle_space_tools(project_dir: &Path, space_id: &str) -> Result<usize>
     let tools_dir = get_space_tools_dir(project_dir, space_id);
 
     if !tools_dir.exists() {
-        log::debug!("No tools directory for space '{}', skipping", space_id);
+        log::debug!("No tools directory for space {}, skipping", space_id.cyan());
         return Ok(0);
     }
 
-    log::info!("Bundling tools for space '{}'", space_id);
+    log::info!("Bundling tools for space {}", space_id.cyan());
 
     // Read all JSON files from tools directory
     let mut tools = Vec::new();
@@ -2992,9 +3061,9 @@ async fn bundle_space_tools(project_dir: &Path, space_id: &str) -> Result<usize>
     }
 
     log::info!(
-        "✓ Bundled {} tool(s) for space '{}' to {}",
+        "✓ Bundled {} tool(s) for space {} to {}",
         tools.len(),
-        space_id,
+        space_id.cyan(),
         output_file.display()
     );
     Ok(tools.len())

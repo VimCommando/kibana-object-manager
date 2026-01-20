@@ -6,6 +6,7 @@ use crate::client::Kibana;
 use crate::etl::Loader;
 
 use eyre::Result;
+use owo_colors::OwoColorize;
 use serde_json::Value;
 
 /// Loader for Kibana tools
@@ -55,29 +56,49 @@ impl ToolsLoader {
         }
     }
 
-    /// Check if a tool exists by ID
+    /// Build the space-qualified API path
+    fn space_path(&self, endpoint: &str) -> String {
+        if self.space_id == "default" {
+            format!("/{}", endpoint)
+        } else {
+            format!("/s/{}/{}", self.space_id, endpoint)
+        }
+    }
+
+    /// Check if a tool exists by ID using HEAD request
     ///
     /// Returns true if the tool exists, false if it returns 404
     async fn tool_exists(&self, tool_id: &str) -> Result<bool> {
         let path = format!("api/agent_builder/tools/{}", tool_id);
+        let display_path = self.space_path(&path);
 
-        log::debug!(
-            "Checking if tool '{}' exists in space '{}'",
-            tool_id,
-            self.space_id
-        );
+        log::debug!("{} {}", "HEAD".green(), display_path);
 
-        let response = self.client.get_with_space(&self.space_id, &path).await?;
+        let response = self.client.head_with_space(&self.space_id, &path).await?;
 
         match response.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
+            200 => {
+                log::debug!(
+                    "{} {} - tool exists, will update",
+                    "200".green(),
+                    tool_id.cyan()
+                );
+                Ok(true)
+            }
+            404 => {
+                log::debug!(
+                    "{} {} - tool not found, will create",
+                    "404".yellow(),
+                    tool_id.cyan()
+                );
+                Ok(false)
+            }
             _ => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 eyre::bail!(
-                    "Failed to check tool '{}' existence ({}): {}",
-                    tool_id,
+                    "Failed to check tool {} existence ({}): {}",
+                    tool_id.cyan(),
                     status,
                     body
                 )
@@ -93,8 +114,9 @@ impl ToolsLoader {
             .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
 
         let path = "api/agent_builder/tools/";
+        let display_path = self.space_path(path);
 
-        log::debug!("POST tool via {} in space '{}'", path, self.space_id);
+        log::debug!("{} {}", "POST".green(), display_path);
 
         let response = self
             .client
@@ -104,32 +126,52 @@ impl ToolsLoader {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            eyre::bail!("Failed to create tool '{}' ({}): {}", tool_id, status, body);
+            eyre::bail!(
+                "Failed to create tool {} ({}): {}",
+                tool_id.cyan(),
+                status,
+                body
+            );
         }
 
-        log::info!("Created tool: {}", tool_id);
+        log::info!("Created tool: {}", tool_id.cyan());
 
         Ok(())
     }
 
     /// Update an existing tool using PUT /api/agent_builder/tools/<id>
+    ///
+    /// Note: Unlike the POST (create) endpoint, the PUT (update) endpoint does NOT
+    /// include the 'id' field in the request body - it's only in the URL path.
     async fn update_tool(&self, tool_id: &str, tool: &Value) -> Result<()> {
-        let path = format!("api/agent_builder/tools/{}", tool_id);
+        // Remove the 'id' field from the body since it shouldn't be in PUT requests
+        let mut tool_body = tool.clone();
+        if let Some(obj) = tool_body.as_object_mut() {
+            obj.remove("id");
+        }
 
-        log::debug!("PUT tool via {} in space '{}'", path, self.space_id);
+        let path = format!("api/agent_builder/tools/{}", tool_id);
+        let display_path = self.space_path(&path);
+
+        log::debug!("{} {}", "PUT".green(), display_path);
 
         let response = self
             .client
-            .put_json_value_with_space(&self.space_id, &path, tool)
+            .put_json_value_with_space(&self.space_id, &path, &tool_body)
             .await?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            eyre::bail!("Failed to update tool '{}' ({}): {}", tool_id, status, body);
+            eyre::bail!(
+                "Failed to update tool {} ({}): {}",
+                tool_id.cyan(),
+                status,
+                body
+            );
         }
 
-        log::info!("Updated tool: {}", tool_id);
+        log::info!("Updated tool: {}", tool_id.cyan());
 
         Ok(())
     }
@@ -152,7 +194,7 @@ impl ToolsLoader {
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
-            log::debug!("Skipping readonly tool: {}", tool_id);
+            log::debug!("Skipping readonly tool: {}", tool_id.cyan());
             return Ok(());
         }
 
@@ -177,7 +219,6 @@ impl Loader for ToolsLoader {
             count += 1;
         }
 
-        log::info!("Loaded {} tool(s) to Kibana", count);
         Ok(count)
     }
 }
@@ -212,6 +253,30 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing 'id' field")
+        );
+    }
+
+    #[test]
+    fn test_space_path_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = ToolsLoader::new(client, "default");
+
+        assert_eq!(
+            loader.space_path("api/agent_builder/tools/123"),
+            "/api/agent_builder/tools/123"
+        );
+    }
+
+    #[test]
+    fn test_space_path_non_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = ToolsLoader::new(client, "shanks");
+
+        assert_eq!(
+            loader.space_path("api/agent_builder/tools/123"),
+            "/s/shanks/api/agent_builder/tools/123"
         );
     }
 }

@@ -6,6 +6,7 @@ use crate::client::Kibana;
 use crate::etl::Loader;
 
 use eyre::Result;
+use owo_colors::OwoColorize;
 use serde_json::Value;
 
 /// Loader for Kibana agents
@@ -55,29 +56,49 @@ impl AgentsLoader {
         }
     }
 
-    /// Check if an agent exists by ID
+    /// Build the space-qualified API path
+    fn space_path(&self, endpoint: &str) -> String {
+        if self.space_id == "default" {
+            format!("/{}", endpoint)
+        } else {
+            format!("/s/{}/{}", self.space_id, endpoint)
+        }
+    }
+
+    /// Check if an agent exists by ID using HEAD request
     ///
     /// Returns true if the agent exists, false if it returns 404
     async fn agent_exists(&self, agent_id: &str) -> Result<bool> {
         let path = format!("api/agent_builder/agents/{}", agent_id);
+        let display_path = self.space_path(&path);
 
-        log::debug!(
-            "Checking if agent '{}' exists in space '{}'",
-            agent_id,
-            self.space_id
-        );
+        log::debug!("{} {}", "HEAD".green(), display_path);
 
-        let response = self.client.get_with_space(&self.space_id, &path).await?;
+        let response = self.client.head_with_space(&self.space_id, &path).await?;
 
         match response.status().as_u16() {
-            200 => Ok(true),
-            404 => Ok(false),
+            200 => {
+                log::debug!(
+                    "{} {} - agent exists, will update",
+                    "200".green(),
+                    agent_id.cyan()
+                );
+                Ok(true)
+            }
+            404 => {
+                log::debug!(
+                    "{} {} - agent not found, will create",
+                    "404".yellow(),
+                    agent_id.cyan()
+                );
+                Ok(false)
+            }
             _ => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 eyre::bail!(
-                    "Failed to check agent '{}' existence ({}): {}",
-                    agent_id,
+                    "Failed to check agent {} existence ({}): {}",
+                    agent_id.cyan(),
                     status,
                     body
                 )
@@ -98,8 +119,9 @@ impl AgentsLoader {
             .unwrap_or("unknown");
 
         let path = "api/agent_builder/agents/";
+        let display_path = self.space_path(path);
 
-        log::debug!("POST agent via {} in space '{}'", path, self.space_id);
+        log::debug!("{} {}", "POST".green(), display_path);
 
         let response = self
             .client
@@ -110,15 +132,19 @@ impl AgentsLoader {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             eyre::bail!(
-                "Failed to create agent '{}' (id: {}) ({}): {}",
-                agent_name,
-                agent_id,
+                "Failed to create agent {} (id: {}) ({}): {}",
+                agent_name.cyan(),
+                agent_id.cyan(),
                 status,
                 body
             );
         }
 
-        log::info!("Created agent: {} (id: {})", agent_name, agent_id);
+        log::info!(
+            "Created agent: {} (id: {})",
+            agent_name.cyan(),
+            agent_id.cyan()
+        );
 
         Ok(())
     }
@@ -131,8 +157,9 @@ impl AgentsLoader {
             .unwrap_or("unknown");
 
         let path = format!("api/agent_builder/agents/{}", agent_id);
+        let display_path = self.space_path(&path);
 
-        log::debug!("PUT agent via {} in space '{}'", path, self.space_id);
+        log::debug!("{} {}", "PUT".green(), display_path);
 
         let response = self
             .client
@@ -143,15 +170,19 @@ impl AgentsLoader {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             eyre::bail!(
-                "Failed to update agent '{}' (id: {}) ({}): {}",
-                agent_name,
-                agent_id,
+                "Failed to update agent {} (id: {}) ({}): {}",
+                agent_name.cyan(),
+                agent_id.cyan(),
                 status,
                 body
             );
         }
 
-        log::info!("Updated agent: {} (id: {})", agent_name, agent_id);
+        log::info!(
+            "Updated agent: {} (id: {})",
+            agent_name.cyan(),
+            agent_id.cyan()
+        );
 
         Ok(())
     }
@@ -160,11 +191,23 @@ impl AgentsLoader {
     ///
     /// Checks if the agent exists first to determine whether to use
     /// POST (create) or PUT (update)
+    ///
+    /// Skips readonly agents as they cannot be modified
     async fn upsert_agent(&self, agent: &Value) -> Result<()> {
         let agent_id = agent
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Agent missing 'id' field"))?;
+
+        // Skip readonly agents (builtin agents that can't be modified)
+        if agent
+            .get("readonly")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            log::debug!("Skipping readonly agent: {}", agent_id.cyan());
+            return Ok(());
+        }
 
         if self.agent_exists(agent_id).await? {
             // Agent exists - update it
@@ -187,7 +230,6 @@ impl Loader for AgentsLoader {
             count += 1;
         }
 
-        log::info!("Loaded {} agent(s) to Kibana", count);
         Ok(count)
     }
 }
@@ -222,6 +264,30 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing 'id' field")
+        );
+    }
+
+    #[test]
+    fn test_space_path_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = AgentsLoader::new(client, "default");
+
+        assert_eq!(
+            loader.space_path("api/agent_builder/agents/123"),
+            "/api/agent_builder/agents/123"
+        );
+    }
+
+    #[test]
+    fn test_space_path_non_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = AgentsLoader::new(client, "shanks");
+
+        assert_eq!(
+            loader.space_path("api/agent_builder/agents/123"),
+            "/s/shanks/api/agent_builder/agents/123"
         );
     }
 }

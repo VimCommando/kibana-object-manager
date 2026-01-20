@@ -73,7 +73,7 @@ impl Kibana {
             .collect();
         let use_form_data = match headers.get("Content-Type") {
             Some(content_type) => {
-                log::debug!("Content-Type: {}", content_type.to_str()?);
+                log::trace!("Content-Type: {}", content_type.to_str()?);
                 content_type.to_str()?.starts_with("multipart/form-data")
             }
             None => false,
@@ -103,7 +103,7 @@ impl Kibana {
             Some(body) if use_form_data => {
                 // As of October 2025 we're using a static filename, as the only
                 // use of form data is dashboards.ndjson for the saved objects API
-                log::debug!("Sending request with form-data");
+                log::trace!("Sending request with form-data");
                 let part = multipart::Part::bytes(body.to_vec())
                     .file_name("dashboards.ndjson")
                     .mime_str("application/x-ndjson")?;
@@ -111,7 +111,7 @@ impl Kibana {
                 client.multipart(form).send().await
             }
             Some(body) => {
-                log::debug!("Sending request with body");
+                log::trace!("Sending request with body");
                 client.body(body.to_vec()).send().await
             }
             None => client.send().await,
@@ -166,6 +166,45 @@ impl Kibana {
             "Kibana".to_string(),
         );
         self.request(Method::GET, Some(space_id), &headers, path, None)
+            .await
+    }
+
+    /// Helper for HEAD requests (no space scoping)
+    pub async fn head(&self, path: &str) -> Result<reqwest::Response> {
+        self.request(Method::HEAD, None, &HashMap::new(), path, None)
+            .await
+    }
+
+    /// Helper for HEAD requests with space scoping
+    pub async fn head_with_space(&self, space_id: &str, path: &str) -> Result<reqwest::Response> {
+        self.request(Method::HEAD, Some(space_id), &HashMap::new(), path, None)
+            .await
+    }
+
+    /// Helper for HEAD requests for internal Kibana APIs (no space scoping)
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn head_internal(&self, path: &str) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::HEAD, None, &headers, path, None).await
+    }
+
+    /// Helper for HEAD requests for internal Kibana APIs with space scoping
+    /// Adds X-Elastic-Internal-Origin header required by some APIs (e.g., workflows)
+    pub async fn head_internal_with_space(
+        &self,
+        space_id: &str,
+        path: &str,
+    ) -> Result<reqwest::Response> {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "X-Elastic-Internal-Origin".to_string(),
+            "Kibana".to_string(),
+        );
+        self.request(Method::HEAD, Some(space_id), &headers, path, None)
             .await
     }
 

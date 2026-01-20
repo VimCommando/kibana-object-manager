@@ -6,6 +6,7 @@ use crate::client::Kibana;
 use crate::etl::Loader;
 
 use eyre::Result;
+use owo_colors::OwoColorize;
 use serde_json::Value;
 
 /// Loader for Kibana spaces
@@ -61,12 +62,40 @@ impl SpacesLoader {
         self
     }
 
-    /// Check if a space exists
+    /// Check if a space exists using HEAD request
     async fn space_exists(&self, space_id: &str) -> Result<bool> {
         let path = format!("/api/spaces/space/{}", space_id);
 
-        let response = self.client.get(&path).await?;
-        Ok(response.status().is_success())
+        log::debug!("{} {}", "HEAD".green(), path);
+
+        let response = self.client.head(&path).await?;
+
+        match response.status().as_u16() {
+            200 => {
+                log::debug!(
+                    "{} {} - space exists, will update",
+                    "200".green(),
+                    space_id.cyan()
+                );
+                Ok(true)
+            }
+            404 => {
+                log::debug!(
+                    "{} {} - space not found, will create",
+                    "404".yellow(),
+                    space_id.cyan()
+                );
+                Ok(false)
+            }
+            status => {
+                log::warn!(
+                    "{} {} - unexpected status",
+                    status.to_string().red(),
+                    space_id.cyan()
+                );
+                Ok(false)
+            }
+        }
     }
 
     /// Create or update a single space
@@ -79,18 +108,17 @@ impl SpacesLoader {
         let exists = self.space_exists(space_id).await?;
 
         if exists && !self.overwrite {
-            log::info!("Skipping existing space: {}", space_id);
+            log::info!("Skipping existing space: {}", space_id.cyan());
             return Ok(());
         }
 
-        let method = if exists { "PUT" } else { "POST" };
-        let path = if exists {
-            format!("/api/spaces/space/{}", space_id)
+        let (method, path) = if exists {
+            ("PUT", format!("/api/spaces/space/{}", space_id))
         } else {
-            "/api/spaces/space".to_string()
+            ("POST", "/api/spaces/space".to_string())
         };
 
-        log::debug!("{} space via {}", method, path);
+        log::debug!("{} {}", method.green(), path);
 
         let response = if exists {
             // PUT for update
@@ -104,9 +132,9 @@ impl SpacesLoader {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             eyre::bail!(
-                "Failed to {} space '{}' ({}): {}",
+                "Failed to {} space {} ({}): {}",
                 if exists { "update" } else { "create" },
-                space_id,
+                space_id.cyan(),
                 status,
                 body
             );
@@ -115,7 +143,7 @@ impl SpacesLoader {
         log::info!(
             "{} space: {}",
             if exists { "Updated" } else { "Created" },
-            space_id
+            space_id.cyan()
         );
 
         Ok(())
@@ -133,7 +161,7 @@ impl Loader for SpacesLoader {
             count += 1;
         }
 
-        log::info!("Loaded {} space(s) to Kibana", count);
+        // Don't log summary here - let caller handle it
         Ok(count)
     }
 }

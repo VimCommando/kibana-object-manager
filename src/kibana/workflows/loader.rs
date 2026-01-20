@@ -6,6 +6,7 @@ use crate::client::Kibana;
 use crate::etl::Loader;
 
 use eyre::Result;
+use owo_colors::OwoColorize;
 use serde_json::Value;
 
 /// Loader for Kibana workflows
@@ -55,8 +56,59 @@ impl WorkflowsLoader {
         }
     }
 
-    /// Create or update a single workflow
-    async fn upsert_workflow(&self, workflow: &Value) -> Result<()> {
+    /// Build the space-qualified API path
+    fn space_path(&self, endpoint: &str) -> String {
+        if self.space_id == "default" {
+            format!("/{}", endpoint)
+        } else {
+            format!("/s/{}/{}", self.space_id, endpoint)
+        }
+    }
+
+    /// Check if a workflow exists using HEAD request
+    async fn workflow_exists(&self, workflow_id: &str) -> Result<bool> {
+        let path = format!("api/workflows/{}", workflow_id);
+        let display_path = self.space_path(&path);
+
+        log::debug!("{} {}", "HEAD".green(), display_path);
+
+        let response = self
+            .client
+            .head_internal_with_space(&self.space_id, &path)
+            .await?;
+
+        match response.status().as_u16() {
+            200 => {
+                log::debug!(
+                    "{} {} - workflow exists, will update",
+                    "200".green(),
+                    workflow_id.cyan()
+                );
+                Ok(true)
+            }
+            404 => {
+                log::debug!(
+                    "{} {} - workflow not found, will create",
+                    "404".yellow(),
+                    workflow_id.cyan()
+                );
+                Ok(false)
+            }
+            _ => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                eyre::bail!(
+                    "Failed to check workflow {} existence ({}): {}",
+                    workflow_id.cyan(),
+                    status,
+                    body
+                )
+            }
+        }
+    }
+
+    /// Create a new workflow using POST /api/workflows/<id>
+    async fn create_workflow(&self, workflow: &Value) -> Result<()> {
         let workflow_id = workflow
             .get("id")
             .and_then(|v| v.as_str())
@@ -68,8 +120,9 @@ impl WorkflowsLoader {
             .unwrap_or("unknown");
 
         let path = format!("api/workflows/{}", workflow_id);
+        let display_path = self.space_path(&path);
 
-        log::debug!("POST workflow via {} in space '{}'", path, self.space_id);
+        log::debug!("{} {}", "POST".green(), display_path);
 
         let response = self
             .client
@@ -80,17 +133,82 @@ impl WorkflowsLoader {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             eyre::bail!(
-                "Failed to create/update workflow '{}' (id: {}) ({}): {}",
-                workflow_name,
-                workflow_id,
+                "Failed to create workflow {} (id: {}) ({}): {}",
+                workflow_name.cyan(),
+                workflow_id.cyan(),
                 status,
                 body
             );
         }
 
-        log::info!("Loaded workflow: {} (id: {})", workflow_name, workflow_id);
+        log::info!(
+            "Created workflow: {} (id: {})",
+            workflow_name.cyan(),
+            workflow_id.cyan()
+        );
 
         Ok(())
+    }
+
+    /// Update an existing workflow using POST /api/workflows/<id>
+    async fn update_workflow(&self, workflow: &Value) -> Result<()> {
+        let workflow_id = workflow
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
+
+        let workflow_name = workflow
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        let path = format!("api/workflows/{}", workflow_id);
+        let display_path = self.space_path(&path);
+
+        log::debug!("{} {}", "POST".green(), display_path);
+
+        let response = self
+            .client
+            .post_json_value_internal_with_space(&self.space_id, &path, workflow)
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            eyre::bail!(
+                "Failed to update workflow {} (id: {}) ({}): {}",
+                workflow_name.cyan(),
+                workflow_id.cyan(),
+                status,
+                body
+            );
+        }
+
+        log::info!(
+            "Updated workflow: {} (id: {})",
+            workflow_name.cyan(),
+            workflow_id.cyan()
+        );
+
+        Ok(())
+    }
+
+    /// Create or update a single workflow
+    ///
+    /// Checks if the workflow exists first to determine whether to create or update
+    async fn upsert_workflow(&self, workflow: &Value) -> Result<()> {
+        let workflow_id = workflow
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
+
+        if self.workflow_exists(workflow_id).await? {
+            // Workflow exists - update it
+            self.update_workflow(workflow).await
+        } else {
+            // Workflow doesn't exist - create it
+            self.create_workflow(workflow).await
+        }
     }
 }
 
@@ -105,7 +223,6 @@ impl Loader for WorkflowsLoader {
             count += 1;
         }
 
-        log::info!("Loaded {} workflow(s) to Kibana", count);
         Ok(count)
     }
 }
@@ -140,6 +257,27 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("missing 'id' field")
+        );
+    }
+
+    #[test]
+    fn test_space_path_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = WorkflowsLoader::new(client, "default");
+
+        assert_eq!(loader.space_path("api/workflows/123"), "/api/workflows/123");
+    }
+
+    #[test]
+    fn test_space_path_non_default() {
+        let url = Url::parse("http://localhost:5601").unwrap();
+        let client = Kibana::try_new(url, Auth::None).unwrap();
+        let loader = WorkflowsLoader::new(client, "shanks");
+
+        assert_eq!(
+            loader.space_path("api/workflows/123"),
+            "/s/shanks/api/workflows/123"
         );
     }
 }

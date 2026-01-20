@@ -257,21 +257,35 @@ fn normalize_triple_quotes(input: &str) -> String {
 
                     // This is a triple-quote string, collect content until closing """
                     let mut content = String::new();
-                    let mut quote_count = 0;
+                    let mut pending_quotes = Vec::new();
 
                     while let Some(c) = chars.next() {
                         if c == '"' {
-                            quote_count += 1;
-                            if quote_count == 3 {
+                            pending_quotes.push('"');
+
+                            // Check if we have at least 3 quotes to potentially close the string
+                            if pending_quotes.len() >= 3 {
+                                // Check if the last 3 quotes form the closing delimiter
+                                // We need to be careful: if content ends with quotes, like `"text"`,
+                                // followed by closing `"""`, we get `"text""""` (4 quotes)
+                                // The first quote is content, the last 3 are the delimiter
+
+                                // Take the last 3 as the closing delimiter
+                                pending_quotes.truncate(pending_quotes.len() - 3);
+
+                                // Add any remaining quotes to content
+                                for q in pending_quotes {
+                                    content.push(q);
+                                }
+
                                 // Found closing triple-quotes
                                 break;
                             }
                         } else {
-                            // Not a quote, add any accumulated quotes to content
-                            for _ in 0..quote_count {
-                                content.push('"');
+                            // Not a quote, flush all pending quotes to content
+                            for q in pending_quotes.drain(..) {
+                                content.push(q);
                             }
-                            quote_count = 0;
                             content.push(c);
                         }
                     }
@@ -597,6 +611,27 @@ line3"""}"#;
         // Should match original
         assert_eq!(parsed["id"], original["id"]);
         assert_eq!(parsed["yaml"], original["yaml"]);
+    }
+
+    #[test]
+    fn test_json5_parse_triple_quotes_ending_with_quote() {
+        // Test the edge case where triple-quoted content ends with a quote character
+        // This creates 4 consecutive quotes: the quote in content + the closing """
+        let json5 = r#"{"text": """I'm sorry, you can't do that."""}"#;
+
+        let value = from_json5_str(json5).unwrap();
+        let text = value["text"].as_str().unwrap();
+        assert_eq!(text, r#"I'm sorry, you can't do that."#);
+    }
+
+    #[test]
+    fn test_json5_parse_triple_quotes_with_embedded_quotes() {
+        // Test content with various quote patterns
+        let json5 = r#"{"text": """He said "hello" and then left."""}"#;
+
+        let value = from_json5_str(json5).unwrap();
+        let text = value["text"].as_str().unwrap();
+        assert_eq!(text, r#"He said "hello" and then left."#);
     }
 
     #[test]
