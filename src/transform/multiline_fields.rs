@@ -81,7 +81,7 @@ fn process_multiline_fields(value: &mut Value, field_paths: &[String]) -> Result
             // We don't need to do anything here - just log that we found it.
             if let Some(s) = field_value.as_str() {
                 if s.contains('\n') {
-                    log::debug!(
+                    log::trace!(
                         "MultilineFieldFormatter: Found multiline field '{}' with {} chars, will use triple-quote syntax",
                         path,
                         s.len()

@@ -1913,8 +1913,7 @@ async fn push_agents_internal(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -1949,8 +1948,7 @@ pub async fn push_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -1996,8 +1994,7 @@ async fn bundle_agents_to_ndjson_internal(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -2039,8 +2036,7 @@ pub async fn bundle_agents_to_ndjson(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -2422,8 +2418,7 @@ async fn push_tools_internal(project_dir: impl AsRef<Path>, client: KibanaClient
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }
@@ -2458,8 +2453,7 @@ pub async fn push_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }
@@ -2505,8 +2499,7 @@ async fn bundle_tools_to_ndjson_internal(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }
@@ -2548,8 +2541,7 @@ pub async fn bundle_tools_to_ndjson(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }
@@ -3071,8 +3063,7 @@ async fn bundle_space_agents(project_dir: &Path, space_id: &str) -> Result<usize
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let agent: serde_json::Value = serde_json::from_str(&content)?;
+            let agent = storage::read_json5_file(&path)?;
             agents.push(agent);
         }
     }
@@ -3116,8 +3107,7 @@ async fn bundle_space_tools(project_dir: &Path, space_id: &str) -> Result<usize>
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let tool: serde_json::Value = serde_json::from_str(&content)?;
+            let tool = storage::read_json5_file(&path)?;
             tools.push(tool);
         }
     }

@@ -241,6 +241,8 @@ impl KibanaClient {
             None => format!("/{}", path_stripped),
         };
 
+        log::debug!("{} {}", method, final_path);
+
         self.request_raw(method, headers, &final_path, body).await
     }
 

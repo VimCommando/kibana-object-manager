@@ -100,11 +100,22 @@ impl ToolsLoader {
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Tool missing 'id' field"))?;
 
-        let path = "api/agent_builder/tools/";
+        // Note: For POST (create), the ID should be in the body, but NOT in the URL.
+        // The API endpoint is the collection resource /api/agent_builder/tools
 
-        log::debug!("{} {}", "POST".green(), path);
+        // Remove 'readonly' and 'schema' fields if present, as they cannot be sent in creation requests
+        let mut tool_body = tool.clone();
+        if let Some(obj) = tool_body.as_object_mut() {
+            obj.remove("readonly");
+            obj.remove("schema");
+        }
 
-        let response = self.client.post_json_value(path, tool).await?;
+        let path = "api/agent_builder/tools";
+
+        // Client logs the full path now, so we don't need to log the relative path here
+        // log::debug!("{} {}", "POST".green(), path);
+
+        let response = self.client.post_json_value(path, &tool_body).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -128,9 +139,12 @@ impl ToolsLoader {
     /// include the 'id' field in the request body - it's only in the URL path.
     async fn update_tool(&self, tool_id: &str, tool: &Value) -> Result<()> {
         // Remove the 'id' field from the body since it shouldn't be in PUT requests
+        // Also remove 'readonly' and 'schema' fields as they cannot be modified
         let mut tool_body = tool.clone();
         if let Some(obj) = tool_body.as_object_mut() {
             obj.remove("id");
+            obj.remove("readonly");
+            obj.remove("schema");
         }
 
         let path = format!("api/agent_builder/tools/{}", tool_id);

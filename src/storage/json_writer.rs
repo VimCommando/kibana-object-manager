@@ -265,6 +265,17 @@ fn normalize_triple_quotes(input: &str) -> String {
 
                             // Check if we have at least 3 quotes to potentially close the string
                             if pending_quotes.len() >= 3 {
+                                // IMPORTANT: We must check if the NEXT character is also a quote.
+                                // If it is, we should not close the string yet.
+                                // This handles cases where content ends with quotes, e.g. """content""""
+                                // where the last 3 quotes are the terminator, and the one before is part of content.
+                                if let Some(&next_char) = chars.peek() {
+                                    if next_char == '"' {
+                                        // Continue collecting quotes
+                                        continue;
+                                    }
+                                }
+
                                 // Check if the last 3 quotes form the closing delimiter
                                 // We need to be careful: if content ends with quotes, like `"text"`,
                                 // followed by closing `"""`, we get `"text""""` (4 quotes)
