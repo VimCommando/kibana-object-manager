@@ -100,7 +100,7 @@ impl SpacesExtractor {
     }
 
     /// Fetch a single space by ID from Kibana
-    async fn fetch_space(&self, space_id: &str) -> Result<Value> {
+    pub async fn fetch_space(&self, space_id: &str) -> Result<Value> {
         let path = format!("/api/spaces/space/{}", space_id);
 
         log::debug!("Fetching space '{}' from {}", space_id, path);

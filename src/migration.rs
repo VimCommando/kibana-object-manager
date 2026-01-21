@@ -29,7 +29,11 @@
 use eyre::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use crate::client::{Auth, KibanaClient};
 use crate::kibana::saved_objects::SavedObjectsManifest;
+use crate::kibana::spaces::{SpacesExtractor, SpacesManifest};
+use crate::storage::transform_env_file;
+use url::Url;
 
 /// Migrate a legacy manifest.json file to the new manifest/ directory structure
 ///
@@ -323,8 +327,10 @@ pub fn needs_migration_unified(project_dir: impl AsRef<Path>) -> bool {
     let legacy_manifest = project_dir.join("manifest.json");
     let old_manifest = project_dir.join("manifest/saved_objects.json");
 
-    // Detect target space from KIBANA_SPACE env var (default to "default")
-    let target_space = std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+    // Detect target space from environment (prefer lowercase kibana_space)
+    let target_space = std::env::var("kibana_space")
+        .or_else(|_| std::env::var("KIBANA_SPACE"))
+        .unwrap_or_else(|_| "default".to_string());
     let new_default_manifest_dir = project_dir.join(&target_space).join("manifest");
 
     // If new structure exists, already migrated
@@ -342,53 +348,13 @@ pub fn needs_migration_unified(project_dir: impl AsRef<Path>) -> bool {
 /// - Legacy Bash structure (manifest.json) → Multi-space structure
 /// - Old v0.1.0 single-space (manifest/saved_objects.json) → Multi-space structure
 ///
-/// Legacy structure (Bash):
-/// ```text
-/// project/
-///   ├── manifest.json
-///   └── objects/                    # flat: name.type.json
-/// ```
-///
-/// Old structure (v0.1.0):
-/// ```text
-/// project/
-///   ├── manifest/
-///   │   ├── saved_objects.json
-///   │   ├── workflows.yml
-///   │   ├── agents.yml
-///   │   └── tools.yml
-///   ├── objects/                    # hierarchical: type/name.json
-///   ├── workflows/
-///   ├── agents/
-///   └── tools/
-/// ```
-///
-/// New structure (multi-space):
-/// ```text
-/// project/
-/// ├── spaces.yml                # Global: managed spaces list
-/// ├── default/                  # Per-space directory
-/// │   ├── space.json           # Space definition
-/// │   ├── manifest/            # Per-space manifests
-/// │   │   ├── saved_objects.json
-/// │   │   ├── workflows.yml
-/// │   │   ├── agents.yml
-/// │   │   └── tools.yml
-/// │   ├── objects/
-/// │   ├── workflows/
-/// │   ├── agents/
-/// │   └── tools/
-/// └── marketing/                # Another space
-///     ├── space.json
-///     └── manifest/
-/// ```
-///
-/// The migration uses the `KIBANA_SPACE` environment variable (if set) to determine
-/// the target space directory. If not set, it defaults to "default".
-/// Note: KIBANA_SPACE is deprecated and may be safely removed after migration.
-pub fn migrate_to_multispace_unified(
+/// The migration uses the `kibana_space` environment variable (if set) to determine
+/// the target space directory. If not set, it defaults to `KIBANA_SPACE` or "default".
+/// It also updates the .env file if provided.
+pub async fn migrate_to_multispace_unified(
     project_dir: impl AsRef<Path>,
     backup_old: bool,
+    env_path: Option<impl AsRef<Path>>,
 ) -> Result<MigrationResult> {
     let project_dir = project_dir.as_ref();
 
@@ -396,14 +362,13 @@ pub fn migrate_to_multispace_unified(
         return Ok(MigrationResult::AlreadyMigrated);
     }
 
-    // Detect target space from KIBANA_SPACE env var (default to "default")
-    let target_space = std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+    // Detect target space from environment (prefer lowercase kibana_space)
+    let target_space = std::env::var("kibana_space")
+        .or_else(|_| std::env::var("KIBANA_SPACE"))
+        .unwrap_or_else(|_| "default".to_string());
 
     if target_space != "default" {
-        log::info!(
-            "Using KIBANA_SPACE='{}' for migration target (Note: KIBANA_SPACE is deprecated and may be safely removed after migration)",
-            target_space
-        );
+        log::info!("Using space '{}' for migration target", target_space);
     }
 
     log::info!("Migrating project to multi-space structure...");
@@ -418,6 +383,58 @@ pub fn migrate_to_multispace_unified(
     // Create target directories
     std::fs::create_dir_all(&new_manifest_dir)?;
     std::fs::create_dir_all(&target_space_dir)?;
+
+    // Update .env file if provided
+    if let Some(env_path) = env_path {
+        transform_env_file(env_path)?;
+    }
+
+    // Attempt to fetch space definition and update root spaces.yml
+    if let Ok(kibana_url) = std::env::var("KIBANA_URL") {
+        if let Ok(url) = Url::parse(&kibana_url) {
+            let auth = if let Ok(api_key) = std::env::var("KIBANA_APIKEY") {
+                Auth::Apikey(api_key)
+            } else if let (Ok(u), Ok(p)) = (
+                std::env::var("KIBANA_USERNAME"),
+                std::env::var("KIBANA_PASSWORD"),
+            ) {
+                Auth::Basic(u, p)
+            } else {
+                Auth::None
+            };
+
+            if let Ok(client) = KibanaClient::try_new(url, auth, project_dir) {
+                let extractor = SpacesExtractor::all(client);
+                if let Ok(space_def) = extractor.fetch_space(&target_space).await {
+                    let space_file = target_space_dir.join("space.json");
+                    let json = serde_json::to_string_pretty(&space_def)?;
+                    std::fs::write(&space_file, json)?;
+                    log::info!(
+                        "Fetched and wrote space definition to {}",
+                        space_file.display()
+                    );
+
+                    // Update root spaces.yml
+                    let spaces_manifest_path = project_dir.join("spaces.yml");
+                    let mut spaces_manifest = if spaces_manifest_path.exists() {
+                        SpacesManifest::read(&spaces_manifest_path)?
+                    } else {
+                        SpacesManifest::new()
+                    };
+
+                    let space_name = space_def
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&target_space);
+
+                    if spaces_manifest.add_space(target_space.clone(), space_name.to_string()) {
+                        spaces_manifest.write(&spaces_manifest_path)?;
+                        log::info!("Added space '{}' to root spaces.yml", target_space);
+                    }
+                }
+            }
+        }
+    }
 
     // Determine source manifest and migrate saved_objects.json
     let backup_path = if legacy_manifest_path.exists() {
@@ -1085,8 +1102,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_needs_migration_unified() {
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_needs_migration_unified() {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1102,7 +1120,9 @@ mod tests {
         assert!(needs_migration_unified(project_dir));
 
         // Migrate to multi-space structure
-        let result = migrate_to_multispace_unified(project_dir, false).unwrap();
+        let result = migrate_to_multispace_unified(project_dir, false, None::<&Path>)
+            .await
+            .unwrap();
         match result {
             MigrationResult::MigratedWithoutBackup => {}
             _ => panic!("Expected MigratedWithoutBackup result"),
@@ -1120,8 +1140,9 @@ mod tests {
         assert!(project_dir.join("default").exists());
     }
 
-    #[test]
-    fn test_migrate_unified_from_legacy() {
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_migrate_unified_from_legacy() {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1138,7 +1159,9 @@ mod tests {
         std::fs::write(objects_dir.join("test-1.dashboard.json"), "{}").unwrap();
 
         // Migrate with backup
-        let result = migrate_to_multispace_unified(project_dir, true).unwrap();
+        let result = migrate_to_multispace_unified(project_dir, true, None::<&Path>)
+            .await
+            .unwrap();
         match result {
             MigrationResult::MigratedWithBackup(backup_path) => {
                 assert!(backup_path.exists());
@@ -1158,8 +1181,9 @@ mod tests {
         assert!(project_dir.join("default/objects").exists());
     }
 
-    #[test]
-    fn test_migrate_unified_from_v0_1_0() {
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_migrate_unified_from_v0_1_0() {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1178,7 +1202,9 @@ mod tests {
         std::fs::create_dir_all(&objects_dir).unwrap();
 
         // Migrate (no backup for v0.1.0 → multi-space)
-        let result = migrate_to_multispace_unified(project_dir, false).unwrap();
+        let result = migrate_to_multispace_unified(project_dir, false, None::<&Path>)
+            .await
+            .unwrap();
         match result {
             MigrationResult::MigratedWithoutBackup => {}
             _ => panic!("Expected MigratedWithoutBackup result"),
@@ -1196,8 +1222,9 @@ mod tests {
         assert!(!project_dir.join("manifest/saved_objects.json").exists());
     }
 
-    #[test]
-    fn test_migrate_unified_already_migrated() {
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_migrate_unified_already_migrated() {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1212,10 +1239,48 @@ mod tests {
             .unwrap();
 
         // Try to migrate
-        let result = migrate_to_multispace_unified(project_dir, false).unwrap();
+        let result = migrate_to_multispace_unified(project_dir, false, None::<&Path>)
+            .await
+            .unwrap();
         match result {
             MigrationResult::AlreadyMigrated => {}
             _ => panic!("Expected AlreadyMigrated result"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_migrate_space_aware() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // Create legacy manifest
+        let manifest =
+            SavedObjectsManifest::with_objects(vec![SavedObject::new("dashboard", "test-1")]);
+        manifest.write(project_dir.join("manifest.json")).unwrap();
+
+        // Set lowercase env var
+        unsafe {
+            std::env::set_var("kibana_space", "marketing");
+        }
+
+        // Migrate
+        let result = migrate_to_multispace_unified(project_dir, false, None::<&Path>)
+            .await
+            .unwrap();
+        assert!(matches!(result, MigrationResult::MigratedWithoutBackup));
+
+        // Verify it used "marketing" directory
+        assert!(
+            project_dir
+                .join("marketing/manifest/saved_objects.json")
+                .exists()
+        );
+        assert!(!project_dir.join("default").exists());
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("kibana_space");
         }
     }
 }
