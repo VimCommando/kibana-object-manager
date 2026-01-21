@@ -10,21 +10,12 @@ use serde_json::{Map, Value};
 ///
 /// Comments (`//` and `/* */`) are fully preserved since no parsing occurs.
 #[derive(Debug, Clone)]
-pub struct VegaSpecUnescaper {
-    /// JSON paths to search for vega specs
-    #[allow(dead_code)]
-    search_paths: Vec<String>,
-}
+pub struct VegaSpecUnescaper {}
 
 impl VegaSpecUnescaper {
     /// Create a new VegaSpecUnescaper with default search paths
     pub fn new() -> Self {
-        Self {
-            search_paths: vec![
-                "*.params.spec".to_string(),
-                "attributes.visState.params.spec".to_string(),
-            ],
-        }
+        Self {}
     }
 }
 
@@ -160,21 +151,12 @@ fn is_vega_visualization(obj: &Map<String, Value>) -> bool {
 
 /// Transformer that escapes Vega specification fields from objects to JSON strings
 #[derive(Debug, Clone)]
-pub struct VegaSpecEscaper {
-    /// JSON paths to search for vega specs (should match VegaSpecUnescaper)
-    #[allow(dead_code)]
-    search_paths: Vec<String>,
-}
+pub struct VegaSpecEscaper {}
 
 impl VegaSpecEscaper {
     /// Create a new VegaSpecEscaper with default search paths
     pub fn new() -> Self {
-        Self {
-            search_paths: vec![
-                "*.params.spec".to_string(),
-                "attributes.visState.params.spec".to_string(),
-            ],
-        }
+        Self {}
     }
 }
 
