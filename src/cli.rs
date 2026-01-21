@@ -201,7 +201,7 @@ pub async fn push_saved_objects(
     space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
-    let project_dir = Arc::new(project_dir.as_ref().to_path_buf());
+    let project_dir = Arc::<Path>::from(project_dir.as_ref());
     let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
 
     log::info!("Connecting to Kibana...");
