@@ -390,48 +390,49 @@ pub async fn migrate_to_multispace_unified(
     }
 
     // Attempt to fetch space definition and update root spaces.yml
-    if let Ok(kibana_url) = std::env::var("KIBANA_URL") {
-        if let Ok(url) = Url::parse(&kibana_url) {
-            let auth = if let Ok(api_key) = std::env::var("KIBANA_APIKEY") {
-                Auth::Apikey(api_key)
-            } else if let (Ok(u), Ok(p)) = (
-                std::env::var("KIBANA_USERNAME"),
-                std::env::var("KIBANA_PASSWORD"),
-            ) {
-                Auth::Basic(u, p)
+    let kibana_url = match std::env::var("KIBANA_URL") {
+        Ok(url) => Url::parse(&url)?,
+        Err(_) => return Err(eyre::eyre!("KIBANA_URL environment variable not set")),
+    };
+
+    let auth = if let Ok(api_key) = std::env::var("KIBANA_APIKEY") {
+        Auth::Apikey(api_key)
+    } else if let (Ok(u), Ok(p)) = (
+        std::env::var("KIBANA_USERNAME"),
+        std::env::var("KIBANA_PASSWORD"),
+    ) {
+        Auth::Basic(u, p)
+    } else {
+        Auth::None
+    };
+
+    if let Ok(client) = KibanaClient::try_new(kibana_url, auth, project_dir) {
+        let extractor = SpacesExtractor::all(client);
+        if let Ok(space_def) = extractor.fetch_space(&target_space).await {
+            let space_file = target_space_dir.join("space.json");
+            let json = serde_json::to_string_pretty(&space_def)?;
+            std::fs::write(&space_file, json)?;
+            log::info!(
+                "Fetched and wrote space definition to {}",
+                space_file.display()
+            );
+
+            // Update root spaces.yml
+            let spaces_manifest_path = project_dir.join("spaces.yml");
+            let mut spaces_manifest = if spaces_manifest_path.exists() {
+                SpacesManifest::read(&spaces_manifest_path)?
             } else {
-                Auth::None
+                SpacesManifest::new()
             };
 
-            if let Ok(client) = KibanaClient::try_new(url, auth, project_dir) {
-                let extractor = SpacesExtractor::all(client);
-                if let Ok(space_def) = extractor.fetch_space(&target_space).await {
-                    let space_file = target_space_dir.join("space.json");
-                    let json = serde_json::to_string_pretty(&space_def)?;
-                    std::fs::write(&space_file, json)?;
-                    log::info!(
-                        "Fetched and wrote space definition to {}",
-                        space_file.display()
-                    );
+            let space_name = space_def
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&target_space);
 
-                    // Update root spaces.yml
-                    let spaces_manifest_path = project_dir.join("spaces.yml");
-                    let mut spaces_manifest = if spaces_manifest_path.exists() {
-                        SpacesManifest::read(&spaces_manifest_path)?
-                    } else {
-                        SpacesManifest::new()
-                    };
-
-                    let space_name = space_def
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&target_space);
-
-                    if spaces_manifest.add_space(target_space.clone(), space_name.to_string()) {
-                        spaces_manifest.write(&spaces_manifest_path)?;
-                        log::info!("Added space '{}' to root spaces.yml", target_space);
-                    }
-                }
+            if spaces_manifest.add_space(target_space.clone(), space_name.to_string()) {
+                spaces_manifest.write(&spaces_manifest_path)?;
+                log::info!("Added space '{}' to root spaces.yml", target_space);
             }
         }
     }

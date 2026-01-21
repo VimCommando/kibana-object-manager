@@ -54,7 +54,12 @@ pub fn transform_env_file(path: impl AsRef<Path>) -> Result<()> {
         }
     }
 
-    let new_content = new_lines.join("\n");
+    let new_content = if content.ends_with('\n') {
+        format!("{}\n", new_lines.join("\n"))
+    } else {
+        new_lines.join("\n")
+    };
+
     fs::write(path, new_content)
         .with_context(|| format!("Failed to write transformed .env file: {}", path.display()))?;
 
