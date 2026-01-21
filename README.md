@@ -1,6 +1,8 @@
 # Kibana Object Manager CLI Documentation
 
-A complete _revival_ and **rewrite** of the Kibana Object Manager plugin.
+⚠️ This `bash` version has been superceded by the Rust rewrite. ⚠️
+
+The complete _revival_ and **rewrite** of the Kibana Object Manager plugin.
 
 ## Quick Start
 The intent of `kibob` is to provide a Git-inspired interface for managing Kibana saved objects.
