@@ -18,6 +18,8 @@ use crate::{
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::task::JoinSet;
 use url::Url;
 
 /// Load Kibana client from environment variables
@@ -27,6 +29,7 @@ use url::Url;
 /// - KIBANA_USERNAME: Username for basic auth (optional)
 /// - KIBANA_PASSWORD: Password for basic auth (optional)
 /// - KIBANA_APIKEY: API key for auth (optional, conflicts with username/password)
+/// - KIBANA_MAX_REQUESTS: Maximum number of concurrent requests (optional, default: 8)
 ///
 /// # Arguments
 /// * `project_dir` - Project directory path containing spaces.yml
@@ -45,7 +48,13 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
         Auth::None
     };
 
-    KibanaClient::try_new(url, auth, project_dir).context("Failed to create Kibana client")
+    let max_requests = std::env::var("KIBANA_MAX_REQUESTS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+
+    KibanaClient::try_new(url, auth, project_dir, max_requests)
+        .context("Failed to create Kibana client")
 }
 
 /// Check if an API should be processed based on the filter
@@ -85,18 +94,18 @@ pub async fn pull_saved_objects(
     space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
-    let project_dir = project_dir.as_ref();
+    let project_dir = Arc::new(project_dir.as_ref().to_path_buf());
+    let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client(project_dir)?;
+    let client = load_kibana_client(&*project_dir)?;
 
     // Pull space definitions FIRST (before any other operations)
-    // This ensures space definitions are up-to-date before pulling resources
-    if should_process_api("spaces", api_filter) {
+    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
         let spaces_manifest_path = project_dir.join("spaces.yml");
         if spaces_manifest_path.exists() {
             log::info!("Pulling space definitions...");
-            match pull_spaces_internal(project_dir, &client).await {
+            match pull_spaces_internal(&*project_dir, &client).await {
                 Ok(space_count) => {
                     log::info!("✓ Pulled {} space definition(s)", space_count);
                 }
@@ -113,40 +122,59 @@ pub async fn pull_saved_objects(
     let target_space_ids = get_target_space_ids(&client, space_filter);
 
     let mut total_count = 0;
+    let mut set = JoinSet::new();
 
-    // Pull each managed space
-    for space_id in &target_space_ids {
-        log::info!("Processing space: {}", space_id.cyan());
+    // Pull each managed space concurrently
+    for space_id in target_space_ids {
+        let client = client.clone();
+        let project_dir = project_dir.clone();
+        let api_filter = api_filter.clone();
 
-        // Get space client for this space
-        let space_client = client.space(space_id)?;
+        set.spawn(async move {
+            log::info!("Processing space: {}", space_id.cyan());
+            let mut space_total = 0;
 
-        // Pull saved objects for this space
-        if should_process_api("saved_objects", api_filter) {
-            if let Ok(count) = pull_space_saved_objects(project_dir, &space_client).await {
-                total_count += count;
+            // Get space client for this space
+            let space_client = client.space(&space_id)?;
+            let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
+
+            // Pull saved objects for this space
+            if should_process_api("saved_objects", api_filter_slice) {
+                if let Ok(count) = pull_space_saved_objects(&*project_dir, &space_client).await {
+                    space_total += count;
+                }
             }
-        }
 
-        // Pull workflows for this space
-        if should_process_api("workflows", api_filter) {
-            if let Ok(count) = pull_space_workflows(project_dir, &space_client).await {
-                log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
+            // Pull workflows for this space
+            if should_process_api("workflows", api_filter_slice) {
+                if let Ok(count) = pull_space_workflows(&*project_dir, &space_client).await {
+                    log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
+                }
             }
-        }
 
-        // Pull agents for this space
-        if should_process_api("agents", api_filter) {
-            if let Ok(count) = pull_space_agents(project_dir, &space_client).await {
-                log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
+            // Pull agents for this space
+            if should_process_api("agents", api_filter_slice) {
+                if let Ok(count) = pull_space_agents(&*project_dir, &space_client).await {
+                    log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
+                }
             }
-        }
 
-        // Pull tools for this space
-        if should_process_api("tools", api_filter) {
-            if let Ok(count) = pull_space_tools(project_dir, &space_client).await {
-                log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
+            // Pull tools for this space
+            if should_process_api("tools", api_filter_slice) {
+                if let Ok(count) = pull_space_tools(&*project_dir, &space_client).await {
+                    log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
+                }
             }
+
+            Ok::<usize, eyre::Report>(space_total)
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok(Ok(count)) => total_count += count,
+            Ok(Err(e)) => log::error!("Space processing failed: {}", e),
+            Err(e) => log::error!("Task panicked: {}", e),
         }
     }
 
@@ -173,18 +201,18 @@ pub async fn push_saved_objects(
     space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
-    let project_dir = project_dir.as_ref();
+    let project_dir = Arc::new(project_dir.as_ref().to_path_buf());
+    let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
 
     log::info!("Connecting to Kibana...");
-    let client = load_kibana_client(project_dir)?;
+    let client = load_kibana_client(&*project_dir)?;
 
     // Push space definitions FIRST (before any other operations)
-    // This ensures spaces exist in Kibana before pushing resources to them
-    if should_process_api("spaces", api_filter) {
+    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
         let spaces_manifest_path = project_dir.join("spaces.yml");
         if spaces_manifest_path.exists() {
             log::info!("Pushing space definitions...");
-            match push_spaces_internal(project_dir, &client).await {
+            match push_spaces_internal(&*project_dir, &client).await {
                 Ok(space_count) => {
                     log::info!("✓ Pushed {} space definition(s)", space_count);
                 }
@@ -205,67 +233,95 @@ pub async fn push_saved_objects(
     let mut total_agents = 0;
     let mut total_tools = 0;
 
-    // Push each managed space
-    for space_id in &target_space_ids {
-        log::info!("Processing space: {}", space_id.cyan());
+    let mut set = JoinSet::new();
 
-        // Get space client for this space
-        let space_client = client.space(space_id)?;
+    // Push each managed space concurrently
+    for space_id in target_space_ids {
+        let client = client.clone();
+        let project_dir = project_dir.clone();
+        let api_filter = api_filter.clone();
 
-        // Push saved objects for this space
-        if should_process_api("saved_objects", api_filter) {
-            match push_space_saved_objects(project_dir, &space_client, managed).await {
-                Ok(count) => {
-                    total_saved_objects += count;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to push saved objects for space {}: {}",
-                        space_id.cyan(),
-                        e
-                    );
+        set.spawn(async move {
+            log::info!("Processing space: {}", space_id.cyan());
+            let mut s_so = 0;
+            let mut s_wf = 0;
+            let mut s_ag = 0;
+            let mut s_tl = 0;
+
+            // Get space client for this space
+            let space_client = client.space(&space_id)?;
+            let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
+
+            // Push saved objects for this space
+            if should_process_api("saved_objects", api_filter_slice) {
+                match push_space_saved_objects(&*project_dir, &space_client, managed).await {
+                    Ok(count) => {
+                        s_so = count;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to push saved objects for space {}: {}",
+                            space_id.cyan(),
+                            e
+                        );
+                    }
                 }
             }
-        }
 
-        // Push workflows for this space
-        if should_process_api("workflows", api_filter) {
-            match push_space_workflows(project_dir, &space_client).await {
-                Ok(count) => {
-                    total_workflows += count;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to push workflows for space {}: {}",
-                        space_id.cyan(),
-                        e
-                    );
+            // Push workflows for this space
+            if should_process_api("workflows", api_filter_slice) {
+                match push_space_workflows(&*project_dir, &space_client).await {
+                    Ok(count) => {
+                        s_wf = count;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to push workflows for space {}: {}",
+                            space_id.cyan(),
+                            e
+                        );
+                    }
                 }
             }
-        }
 
-        // Push agents for this space
-        if should_process_api("agents", api_filter) {
-            match push_space_agents(project_dir, &space_client).await {
-                Ok(count) => {
-                    total_agents += count;
-                }
-                Err(e) => {
-                    log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
+            // Push agents for this space
+            if should_process_api("agents", api_filter_slice) {
+                match push_space_agents(&*project_dir, &space_client).await {
+                    Ok(count) => {
+                        s_ag = count;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
+                    }
                 }
             }
-        }
 
-        // Push tools for this space
-        if should_process_api("tools", api_filter) {
-            match push_space_tools(project_dir, &space_client).await {
-                Ok(count) => {
-                    total_tools += count;
-                }
-                Err(e) => {
-                    log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+            // Push tools for this space
+            if should_process_api("tools", api_filter_slice) {
+                match push_space_tools(&*project_dir, &space_client).await {
+                    Ok(count) => {
+                        s_tl = count;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+                    }
                 }
             }
+
+            Ok::<(usize, usize, usize, usize), eyre::Report>((s_so, s_wf, s_ag, s_tl))
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok(Ok((so, wf, ag, tl))) => {
+                total_saved_objects += so;
+                total_workflows += wf;
+                total_agents += ag;
+                total_tools += tl;
+            }
+            Ok(Err(e)) => log::error!("Space processing failed: {}", e),
+            Err(e) => log::error!("Task panicked: {}", e),
         }
     }
 
@@ -2943,7 +2999,7 @@ mod tests {
         ]);
         manifest.write(&manifest_path).unwrap();
 
-        let client = KibanaClient::try_new(url, Auth::None, project_dir).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, project_dir, 8).unwrap();
 
         // No filter
         let mut ids = get_target_space_ids(&client, None);

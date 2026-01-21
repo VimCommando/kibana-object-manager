@@ -24,7 +24,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let space_client = client.space("default")?;
 /// let loader = SavedObjectsLoader::new(space_client);
 ///
@@ -128,7 +128,7 @@ mod tests {
     fn test_loader_creation() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let loader = SavedObjectsLoader::new(space_client);
         assert!(loader.overwrite);
@@ -138,7 +138,7 @@ mod tests {
     fn test_with_overwrite() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let loader = SavedObjectsLoader::new(space_client).with_overwrite(false);
         assert!(!loader.overwrite);
@@ -158,7 +158,7 @@ mod tests {
         manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
 
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("marketing").unwrap();
         let loader = SavedObjectsLoader::new(space_client);
         assert_eq!(loader.client.space_id(), "marketing");

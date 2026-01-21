@@ -7,6 +7,7 @@ use crate::etl::Extractor;
 
 use eyre::{Context, Result};
 use serde_json::Value;
+use tokio::task::JoinSet;
 
 /// Extractor for Kibana tools
 ///
@@ -23,7 +24,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let space_client = client.space("default")?;
 /// let manifest = ToolsManifest::with_tools(vec![
 ///     "platform.core.search".to_string(),
@@ -98,49 +99,49 @@ impl ToolsExtractor {
         Ok(tools)
     }
 
-    /// Fetch a single tool by ID from Kibana
-    async fn fetch_tool(&self, tool_id: &str) -> Result<Value> {
-        let path = format!("api/agent_builder/tools/{}", tool_id);
-
-        log::debug!(
-            "Fetching tool '{}' from space '{}'",
-            tool_id,
-            self.client.space_id()
-        );
-
-        let response = self
-            .client
-            .get(&path)
-            .await
-            .with_context(|| format!("Failed to fetch tool '{}'", tool_id))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            eyre::bail!("Failed to fetch tool '{}' ({}): {}", tool_id, status, body);
-        }
-
-        let tool: Value = response
-            .json()
-            .await
-            .with_context(|| format!("Failed to parse tool '{}' response", tool_id))?;
-
-        log::debug!("Fetched tool: {}", tool_id);
-
-        Ok(tool)
-    }
-
     /// Fetch specific tools by ID from manifest
     async fn fetch_manifest_tools(&self, manifest: &super::ToolsManifest) -> Result<Vec<Value>> {
         let mut tools = Vec::new();
+        let mut set = JoinSet::new();
 
         for tool_id in &manifest.tools {
-            match self.fetch_tool(tool_id).await {
-                Ok(tool) => tools.push(tool),
-                Err(e) => {
-                    log::warn!("Failed to fetch tool '{}': {}", tool_id, e);
-                    // Continue with other tools instead of failing completely
+            let client = self.client.clone();
+            let tool_id = tool_id.clone();
+
+            set.spawn(async move {
+                let path = format!("api/agent_builder/tools/{}", tool_id);
+                log::debug!(
+                    "Fetching tool '{}' from space '{}'",
+                    tool_id,
+                    client.space_id()
+                );
+
+                let response = client
+                    .get(&path)
+                    .await
+                    .with_context(|| format!("Failed to fetch tool '{}'", tool_id))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    eyre::bail!("Failed to fetch tool '{}' ({}): {}", tool_id, status, body);
                 }
+
+                let tool: Value = response
+                    .json()
+                    .await
+                    .with_context(|| format!("Failed to parse tool '{}' response", tool_id))?;
+
+                log::debug!("Fetched tool: {}", tool_id);
+                Ok::<Value, eyre::Report>(tool)
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(tool)) => tools.push(tool),
+                Ok(Err(e)) => log::warn!("{}", e),
+                Err(e) => log::error!("Task panicked: {}", e),
             }
         }
 
@@ -189,7 +190,7 @@ mod tests {
     fn test_extractor_creation() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let _extractor = ToolsExtractor::new(space_client, None);
     }

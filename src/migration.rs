@@ -406,7 +406,7 @@ pub async fn migrate_to_multispace_unified(
         Auth::None
     };
 
-    if let Ok(client) = KibanaClient::try_new(kibana_url, auth, project_dir) {
+    if let Ok(client) = KibanaClient::try_new(kibana_url, auth, project_dir, 8) {
         let extractor = SpacesExtractor::all(client);
         if let Ok(space_def) = extractor.fetch_space(&target_space).await {
             let space_file = target_space_dir.join("space.json");
@@ -1106,6 +1106,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_needs_migration_unified() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+        }
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1144,6 +1147,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_migrate_unified_from_legacy() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+        }
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1185,6 +1191,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_migrate_unified_from_v0_1_0() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+        }
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
@@ -1252,6 +1261,9 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn test_migrate_space_aware() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+        }
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path();
 
