@@ -1,0 +1,39 @@
+[package]
+name = "kibana-object-manager"
+version = "0.1.0"
+edition = "2024"
+default-run = "kibob"
+rust-version = "1.89"
+authors = ["Ryan Eno"]
+description = "A Git-inspired CLI tool for managing Kibana saved objects in version control"
+license = "Apache-2.0"
+repository = "https://github.com/VimCommando/kibana-object-manager"
+homepage = "https://github.com/VimCommando/kibana-object-manager"
+readme = "README.md"
+keywords = ["kibana", "elasticsearch", "devops", "etl", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "kibob"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "^0.22"
+clap = { version = "^4.5", features = ["derive"] }
+dotenvy = "^0.15"
+env_logger = "^0.11"
+eyre = "^0.6"
+json5 = "^1.0"
+log = "^0.4"
+owo-colors = "4.2.0"
+regex = "^1.12"
+reqwest = { version = "^0.13", features = ["json", "multipart", "query"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+url = "^2.5.0"
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"

@@ -1,2 +1,23 @@
+# Rust build artifacts
+/target
+Cargo.lock
+
+# Kibana Object Manager temporary files
 .env*
-target/
+*.ndjson
+import/
+response.json
+manifest_patch.json
+
+# Editor and IDE files
+*.swp
+*.swo
+*~
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Test artifacts
+test_output/
+temp_test_*

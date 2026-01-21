@@ -1,17 +1,12 @@
 #!/bin/bash
 
 # Example dotenv file
-export kibana_url="http://localhost:5601"
-export kibana_space="default"
+export KIBANA_URL="http://localhost:5601"
+export KIBANA_SPACE="default"
 
-# Authentication - Leave unused values as `unset`, change set values to `export`
-unset kibana_apikey
-unset kibana_username
-unset kibana_password
+# Authentication API key
+# export KIBANA_APIKEY=""
 
-# Git diff enrichment
-unset AZURE_OPENAI_ENDPOINT
-unset AZURE_OPENAI_DEPLOYMENT_NAME
-unset AZURE_OPENAI_MODEL_NAME
-unset AZURE_OPENAI_API_KEY
-unset AZURE_OPENAI_API_VERSION
+# Authentication Username and Password
+# export KIBANA_USERNAME=""
+# export KIBANA_PASSWORD=""
