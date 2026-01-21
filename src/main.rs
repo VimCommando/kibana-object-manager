@@ -520,10 +520,11 @@ async fn main() -> Result<()> {
                 project_dir.bright_black()
             );
 
-            match migrate_to_multispace_unified(&project_dir, backup)? {
+            match migrate_to_multispace_unified(&project_dir, backup, Some(&cli.env)).await? {
                 MigrationResult::MigratedWithBackup(backup_path) => {
-                    let target_space =
-                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+                    let target_space = std::env::var("kibana_space")
+                        .or_else(|_| std::env::var("KIBANA_SPACE"))
+                        .unwrap_or_else(|_| "default".to_string());
                     log::info!("✓ Migration completed successfully!");
                     log::info!(
                         "  New manifest: {}",
@@ -537,13 +538,11 @@ async fn main() -> Result<()> {
                         "  Backup saved: {}",
                         backup_path.display().to_string().cyan()
                     );
-                    if target_space != "default" {
-                        log::info!("  Note: KIBANA_SPACE is deprecated and may be safely unset");
-                    }
                 }
                 MigrationResult::MigratedWithoutBackup => {
-                    let target_space =
-                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+                    let target_space = std::env::var("kibana_space")
+                        .or_else(|_| std::env::var("KIBANA_SPACE"))
+                        .unwrap_or_else(|_| "default".to_string());
                     log::info!("✓ Migration completed successfully!");
                     log::info!(
                         "  New manifest: {}",
@@ -554,17 +553,15 @@ async fn main() -> Result<()> {
                         .green()
                     );
                     log::info!("  Old files removed (no backup)");
-                    if target_space != "default" {
-                        log::info!("  Note: KIBANA_SPACE is deprecated and may be safely unset");
-                    }
                 }
                 MigrationResult::NoLegacyManifest => {
                     log::warn!("No legacy structure found in {}", project_dir);
                     log::info!("Nothing to migrate.");
                 }
                 MigrationResult::AlreadyMigrated => {
-                    let target_space =
-                        std::env::var("KIBANA_SPACE").unwrap_or_else(|_| "default".to_string());
+                    let target_space = std::env::var("kibana_space")
+                        .or_else(|_| std::env::var("KIBANA_SPACE"))
+                        .unwrap_or_else(|_| "default".to_string());
                     log::info!("✓ Project is already using multi-space structure!");
                     log::info!("  {}/manifest/ already exists", target_space);
                 }
