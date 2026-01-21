@@ -1,6 +1,6 @@
 # cli Specification
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Unified Migration
 The `migrate` command SHALL perform a unified migration from legacy structures to the multi-space structure, incorporating space awareness and environment configuration cleanup.
