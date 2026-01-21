@@ -91,9 +91,9 @@ enum Commands {
         #[arg(default_value = ".")]
         output_dir: String,
 
-        /// Kibana space to pull from (overrides KIBANA_SPACE env var)
-        #[arg(long)]
-        space: Option<String>,
+        /// Kibana space(s) to pull from (comma-separated, overrides KIBANA_SPACE env var)
+        #[arg(long, value_delimiter = ',')]
+        space: Option<Vec<String>>,
 
         /// Comma-separated list of APIs to pull (e.g., "saved_objects,workflows,agents,tools,spaces")
         #[arg(long, value_delimiter = ',')]
@@ -119,9 +119,9 @@ enum Commands {
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         managed: bool,
 
-        /// Kibana space to push to (overrides KIBANA_SPACE env var)
-        #[arg(long)]
-        space: Option<String>,
+        /// Kibana space(s) to push to (comma-separated, overrides KIBANA_SPACE env var)
+        #[arg(long, value_delimiter = ',')]
+        space: Option<Vec<String>>,
 
         /// Comma-separated list of APIs to push (e.g., "saved_objects,workflows,agents,tools,spaces")
         #[arg(long, value_delimiter = ',')]
@@ -176,9 +176,9 @@ enum Commands {
         #[arg(short = 'o', long, conflicts_with_all = &["query", "file"])]
         objects: Option<Vec<String>>,
 
-        /// Kibana space to add to (for workflows, agents, tools)
-        #[arg(long, default_value = "default")]
-        space: String,
+        /// Kibana space(s) to add to/filter by (comma-separated, defaults to "default" for non-space APIs)
+        #[arg(long, value_delimiter = ',')]
+        space: Option<Vec<String>>,
     },
 
     /// Bundle objects into distributable NDJSON files
@@ -206,8 +206,8 @@ enum Commands {
         managed: bool,
 
         /// Kibana space(s) to bundle (comma-separated, e.g., "default,marketing")
-        #[arg(long)]
-        space: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        space: Option<Vec<String>>,
 
         /// Comma-separated list of APIs to bundle (e.g., "saved_objects,workflows,agents,tools,spaces")
         #[arg(long, value_delimiter = ',')]
@@ -326,18 +326,15 @@ async fn main() -> Result<()> {
         } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
 
-            // Convert space flag to space_filter string
-            let space_filter = space.as_deref();
-
-            if let Some(spaces) = space_filter {
-                log::info!("Filtering to space(s): {}", spaces.cyan());
+            if let Some(spaces) = &space {
+                log::info!("Filtering to space(s): {}", spaces.join(", ").cyan());
             }
 
             if let Some(apis) = &api {
                 log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
             }
 
-            match pull_saved_objects(&output_dir, space_filter, api.as_deref()).await {
+            match pull_saved_objects(&output_dir, space.as_deref(), api.as_deref()).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pulled {} object(s)", count);
                 }
@@ -363,18 +360,15 @@ async fn main() -> Result<()> {
                 input_dir.bright_black(),
             );
 
-            // Convert space flag to space_filter string
-            let space_filter = space.as_deref();
-
-            if let Some(spaces) = space_filter {
-                log::info!("Filtering to space(s): {}", spaces.cyan());
+            if let Some(spaces) = &space {
+                log::info!("Filtering to space(s): {}", spaces.join(", ").cyan());
             }
 
             if let Some(apis) = &api {
                 log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
             }
 
-            match push_saved_objects(&input_dir, managed, space_filter, api.as_deref()).await {
+            match push_saved_objects(&input_dir, managed, space.as_deref(), api.as_deref()).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pushed {} object(s)", count);
                 }
@@ -404,28 +398,59 @@ async fn main() -> Result<()> {
                 }
                 "workflows" => {
                     // Workflows support: --query, --include, --exclude, or --file
-                    log::info!("Using space: {}", space.cyan());
+                    let target_space = space
+                        .as_ref()
+                        .and_then(|s| s.first())
+                        .map(|s| s.as_str())
+                        .unwrap_or("default");
+                    log::info!("Using space: {}", target_space.cyan());
                     use kibana_object_manager::cli::add_workflows_to_manifest;
-                    add_workflows_to_manifest(&output_dir, &space, query, include, exclude, file)
-                        .await?
+                    add_workflows_to_manifest(
+                        &output_dir,
+                        target_space,
+                        query,
+                        include,
+                        exclude,
+                        file,
+                    )
+                    .await?
                 }
                 "spaces" => {
                     // Spaces support: --query (ignored), --include, --exclude, or --file
+                    // and --space ID filtering
                     use kibana_object_manager::cli::add_spaces_to_manifest;
-                    add_spaces_to_manifest(&output_dir, query, include, exclude, file).await?
+                    add_spaces_to_manifest(
+                        &output_dir,
+                        space.as_deref(),
+                        query,
+                        include,
+                        exclude,
+                        file,
+                    )
+                    .await?
                 }
                 "agents" => {
                     // Agents support: --query (ignored), --include, --exclude, or --file
-                    log::info!("Using space: {}", space.cyan());
+                    let target_space = space
+                        .as_ref()
+                        .and_then(|s| s.first())
+                        .map(|s| s.as_str())
+                        .unwrap_or("default");
+                    log::info!("Using space: {}", target_space.cyan());
                     use kibana_object_manager::cli::add_agents_to_manifest;
-                    add_agents_to_manifest(&output_dir, &space, query, include, exclude, file)
+                    add_agents_to_manifest(&output_dir, target_space, query, include, exclude, file)
                         .await?
                 }
                 "tools" => {
                     // Tools support: --query (ignored), --include, --exclude, or --file
-                    log::info!("Using space: {}", space.cyan());
+                    let target_space = space
+                        .as_ref()
+                        .and_then(|s| s.first())
+                        .map(|s| s.as_str())
+                        .unwrap_or("default");
+                    log::info!("Using space: {}", target_space.cyan());
                     use kibana_object_manager::cli::add_tools_to_manifest;
-                    add_tools_to_manifest(&output_dir, &space, query, include, exclude, file)
+                    add_tools_to_manifest(&output_dir, target_space, query, include, exclude, file)
                         .await?
                 }
                 _ => {
@@ -451,11 +476,8 @@ async fn main() -> Result<()> {
                 managed.cyan()
             );
 
-            // Convert space flag to space_filter string
-            let space_filter = space.as_deref();
-
-            if let Some(spaces) = space_filter {
-                log::info!("Filtering to space(s): {}", spaces.cyan());
+            if let Some(spaces) = &space {
+                log::info!("Filtering to space(s): {}", spaces.join(", ").cyan());
             }
 
             if let Some(apis) = &api {
@@ -473,7 +495,7 @@ async fn main() -> Result<()> {
                 &input_dir,
                 &saved_objects_file,
                 managed,
-                space_filter,
+                space.as_deref(),
                 api.as_deref(),
             )
             .await

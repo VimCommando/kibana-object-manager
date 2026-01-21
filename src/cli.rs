@@ -78,11 +78,11 @@ fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
 ///
 /// # Arguments
 /// * `project_dir` - Project directory path
-/// * `space_filter` - Optional comma-separated list of space IDs to pull (e.g., "default,marketing")
+/// * `space_filter` - Optional list of space IDs to pull (e.g., ["default", "marketing"])
 /// * `api_filter` - Optional list of APIs to pull (e.g., ["tools", "agents"])
 pub async fn pull_saved_objects(
     project_dir: impl AsRef<Path>,
-    space_filter: Option<&str>,
+    space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
@@ -165,12 +165,12 @@ pub async fn pull_saved_objects(
 /// # Arguments
 /// * `project_dir` - Project directory path
 /// * `managed` - Whether to mark objects as managed (read-only in Kibana UI)
-/// * `space_filter` - Optional comma-separated list of space IDs to push (e.g., "default,marketing")
+/// * `space_filter` - Optional list of space IDs to push (e.g., ["default", "marketing"])
 /// * `api_filter` - Optional list of APIs to push (e.g., ["tools", "agents"])
 pub async fn push_saved_objects(
     project_dir: impl AsRef<Path>,
     managed: bool,
-    space_filter: Option<&str>,
+    space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
@@ -288,18 +288,16 @@ pub async fn push_saved_objects(
 /// * `project_dir` - Project directory path
 /// * `output_file` - Output file path (kept for backward compatibility, not used)
 /// * `managed` - Whether to mark objects as managed
-/// * `space_filter` - Optional comma-separated list of space IDs to bundle (e.g., "default,marketing")
+/// * `space_filter` - Optional list of space IDs to bundle (e.g., ["default", "marketing"])
 /// * `api_filter` - Optional list of APIs to bundle (e.g., ["tools", "agents"])
 pub async fn bundle_to_ndjson(
     project_dir: impl AsRef<Path>,
-    output_file: impl AsRef<Path>,
+    _output_file: impl AsRef<Path>,
     managed: bool,
-    space_filter: Option<&str>,
+    space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
-    let _output_file = output_file.as_ref(); // Keep for backward compatibility
-
     // Determine which spaces to operate on (reads from spaces.yml directly)
     let target_space_ids = get_target_space_ids_from_manifest(project_dir, space_filter);
 
@@ -781,8 +779,10 @@ pub async fn add_workflows_to_manifest(
 ///
 /// Can add from Kibana search API or from a file (.json or .ndjson)
 /// Optionally filter results by name using regex patterns (--include, --exclude)
+/// or by space ID list (--space)
 pub async fn add_spaces_to_manifest(
     project_dir: impl AsRef<Path>,
+    space_filter: Option<&[String]>,
     query: Option<String>,
     include: Option<String>,
     exclude: Option<String>,
@@ -790,9 +790,9 @@ pub async fn add_spaces_to_manifest(
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
-    // Load or create manifest
+    // Load or create manifest in project root
     log::info!("Loading spaces manifest from {}", project_dir.display());
-    let manifest_path = project_dir.join("manifest").join("spaces.yml");
+    let manifest_path = project_dir.join("spaces.yml");
     let mut manifest = if manifest_path.exists() {
         SpacesManifest::read(&manifest_path)?
     } else {
@@ -869,7 +869,7 @@ pub async fn add_spaces_to_manifest(
 
     log::info!("Found {} space(s) before filtering", new_spaces.len());
 
-    // Apply regex filters: include first, then exclude
+    // Apply regex and ID filters: include first, then exclude, then space ID list
     let filtered_spaces: Vec<serde_json::Value> = {
         let mut spaces = new_spaces;
 
@@ -915,6 +915,21 @@ pub async fn add_spaces_to_manifest(
                 exclude_pattern,
                 spaces.len()
             );
+        }
+
+        // Apply space ID list filter (if specified)
+        if let Some(filter_ids) = space_filter {
+            spaces = spaces
+                .into_iter()
+                .filter(|s| {
+                    s.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| filter_ids.contains(&id.to_string()))
+                        .unwrap_or(false)
+                })
+                .collect();
+
+            log::info!("After space ID filter: {} space(s)", spaces.len());
         }
 
         spaces
@@ -982,14 +997,9 @@ fn load_spaces_manifest(project_dir: impl AsRef<Path>) -> Result<SpacesManifest>
 ///
 /// If `space_filter` is provided, returns only those space IDs.
 /// Otherwise, returns all space IDs from the client.
-fn get_target_space_ids(client: &KibanaClient, space_filter: Option<&str>) -> Vec<String> {
+fn get_target_space_ids(client: &KibanaClient, space_filter: Option<&[String]>) -> Vec<String> {
     if let Some(filter) = space_filter {
-        // Parse comma-separated list
-        filter
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+        filter.to_vec()
     } else {
         // Return all space IDs from the client
         client.space_ids().into_iter().map(String::from).collect()
@@ -1003,15 +1013,10 @@ fn get_target_space_ids(client: &KibanaClient, space_filter: Option<&str>) -> Ve
 /// Falls back to ["default"] if no manifest exists.
 fn get_target_space_ids_from_manifest(
     project_dir: &Path,
-    space_filter: Option<&str>,
+    space_filter: Option<&[String]>,
 ) -> Vec<String> {
     if let Some(filter) = space_filter {
-        // Parse comma-separated list
-        return filter
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        return filter.to_vec();
     }
 
     // Try to load from spaces.yml
@@ -2921,5 +2926,71 @@ mod tests {
         unsafe {
             std::env::remove_var("KIBANA_URL");
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_target_space_ids() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+        let url = url::Url::parse("http://localhost:5601").unwrap();
+
+        // Create a spaces.yml to populate client.space_ids()
+        let manifest_path = project_dir.join("spaces.yml");
+        let manifest = crate::kibana::spaces::SpacesManifest::with_spaces(vec![
+            crate::kibana::spaces::SpaceEntry::new("default".into(), "Default".into()),
+            crate::kibana::spaces::SpaceEntry::new("marketing".into(), "Marketing".into()),
+        ]);
+        manifest.write(&manifest_path).unwrap();
+
+        let client = KibanaClient::try_new(url, Auth::None, project_dir).unwrap();
+
+        // No filter
+        let mut ids = get_target_space_ids(&client, None);
+        ids.sort();
+        let mut expected = vec!["default".to_string(), "marketing".to_string()];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        // Single space filter
+        let ids = get_target_space_ids(&client, Some(&["default".to_string()]));
+        assert_eq!(ids, vec!["default"]);
+
+        // Multiple space filter
+        let mut ids = get_target_space_ids(
+            &client,
+            Some(&["default".to_string(), "marketing".to_string()]),
+        );
+        ids.sort();
+        assert_eq!(ids, expected);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_target_space_ids_from_manifest() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+
+        // No manifest
+        let ids = get_target_space_ids_from_manifest(project_dir, None);
+        assert_eq!(ids, vec!["default"]);
+
+        // With manifest
+        let manifest_path = project_dir.join("spaces.yml");
+        let manifest = crate::kibana::spaces::SpacesManifest::with_spaces(vec![
+            crate::kibana::spaces::SpaceEntry::new("default".into(), "Default".into()),
+            crate::kibana::spaces::SpaceEntry::new("eng".into(), "Engineering".into()),
+        ]);
+        manifest.write(&manifest_path).unwrap();
+
+        let mut ids = get_target_space_ids_from_manifest(project_dir, None);
+        ids.sort();
+        let mut expected = vec!["default".to_string(), "eng".to_string()];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        // With filter
+        let ids = get_target_space_ids_from_manifest(project_dir, Some(&["eng".to_string()]));
+        assert_eq!(ids, vec!["eng"]);
     }
 }
