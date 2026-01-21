@@ -25,7 +25,7 @@ async fn test_saved_objects_extract() -> Result<()> {
 
     // Create client and get space client for "test" space
     let url = Url::parse("http://localhost:5601")?;
-    let client = KibanaClient::try_new(url, Auth::None, ".")?;
+    let client = KibanaClient::try_new(url, Auth::None, ".", 8)?;
     let space_client = client.space("test")?;
 
     // Create extractor for test space
@@ -66,7 +66,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 1: Extract from test space
     let manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;
     let url = Url::parse("http://localhost:5601")?;
-    let client = KibanaClient::try_new(url.clone(), Auth::None, ".")?;
+    let client = KibanaClient::try_new(url.clone(), Auth::None, ".", 8)?;
     let space_client = client.space("test")?;
 
     let extractor = SavedObjectsExtractor::new(space_client.clone(), manifest);
@@ -111,7 +111,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
     // Step 4: Verify it's back
     println!("Step 4: Verifying object exists again");
     let verify_url = Url::parse("http://localhost:5601")?;
-    let verify_client = KibanaClient::try_new(verify_url, Auth::None, ".")?;
+    let verify_client = KibanaClient::try_new(verify_url, Auth::None, ".", 8)?;
     let verify_space_client = verify_client.space("test")?;
 
     let verify_manifest = SavedObjectsManifest::read("/tmp/kibana-test/test_manifest.json")?;

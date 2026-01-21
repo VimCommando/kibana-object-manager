@@ -7,6 +7,7 @@ use crate::etl::Extractor;
 
 use eyre::{Context, Result};
 use serde_json::Value;
+use tokio::task::JoinSet;
 
 /// Extractor for Kibana workflows
 ///
@@ -23,7 +24,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let space_client = client.space("default")?;
 /// let manifest = WorkflowsManifest::with_workflows(vec![
 ///     WorkflowEntry::new("workflow-123", "my-workflow"),
@@ -106,62 +107,60 @@ impl WorkflowsExtractor {
         Ok(workflows)
     }
 
-    /// Fetch a single workflow by ID from Kibana
-    async fn fetch_workflow(&self, workflow_id: &str) -> Result<Value> {
-        let path = format!("api/workflows/{}", workflow_id);
-
-        log::debug!(
-            "Fetching workflow '{}' from space '{}'",
-            workflow_id,
-            self.client.space_id()
-        );
-
-        let response = self
-            .client
-            .get_internal(&path)
-            .await
-            .with_context(|| format!("Failed to fetch workflow '{}'", workflow_id))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            eyre::bail!(
-                "Failed to fetch workflow '{}' ({}): {}",
-                workflow_id,
-                status,
-                body
-            );
-        }
-
-        let workflow: Value = response
-            .json()
-            .await
-            .with_context(|| format!("Failed to parse workflow '{}' response", workflow_id))?;
-
-        log::debug!("Fetched workflow: {}", workflow_id);
-
-        Ok(workflow)
-    }
-
     /// Fetch specific workflows by ID from manifest
     async fn fetch_manifest_workflows(
         &self,
         manifest: &super::WorkflowsManifest,
     ) -> Result<Vec<Value>> {
         let mut workflows = Vec::new();
+        let mut set = JoinSet::new();
 
         for entry in &manifest.workflows {
-            match self.fetch_workflow(&entry.id).await {
-                Ok(workflow) => workflows.push(workflow),
-                Err(e) => {
-                    log::warn!(
-                        "Failed to fetch workflow '{}' (id: {}): {}",
-                        entry.name,
-                        entry.id,
-                        e
+            let client = self.client.clone();
+            let workflow_id = entry.id.clone();
+            let workflow_name = entry.name.clone();
+
+            set.spawn(async move {
+                let path = format!("api/workflows/{}", workflow_id);
+                log::debug!(
+                    "Fetching workflow '{}' from space '{}'",
+                    workflow_id,
+                    client.space_id()
+                );
+
+                let response = client.get_internal(&path).await.with_context(|| {
+                    format!(
+                        "Failed to fetch workflow '{}' ({})",
+                        workflow_name, workflow_id
+                    )
+                })?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    eyre::bail!(
+                        "Failed to fetch workflow '{}' ({}) ({}): {}",
+                        workflow_name,
+                        workflow_id,
+                        status,
+                        body
                     );
-                    // Continue with other workflows instead of failing completely
                 }
+
+                let workflow: Value = response.json().await.with_context(|| {
+                    format!("Failed to parse workflow '{}' response", workflow_id)
+                })?;
+
+                log::debug!("Fetched workflow: {}", workflow_id);
+                Ok::<Value, eyre::Report>(workflow)
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(workflow)) => workflows.push(workflow),
+                Ok(Err(e)) => log::warn!("{}", e),
+                Err(e) => log::error!("Task panicked: {}", e),
             }
         }
 
@@ -210,7 +209,7 @@ mod tests {
     fn test_extractor_creation() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let _extractor = WorkflowsExtractor::new(space_client, None);
     }

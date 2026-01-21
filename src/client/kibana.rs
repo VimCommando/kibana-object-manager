@@ -10,6 +10,8 @@ use eyre::{Context, Result, eyre};
 use reqwest::{Client, Method, multipart};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 use url::Url;
 
 /// Kibana client for making API requests.
@@ -28,7 +30,7 @@ use url::Url;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 ///
 /// // Root client for global operations (e.g., managing spaces)
 /// let response = client.get("/api/spaces/space").await?;
@@ -48,6 +50,7 @@ pub struct KibanaClient {
     url: Url,
     spaces: HashMap<String, String>, // id -> name (for validation)
     space: Option<String>,           // Current space context (None = root/default)
+    semaphore: Arc<Semaphore>,       // Global concurrency limit
 }
 
 impl KibanaClient {
@@ -63,6 +66,7 @@ impl KibanaClient {
     /// * `url` - Base Kibana URL
     /// * `auth` - Authentication method
     /// * `project_dir` - Project directory containing spaces.yml
+    /// * `max_requests` - Maximum number of concurrent requests
     ///
     /// # Returns
     /// A new KibanaClient instance in root mode
@@ -71,7 +75,12 @@ impl KibanaClient {
     /// Returns an error if:
     /// - The HTTP client cannot be built
     /// - The spaces manifest exists but cannot be parsed
-    pub fn try_new(url: Url, auth: Auth, project_dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn try_new(
+        url: Url,
+        auth: Auth,
+        project_dir: impl AsRef<Path>,
+        max_requests: usize,
+    ) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("kbn-xsrf", "true".parse()?);
         match auth {
@@ -113,11 +122,14 @@ impl KibanaClient {
             spaces
         };
 
+        let semaphore = Arc::new(Semaphore::new(max_requests));
+
         Ok(Self {
             client,
             url,
             spaces,
             space: None, // Root mode
+            semaphore,
         })
     }
 
@@ -142,7 +154,7 @@ impl KibanaClient {
     /// # use std::path::Path;
     /// # fn example() -> eyre::Result<()> {
     /// # let url = Url::parse("http://localhost:5601")?;
-    /// # let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+    /// # let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
     /// let marketing = client.space("marketing")?;
     /// assert_eq!(marketing.space_id(), "marketing");
     /// # Ok(())
@@ -168,6 +180,7 @@ impl KibanaClient {
             url: self.url.clone(),
             spaces: self.spaces.clone(),
             space,
+            semaphore: self.semaphore.clone(),
         })
     }
 
@@ -254,6 +267,12 @@ impl KibanaClient {
         path: &str,
         body: Option<&[u8]>,
     ) -> Result<reqwest::Response> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| eyre!("Semaphore closed: {}", e))?;
+
         let mut headers: reqwest::header::HeaderMap = headers
             .iter()
             .map(|(k, v)| (k.parse().unwrap(), v.parse().unwrap()))
@@ -428,7 +447,7 @@ mod tests {
     fn test_kibana_client_no_manifest() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
 
         assert_eq!(client.space_ids().len(), 1);
         assert!(client.has_space("default"));
@@ -452,7 +471,7 @@ mod tests {
         manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
 
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
 
         assert_eq!(client.space_ids().len(), 2);
         assert!(client.has_space("default"));
@@ -473,7 +492,7 @@ mod tests {
         manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
 
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
 
         // Root client
         assert!(client.is_root());
@@ -500,7 +519,7 @@ mod tests {
     fn test_invalid_space() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
 
         let result = client.space("nonexistent");
         assert!(result.is_err());

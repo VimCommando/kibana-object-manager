@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let space_client = client.space("default")?;
 /// let mut manifest = SavedObjectsManifest::new();
 /// manifest.add_object(SavedObject::new("dashboard", "my-dashboard-id"));
@@ -117,7 +117,7 @@ mod tests {
     fn test_extractor_creation() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let manifest = SavedObjectsManifest::new();
         let extractor = SavedObjectsExtractor::new(space_client, manifest);
@@ -138,7 +138,7 @@ mod tests {
         manifest.write(temp_dir.path().join("spaces.yml")).unwrap();
 
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("marketing").unwrap();
 
         let mut so_manifest = SavedObjectsManifest::new();

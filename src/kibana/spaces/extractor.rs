@@ -23,7 +23,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let manifest = SpacesManifest::with_spaces(vec![
 ///     SpaceEntry::new("default".to_string(), "Default".to_string()),
 ///     SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
@@ -209,7 +209,7 @@ mod tests {
     fn test_filter_with_manifest() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let manifest = super::super::SpacesManifest::with_spaces(vec![
             super::super::SpaceEntry::new("default".to_string(), "Default".to_string()),
             super::super::SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
@@ -240,7 +240,7 @@ mod tests {
     fn test_filter_without_manifest() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let extractor = SpacesExtractor::all(client);
 
         let spaces = vec![

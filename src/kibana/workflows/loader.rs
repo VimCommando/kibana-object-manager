@@ -8,6 +8,7 @@ use crate::etl::Loader;
 use eyre::Result;
 use owo_colors::OwoColorize;
 use serde_json::Value;
+use tokio::task::JoinSet;
 
 /// Loader for Kibana workflows
 ///
@@ -24,7 +25,7 @@ use serde_json::Value;
 ///
 /// # async fn example() -> eyre::Result<()> {
 /// let url = Url::parse("http://localhost:5601")?;
-/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."))?;
+/// let client = KibanaClient::try_new(url, Auth::None, Path::new("."), 8)?;
 /// let space_client = client.space("default")?;
 /// let loader = WorkflowsLoader::new(space_client);
 ///
@@ -53,44 +54,6 @@ impl WorkflowsLoader {
         Self { client }
     }
 
-    /// Check if a workflow exists using HEAD request
-    async fn workflow_exists(&self, workflow_id: &str) -> Result<bool> {
-        let path = format!("api/workflows/{}", workflow_id);
-
-        log::debug!("{} {}", "HEAD".green(), path);
-
-        let response = self.client.head_internal(&path).await?;
-
-        match response.status().as_u16() {
-            200 => {
-                log::debug!(
-                    "{} {} - workflow exists, will update",
-                    "200".green(),
-                    workflow_id.cyan()
-                );
-                Ok(true)
-            }
-            404 => {
-                log::debug!(
-                    "{} {} - workflow not found, will create",
-                    "404".yellow(),
-                    workflow_id.cyan()
-                );
-                Ok(false)
-            }
-            _ => {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                eyre::bail!(
-                    "Failed to check workflow {} existence ({}): {}",
-                    workflow_id.cyan(),
-                    status,
-                    body
-                )
-            }
-        }
-    }
-
     /// Sanitize workflow payload by removing read-only system fields
     fn sanitize_workflow(workflow: &Value) -> Value {
         let mut sanitized = workflow.clone();
@@ -105,110 +68,6 @@ impl WorkflowsLoader {
         }
         sanitized
     }
-
-    /// Create a new workflow using POST /api/workflows
-    async fn create_workflow(&self, workflow: &Value) -> Result<()> {
-        let workflow_id = workflow
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
-
-        let workflow_name = workflow
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        let path = "api/workflows";
-        let sanitized_workflow = Self::sanitize_workflow(workflow);
-
-        log::debug!("{} {}", "POST".green(), path);
-
-        let response = self
-            .client
-            .post_json_value_internal(path, &sanitized_workflow)
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            eyre::bail!(
-                "Failed to create workflow {} (id: {}) ({}): {}",
-                workflow_name.cyan(),
-                workflow_id.cyan(),
-                status,
-                body
-            );
-        }
-
-        log::info!(
-            "Created workflow: {} (id: {})",
-            workflow_name.cyan(),
-            workflow_id.cyan()
-        );
-
-        Ok(())
-    }
-
-    /// Update an existing workflow using PUT /api/workflows/<id>
-    async fn update_workflow(&self, workflow: &Value) -> Result<()> {
-        let workflow_id = workflow
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
-
-        let workflow_name = workflow
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        let path = format!("api/workflows/{}", workflow_id);
-        let sanitized_workflow = Self::sanitize_workflow(workflow);
-
-        log::debug!("{} {}", "PUT".green(), path);
-
-        let response = self
-            .client
-            .put_json_value_internal(&path, &sanitized_workflow)
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            eyre::bail!(
-                "Failed to update workflow {} (id: {}) ({}): {}",
-                workflow_name.cyan(),
-                workflow_id.cyan(),
-                status,
-                body
-            );
-        }
-
-        log::info!(
-            "Updated workflow: {} (id: {})",
-            workflow_name.cyan(),
-            workflow_id.cyan()
-        );
-
-        Ok(())
-    }
-
-    /// Create or update a single workflow
-    ///
-    /// Checks if the workflow exists first to determine whether to create or update
-    async fn upsert_workflow(&self, workflow: &Value) -> Result<()> {
-        let workflow_id = workflow
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
-
-        if self.workflow_exists(workflow_id).await? {
-            // Workflow exists - update it
-            self.update_workflow(workflow).await
-        } else {
-            // Workflow doesn't exist - create it
-            self.create_workflow(workflow).await
-        }
-    }
 }
 
 impl Loader for WorkflowsLoader {
@@ -216,10 +75,84 @@ impl Loader for WorkflowsLoader {
 
     async fn load(&self, items: Vec<Self::Item>) -> Result<usize> {
         let mut count = 0;
+        let mut set = JoinSet::new();
 
         for workflow in items {
-            self.upsert_workflow(&workflow).await?;
-            count += 1;
+            let client = self.client.clone();
+
+            set.spawn(async move {
+                let workflow_id = workflow
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| eyre::eyre!("Workflow missing 'id' field"))?;
+
+                // Check if a workflow exists using HEAD request
+                let path = format!("api/workflows/{}", workflow_id);
+                let exists = match client.head_internal(&path).await?.status().as_u16() {
+                    200 => true,
+                    404 => false,
+                    status => {
+                        eyre::bail!(
+                            "Failed to check workflow existence ({}): {}",
+                            workflow_id,
+                            status
+                        );
+                    }
+                };
+
+                let workflow_name = workflow
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                if exists {
+                    // Update
+                    let path = format!("api/workflows/{}", workflow_id);
+                    let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
+                    let response = client.put_json_value_internal(&path, &sanitized).await?;
+                    if !response.status().is_success() {
+                        eyre::bail!(
+                            "Failed to update workflow {} ({}): {}",
+                            workflow_name,
+                            workflow_id,
+                            response.status()
+                        );
+                    }
+                    log::info!(
+                        "Updated workflow: {} (id: {})",
+                        workflow_name.cyan(),
+                        workflow_id.cyan()
+                    );
+                } else {
+                    // Create
+                    let path = "api/workflows";
+                    let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
+                    let response = client.post_json_value_internal(path, &sanitized).await?;
+                    if !response.status().is_success() {
+                        eyre::bail!(
+                            "Failed to create workflow {} ({}): {}",
+                            workflow_name,
+                            workflow_id,
+                            response.status()
+                        );
+                    }
+                    log::info!(
+                        "Created workflow: {} (id: {})",
+                        workflow_name.cyan(),
+                        workflow_id.cyan()
+                    );
+                }
+
+                Ok::<(), eyre::Report>(())
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(Ok(())) => count += 1,
+                Ok(Err(e)) => log::error!("Failed to load workflow: {}", e),
+                Err(e) => log::error!("Task panicked: {}", e),
+            }
         }
 
         Ok(count)
@@ -238,7 +171,7 @@ mod tests {
     fn test_loader_creation() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let _loader = WorkflowsLoader::new(space_client);
     }
@@ -247,21 +180,16 @@ mod tests {
     async fn test_missing_id_fails() {
         let temp_dir = TempDir::new().unwrap();
         let url = Url::parse("http://localhost:5601").unwrap();
-        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path()).unwrap();
+        let client = KibanaClient::try_new(url, Auth::None, temp_dir.path(), 8).unwrap();
         let space_client = client.space("default").unwrap();
         let loader = WorkflowsLoader::new(space_client);
 
         let workflow = json!({"name": "No ID"});
 
-        let result = loader.upsert_workflow(&workflow).await;
+        let result = loader.load(vec![workflow]).await;
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("missing 'id' field")
-        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
     }
 
     #[test]
