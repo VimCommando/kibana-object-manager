@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Example dotenv file
-export kibana_url="http://localhost:5601"
-export kibana_space="default"
+export KIBANA_URL="http://localhost:5601"
+export KIBANA_SPACE="default"
 
 # Authentication API key
-# export kibana_apikey=""
+# export KIBANA_APIKEY=""
 
 # Authentication Username and Password
-# export kibana_username=""
-# export kibana_password=""
+# export KIBANA_USERNAME=""
+# export KIBANA_PASSWORD=""
