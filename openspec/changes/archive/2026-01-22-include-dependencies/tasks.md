@@ -8,3 +8,5 @@
 - [x] Implement recursive dependency resolution and manifest addition.
 - [x] Add logging to inform the user about added dependencies.
 - [x] Verify implementation with manual tests against a live Kibana or mocks.
+- [x] Fix space-scoping for recursive dependency fetches.
+- [x] Include dependency counts in the final summary and total count.

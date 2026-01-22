@@ -1,9 +1,9 @@
 # Proposal: Include Dependencies when Adding Objects
 
-## Problem Statement
+## Why
 When users add agents, tools, or workflows to their manifest using `kibob add`, they often have to manually find and add all dependencies (e.g., tools referenced by an agent, workflows referenced by a tool) to ensure the manifest is complete and doesn't break when pushed to another environment. This is tedious and error-prone.
 
-## Proposed Solution
+## What Changes
 Update the `kibob add` command for agents, tools, and workflows to automatically detect and add referenced dependencies to their respective manifests.
 - Adding an **agent** will automatically add all **tools** it references.
 - Adding a **tool** will automatically add all **workflows** it references.

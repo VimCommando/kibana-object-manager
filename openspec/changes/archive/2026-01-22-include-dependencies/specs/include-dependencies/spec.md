@@ -1,6 +1,6 @@
 # Capability: Include Dependencies
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Automatic Dependency Inclusion
 When adding an object to a manifest via the `add` command, `kibob` MUST automatically identify and add all referenced dependencies to their respective manifests, unless the `--exclude-dependencies` flag is provided.
@@ -29,8 +29,6 @@ When adding an object to a manifest via the `add` command, `kibob` MUST automati
 - **Given** an agent that references tools.
 - **When** the user runs `kibob add agent my-agent --exclude-dependencies`.
 - **Then** only `my-agent` is added to the manifest.
-
-## ADDED Requirements
 
 ### Requirement: Transitive Dependencies
 Dependency inclusion MUST be transitive. If a workflow is added as a dependency of a tool, any agents referenced by that workflow MUST also be added.
