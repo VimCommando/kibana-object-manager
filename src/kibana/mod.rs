@@ -4,6 +4,7 @@
 //! Each API has its own submodule with manifest format and operations.
 
 pub mod agents;
+pub mod dependencies;
 pub mod saved_objects;
 pub mod spaces;
 pub mod tools;

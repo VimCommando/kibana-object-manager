@@ -3,11 +3,14 @@
 use crate::{
     client::{Auth, KibanaClient},
     etl::{Extractor, Loader, Transformer},
-    kibana::agents::{AgentsExtractor, AgentsLoader, AgentsManifest},
+    kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
+    kibana::dependencies::{
+        Dependency, find_agent_dependencies, find_tool_dependencies, find_workflow_dependencies,
+    },
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
-    kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
+    kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
     migration::load_saved_objects_manifest,
     storage::{self, DirectoryReader, DirectoryWriter},
     transform::{
@@ -17,6 +20,8 @@ use crate::{
 };
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
+use serde_json::Value;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -616,6 +621,7 @@ pub async fn add_workflows_to_manifest(
     include: Option<String>,
     exclude: Option<String>,
     file_path: Option<String>,
+    exclude_dependencies: bool,
 ) -> Result<usize> {
     use crate::kibana::workflows::WorkflowEntry;
 
@@ -783,6 +789,7 @@ pub async fn add_workflows_to_manifest(
     std::fs::create_dir_all(&workflows_dir)?;
 
     let mut added_count = 0;
+    let mut all_deps = Vec::new();
     for workflow in &filtered_workflows {
         // Extract id and name
         let workflow_id = workflow
@@ -810,9 +817,21 @@ pub async fn add_workflows_to_manifest(
 
             log::debug!("Wrote workflow file: {}", workflow_file.display());
             added_count += 1;
+
+            if !exclude_dependencies {
+                all_deps.extend(find_workflow_dependencies(workflow));
+            }
         } else {
             log::debug!("Workflow already in manifest, skipping: {}", workflow_name);
         }
+    }
+
+    // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
+    if !all_deps.is_empty() {
+        let client = load_kibana_client(project_dir)?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -826,9 +845,18 @@ pub async fn add_workflows_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new workflow(s)", added_count);
 
-    Ok(added_count)
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new workflow(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new workflow(s)", added_count);
+    }
+
+    Ok(added_count + dep_summary.total())
 }
 
 /// Add spaces to an existing manifest
@@ -1566,6 +1594,7 @@ pub async fn add_agents_to_manifest(
     include: Option<String>,
     exclude: Option<String>,
     file_path: Option<String>,
+    exclude_dependencies: bool,
 ) -> Result<usize> {
     use crate::kibana::agents::AgentEntry;
 
@@ -1723,6 +1752,7 @@ pub async fn add_agents_to_manifest(
     std::fs::create_dir_all(&agents_dir)?;
 
     let mut added_count = 0;
+    let mut all_deps = Vec::new();
     for agent in &filtered_agents {
         // Extract id and name
         let agent_id = agent
@@ -1746,9 +1776,21 @@ pub async fn add_agents_to_manifest(
 
             log::debug!("Wrote agent file: {}", agent_file.display());
             added_count += 1;
+
+            if !exclude_dependencies {
+                all_deps.extend(find_agent_dependencies(agent));
+            }
         } else {
             log::debug!("Agent already in manifest, skipping: {}", agent_name);
         }
+    }
+
+    // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
+    if !all_deps.is_empty() {
+        let client = load_kibana_client(project_dir)?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -1762,9 +1804,18 @@ pub async fn add_agents_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new agent(s)", added_count);
 
-    Ok(added_count)
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new agent(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new agent(s)", added_count);
+    }
+
+    Ok(added_count + dep_summary.total())
 }
 
 /// Pull agents from Kibana to local directory
@@ -1941,6 +1992,7 @@ pub async fn add_tools_to_manifest(
     include: Option<String>,
     exclude: Option<String>,
     file_path: Option<String>,
+    exclude_dependencies: bool,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -2104,6 +2156,7 @@ pub async fn add_tools_to_manifest(
     std::fs::create_dir_all(&tools_dir)?;
 
     let mut added_count = 0;
+    let mut all_deps = Vec::new();
     for tool in &filtered_tools {
         // Extract id (required)
         let tool_id = tool
@@ -2125,9 +2178,21 @@ pub async fn add_tools_to_manifest(
 
             log::debug!("Wrote tool file: {}", tool_file.display());
             added_count += 1;
+
+            if !exclude_dependencies {
+                all_deps.extend(find_tool_dependencies(tool));
+            }
         } else {
             log::debug!("Tool already in manifest, skipping: {}", tool_id);
         }
+    }
+
+    // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
+    if !all_deps.is_empty() {
+        let client = load_kibana_client(project_dir)?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -2141,9 +2206,18 @@ pub async fn add_tools_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new tool(s)", added_count);
 
-    Ok(added_count)
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new tool(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new tool(s)", added_count);
+    }
+
+    Ok(added_count + dep_summary.total())
 }
 
 /// Pull tools from Kibana to local directory
@@ -2925,6 +2999,187 @@ fn get_space_file(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
     get_space_dir(project_dir, space_id).join("space.json")
 }
 
+/// Summary of dependencies added during an operation
+#[derive(Debug, Default, Clone)]
+pub struct DependencySummary {
+    pub agents: usize,
+    pub tools: usize,
+    pub workflows: usize,
+}
+
+impl DependencySummary {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.agents == 0 && self.tools == 0 && self.workflows == 0
+    }
+
+    pub fn total(&self) -> usize {
+        self.agents + self.tools + self.workflows
+    }
+
+    pub fn format_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.agents > 0 {
+            parts.push(format!("{} agent(s)", self.agents));
+        }
+        if self.tools > 0 {
+            parts.push(format!("{} tool(s)", self.tools));
+        }
+        if self.workflows > 0 {
+            parts.push(format!("{} workflow(s)", self.workflows));
+        }
+        parts.join(", ")
+    }
+}
+
+/// Recursively resolve and add dependencies to manifests
+async fn resolve_and_add_dependencies(
+    project_dir: &Path,
+    space_id: &str,
+    client: &KibanaClient,
+    initial_deps: Vec<Dependency>,
+) -> Result<DependencySummary> {
+    let client = client.space(space_id)?;
+    let mut pending_deps = initial_deps;
+    let mut processed_ids = HashSet::new();
+    let mut summary = DependencySummary::new();
+
+    while let Some(dep) = pending_deps.pop() {
+        match dep {
+            Dependency::Agent(id) => {
+                if !processed_ids.insert(format!("agent:{}", id)) {
+                    continue;
+                }
+
+                let manifest_path = get_space_agents_manifest(project_dir, space_id);
+                let mut manifest = if manifest_path.exists() {
+                    AgentsManifest::read(&manifest_path)?
+                } else {
+                    AgentsManifest::new()
+                };
+
+                if manifest.contains_id(&id) {
+                    continue;
+                }
+
+                log::info!("Automatically adding dependent agent: {}", id.cyan());
+                let path = format!("api/agent_builder/agents/{}", id);
+                let response = client.get(&path).await?;
+                if !response.status().is_success() {
+                    log::warn!(
+                        "Failed to fetch dependent agent {}: {}",
+                        id,
+                        response.status()
+                    );
+                    continue;
+                }
+                let agent: Value = response.json().await?;
+                let name = agent.get("name").and_then(|v| v.as_str()).unwrap_or(&id);
+
+                if manifest.add_agent(AgentEntry::new(&id, name)) {
+                    manifest.write(&manifest_path)?;
+                    let agents_dir = get_space_agents_dir(project_dir, space_id);
+                    std::fs::create_dir_all(&agents_dir)?;
+                    let agent_file = agents_dir.join(format!("{}.json", name));
+                    let json = storage::to_string_with_multiline(&agent)?;
+                    std::fs::write(&agent_file, json)?;
+
+                    summary.agents += 1;
+                    pending_deps.extend(find_agent_dependencies(&agent));
+                }
+            }
+            Dependency::Tool(id) => {
+                if !processed_ids.insert(format!("tool:{}", id)) {
+                    continue;
+                }
+
+                let manifest_path = get_space_tools_manifest(project_dir, space_id);
+                let mut manifest = if manifest_path.exists() {
+                    ToolsManifest::read(&manifest_path)?
+                } else {
+                    ToolsManifest::new()
+                };
+
+                if manifest.contains(&id) {
+                    continue;
+                }
+
+                log::info!("Automatically adding dependent tool: {}", id.cyan());
+                let path = format!("api/agent_builder/tools/{}", id);
+                let response = client.get(&path).await?;
+                if !response.status().is_success() {
+                    log::warn!(
+                        "Failed to fetch dependent tool {}: {}",
+                        id,
+                        response.status()
+                    );
+                    continue;
+                }
+                let tool: Value = response.json().await?;
+                let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or(&id);
+
+                if manifest.add_tool(id.clone()) {
+                    manifest.write(&manifest_path)?;
+                    let tools_dir = get_space_tools_dir(project_dir, space_id);
+                    std::fs::create_dir_all(&tools_dir)?;
+                    let tool_file = tools_dir.join(format!("{}.json", name));
+                    let json = storage::to_string_with_multiline(&tool)?;
+                    std::fs::write(&tool_file, json)?;
+
+                    summary.tools += 1;
+                    pending_deps.extend(find_tool_dependencies(&tool));
+                }
+            }
+            Dependency::Workflow(id) => {
+                if !processed_ids.insert(format!("workflow:{}", id)) {
+                    continue;
+                }
+
+                let manifest_path = get_space_workflows_manifest(project_dir, space_id);
+                let mut manifest = if manifest_path.exists() {
+                    WorkflowsManifest::read(&manifest_path)?
+                } else {
+                    WorkflowsManifest::new()
+                };
+
+                if manifest.contains_id(&id) {
+                    continue;
+                }
+
+                log::info!("Automatically adding dependent workflow: {}", id.cyan());
+                let path = format!("api/workflows/{}", id);
+                let response = client.get_internal(&path).await?;
+                if !response.status().is_success() {
+                    log::warn!(
+                        "Failed to fetch dependent workflow {}: {}",
+                        id,
+                        response.status()
+                    );
+                    continue;
+                }
+                let workflow: Value = response.json().await?;
+                let name = workflow.get("name").and_then(|v| v.as_str()).unwrap_or(&id);
+
+                if manifest.add_workflow(WorkflowEntry::new(&id, name)) {
+                    manifest.write(&manifest_path)?;
+                    let workflows_dir = get_space_workflows_dir(project_dir, space_id);
+                    std::fs::create_dir_all(&workflows_dir)?;
+                    let workflow_file = workflows_dir.join(format!("{}.json", name));
+                    let json = storage::to_string_with_multiline(&workflow)?;
+                    std::fs::write(&workflow_file, json)?;
+
+                    summary.workflows += 1;
+                    pending_deps.extend(find_workflow_dependencies(&workflow));
+                }
+            }
+        }
+    }
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3048,5 +3303,27 @@ mod tests {
         // With filter
         let ids = get_target_space_ids_from_manifest(project_dir, Some(&["eng".to_string()]));
         assert_eq!(ids, vec!["eng"]);
+    }
+
+    #[test]
+    fn test_dependency_summary_format() {
+        let mut summary = DependencySummary::new();
+        assert_eq!(summary.format_summary(), "");
+        assert_eq!(summary.total(), 0);
+
+        summary.agents = 1;
+        assert_eq!(summary.format_summary(), "1 agent(s)");
+        assert_eq!(summary.total(), 1);
+
+        summary.tools = 2;
+        assert_eq!(summary.format_summary(), "1 agent(s), 2 tool(s)");
+        assert_eq!(summary.total(), 3);
+
+        summary.workflows = 3;
+        assert_eq!(
+            summary.format_summary(),
+            "1 agent(s), 2 tool(s), 3 workflow(s)"
+        );
+        assert_eq!(summary.total(), 6);
     }
 }
