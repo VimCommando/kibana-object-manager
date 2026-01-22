@@ -827,9 +827,11 @@ pub async fn add_workflows_to_manifest(
     }
 
     // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
         let client = load_kibana_client(project_dir)?;
-        resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -843,7 +845,16 @@ pub async fn add_workflows_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new workflow(s)", added_count);
+
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new workflow(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new workflow(s)", added_count);
+    }
 
     Ok(added_count)
 }
@@ -1775,9 +1786,11 @@ pub async fn add_agents_to_manifest(
     }
 
     // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
         let client = load_kibana_client(project_dir)?;
-        resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -1791,7 +1804,16 @@ pub async fn add_agents_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new agent(s)", added_count);
+
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new agent(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new agent(s)", added_count);
+    }
 
     Ok(added_count)
 }
@@ -2166,9 +2188,11 @@ pub async fn add_tools_to_manifest(
     }
 
     // Resolve dependencies if any
+    let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
         let client = load_kibana_client(project_dir)?;
-        resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -2182,7 +2206,16 @@ pub async fn add_tools_to_manifest(
         space_id.cyan(),
         manifest.count()
     );
-    log::info!("✓ Added {} new tool(s)", added_count);
+
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} new tool(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} new tool(s)", added_count);
+    }
 
     Ok(added_count)
 }
@@ -2966,15 +2999,48 @@ fn get_space_file(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
     get_space_dir(project_dir, space_id).join("space.json")
 }
 
+/// Summary of dependencies added during an operation
+#[derive(Debug, Default, Clone)]
+pub struct DependencySummary {
+    pub agents: usize,
+    pub tools: usize,
+    pub workflows: usize,
+}
+
+impl DependencySummary {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.agents == 0 && self.tools == 0 && self.workflows == 0
+    }
+
+    pub fn format_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.agents > 0 {
+            parts.push(format!("{} agent(s)", self.agents));
+        }
+        if self.tools > 0 {
+            parts.push(format!("{} tool(s)", self.tools));
+        }
+        if self.workflows > 0 {
+            parts.push(format!("{} workflow(s)", self.workflows));
+        }
+        parts.join(", ")
+    }
+}
+
 /// Recursively resolve and add dependencies to manifests
 async fn resolve_and_add_dependencies(
     project_dir: &Path,
     space_id: &str,
     client: &KibanaClient,
     initial_deps: Vec<Dependency>,
-) -> Result<()> {
+) -> Result<DependencySummary> {
     let mut pending_deps = initial_deps;
     let mut processed_ids = HashSet::new();
+    let mut summary = DependencySummary::new();
 
     while let Some(dep) = pending_deps.pop() {
         match dep {
@@ -3016,6 +3082,7 @@ async fn resolve_and_add_dependencies(
                     let json = storage::to_string_with_multiline(&agent)?;
                     std::fs::write(&agent_file, json)?;
 
+                    summary.agents += 1;
                     pending_deps.extend(find_agent_dependencies(&agent));
                 }
             }
@@ -3057,6 +3124,7 @@ async fn resolve_and_add_dependencies(
                     let json = storage::to_string_with_multiline(&tool)?;
                     std::fs::write(&tool_file, json)?;
 
+                    summary.tools += 1;
                     pending_deps.extend(find_tool_dependencies(&tool));
                 }
             }
@@ -3098,12 +3166,13 @@ async fn resolve_and_add_dependencies(
                     let json = storage::to_string_with_multiline(&workflow)?;
                     std::fs::write(&workflow_file, json)?;
 
+                    summary.workflows += 1;
                     pending_deps.extend(find_workflow_dependencies(&workflow));
                 }
             }
         }
     }
-    Ok(())
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -3229,5 +3298,23 @@ mod tests {
         // With filter
         let ids = get_target_space_ids_from_manifest(project_dir, Some(&["eng".to_string()]));
         assert_eq!(ids, vec!["eng"]);
+    }
+
+    #[test]
+    fn test_dependency_summary_format() {
+        let mut summary = DependencySummary::new();
+        assert_eq!(summary.format_summary(), "");
+
+        summary.agents = 1;
+        assert_eq!(summary.format_summary(), "1 agent(s)");
+
+        summary.tools = 2;
+        assert_eq!(summary.format_summary(), "1 agent(s), 2 tool(s)");
+
+        summary.workflows = 3;
+        assert_eq!(
+            summary.format_summary(),
+            "1 agent(s), 2 tool(s), 3 workflow(s)"
+        );
     }
 }
