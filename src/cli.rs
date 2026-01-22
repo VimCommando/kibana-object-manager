@@ -3038,6 +3038,7 @@ async fn resolve_and_add_dependencies(
     client: &KibanaClient,
     initial_deps: Vec<Dependency>,
 ) -> Result<DependencySummary> {
+    let client = client.space(space_id)?;
     let mut pending_deps = initial_deps;
     let mut processed_ids = HashSet::new();
     let mut summary = DependencySummary::new();
