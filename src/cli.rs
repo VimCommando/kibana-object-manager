@@ -856,7 +856,7 @@ pub async fn add_workflows_to_manifest(
         log::info!("✓ Added {} new workflow(s)", added_count);
     }
 
-    Ok(added_count)
+    Ok(added_count + dep_summary.total())
 }
 
 /// Add spaces to an existing manifest
@@ -1815,7 +1815,7 @@ pub async fn add_agents_to_manifest(
         log::info!("✓ Added {} new agent(s)", added_count);
     }
 
-    Ok(added_count)
+    Ok(added_count + dep_summary.total())
 }
 
 /// Pull agents from Kibana to local directory
@@ -2217,7 +2217,7 @@ pub async fn add_tools_to_manifest(
         log::info!("✓ Added {} new tool(s)", added_count);
     }
 
-    Ok(added_count)
+    Ok(added_count + dep_summary.total())
 }
 
 /// Pull tools from Kibana to local directory
@@ -3016,6 +3016,10 @@ impl DependencySummary {
         self.agents == 0 && self.tools == 0 && self.workflows == 0
     }
 
+    pub fn total(&self) -> usize {
+        self.agents + self.tools + self.workflows
+    }
+
     pub fn format_summary(&self) -> String {
         let mut parts = Vec::new();
         if self.agents > 0 {
@@ -3305,17 +3309,21 @@ mod tests {
     fn test_dependency_summary_format() {
         let mut summary = DependencySummary::new();
         assert_eq!(summary.format_summary(), "");
+        assert_eq!(summary.total(), 0);
 
         summary.agents = 1;
         assert_eq!(summary.format_summary(), "1 agent(s)");
+        assert_eq!(summary.total(), 1);
 
         summary.tools = 2;
         assert_eq!(summary.format_summary(), "1 agent(s), 2 tool(s)");
+        assert_eq!(summary.total(), 3);
 
         summary.workflows = 3;
         assert_eq!(
             summary.format_summary(),
             "1 agent(s), 2 tool(s), 3 workflow(s)"
         );
+        assert_eq!(summary.total(), 6);
     }
 }
