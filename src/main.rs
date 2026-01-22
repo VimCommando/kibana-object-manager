@@ -179,6 +179,10 @@ enum Commands {
         /// Kibana space(s) to add to/filter by (comma-separated, defaults to "default" for non-space APIs)
         #[arg(long, value_delimiter = ',')]
         space: Option<Vec<String>>,
+
+        /// Exclude dependencies of added items (agents, tools, workflows)
+        #[arg(long)]
+        exclude_dependencies: bool,
     },
 
     /// Bundle objects into distributable NDJSON files
@@ -387,6 +391,7 @@ async fn main() -> Result<()> {
             file,
             objects,
             space,
+            exclude_dependencies,
         } => {
             log::info!("Adding {} to {}", api.cyan(), output_dir.bright_black());
 
@@ -412,6 +417,7 @@ async fn main() -> Result<()> {
                         include,
                         exclude,
                         file,
+                        exclude_dependencies,
                     )
                     .await?
                 }
@@ -438,8 +444,16 @@ async fn main() -> Result<()> {
                         .unwrap_or("default");
                     log::info!("Using space: {}", target_space.cyan());
                     use kibana_object_manager::cli::add_agents_to_manifest;
-                    add_agents_to_manifest(&output_dir, target_space, query, include, exclude, file)
-                        .await?
+                    add_agents_to_manifest(
+                        &output_dir,
+                        target_space,
+                        query,
+                        include,
+                        exclude,
+                        file,
+                        exclude_dependencies,
+                    )
+                    .await?
                 }
                 "tools" => {
                     // Tools support: --query (ignored), --include, --exclude, or --file
@@ -450,8 +464,16 @@ async fn main() -> Result<()> {
                         .unwrap_or("default");
                     log::info!("Using space: {}", target_space.cyan());
                     use kibana_object_manager::cli::add_tools_to_manifest;
-                    add_tools_to_manifest(&output_dir, target_space, query, include, exclude, file)
-                        .await?
+                    add_tools_to_manifest(
+                        &output_dir,
+                        target_space,
+                        query,
+                        include,
+                        exclude,
+                        file,
+                        exclude_dependencies,
+                    )
+                    .await?
                 }
                 _ => {
                     log::error!("Unknown API: {}", api);
