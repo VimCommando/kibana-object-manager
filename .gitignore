@@ -21,3 +21,4 @@ manifest_patch.json
 # Test artifacts
 test_output/
 temp_test_*
+.reference/

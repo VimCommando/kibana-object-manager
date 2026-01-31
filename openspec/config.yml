@@ -1,0 +1,19 @@
+schema: spec-driven
+
+context: |
+  Kibob is a Rust CLI tool for managing Kibana objects via async ETL pipelines
+  Architecture: Use state machine type-state patterns, favor traits trait (Extractor, Transformer, Loader)
+  Error Handling: Eyre with context. Logs use 'owo-colors' (cyan/green/yellow)
+  Storage: JSON5 for objects (comments/trailing commas), YAML for manifests and configuration, NDJSON for multi-object bundles
+  API: Internal Kibana APIs require 'X-Elastic-Internal-Origin: Kibana' header
+  Constraints: No external CLI dependencies; must be cross-platform
+
+rules:
+  specs:
+    - Use Given/When/Then for logic verification
+    - Specify Kibana API endpoints, methods, and specific headers
+  tasks:
+    - Include 'cargo clippy' and 'cargo test' as verification steps
+    - Break into atomic, testable Rust modules/traits
+  design:
+    - Document data flow through the ETL pipeline
