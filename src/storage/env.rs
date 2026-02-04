@@ -40,9 +40,18 @@ pub fn transform_env_file(path: impl AsRef<Path>) -> Result<()> {
         if let Some(eq_pos) = trimmed.find('=') {
             let key = trimmed[..eq_pos].trim();
             let value = &trimmed[eq_pos + 1..];
-            let upper_key = key.to_uppercase();
 
-            if upper_key == "KIBANA_SPACE" {
+            // Handle optional 'export ' prefix
+            let (prefix, actual_key) = if key.to_lowercase().starts_with("export ") {
+                ("export ", key[7..].trim())
+            } else {
+                ("", key)
+            };
+
+            let upper_actual_key = actual_key.to_uppercase();
+            let upper_key = format!("{}{}", prefix, upper_actual_key);
+
+            if upper_actual_key == "KIBANA_SPACE" {
                 new_lines.push(migration_note.to_string());
                 new_lines.push(format!("# {}={}", upper_key, value));
             } else {
@@ -87,5 +96,19 @@ mod tests {
         assert!(transformed.contains("# KIBANA_SPACE=marketing"));
         assert!(transformed.contains("# Already a comment"));
         assert!(transformed.contains("KEEP_ME=true"));
+    }
+
+    #[test]
+    fn test_transform_env_file_with_export() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let content = "export kibana_url=http://localhost:5601\nexport kibana_space=marketing";
+        writeln!(temp_file, "{}", content).unwrap();
+
+        transform_env_file(temp_file.path()).unwrap();
+
+        let transformed = fs::read_to_string(temp_file.path()).unwrap();
+        assert!(transformed.contains("export KIBANA_URL=http://localhost:5601"));
+        assert!(transformed.contains("# Commented out by Kibana Migrate"));
+        assert!(transformed.contains("# export KIBANA_SPACE=marketing"));
     }
 }

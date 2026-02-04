@@ -13,7 +13,7 @@ mod json_writer;
 mod manifest;
 mod ndjson;
 
-pub use directory::{DirectoryReader, DirectoryWriter};
+pub use directory::{sanitize_filename, DirectoryReader, DirectoryWriter};
 pub use env::transform_env_file;
 pub use git::GitIgnoreManager;
 pub use json_writer::{
