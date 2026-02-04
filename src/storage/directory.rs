@@ -102,6 +102,18 @@ pub struct DirectoryWriter {
     filename_fields: Vec<String>,
 }
 
+pub fn sanitize_filename(name: &str) -> String {
+    // Replace characters that are problematic in filenames
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '&' => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 impl DirectoryWriter {
     /// Create a new directory writer with hierarchical organization
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
@@ -120,8 +132,8 @@ impl DirectoryWriter {
             path,
             hierarchical,
             filename_fields: vec![
-                "attributes.title".to_string(),
                 "attributes.name".to_string(),
+                "attributes.title".to_string(),
             ],
         })
     }
@@ -182,17 +194,17 @@ impl DirectoryWriter {
         // Try to get filename from configured fields
         for field_path in &self.filename_fields {
             if let Some(name) = self.get_nested_string(item, field_path) {
-                return self.sanitize_filename(&name);
+                return sanitize_filename(&name);
             }
         }
 
         // Fallback to id or originId
         if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-            return self.sanitize_filename(id);
+            return sanitize_filename(id);
         }
 
         if let Some(origin_id) = item.get("originId").and_then(|v| v.as_str()) {
-            return self.sanitize_filename(origin_id);
+            return sanitize_filename(origin_id);
         }
 
         // Last resort
@@ -209,19 +221,9 @@ impl DirectoryWriter {
 
         current.as_str().map(|s| s.to_string())
     }
+}
 
-    fn sanitize_filename(&self, name: &str) -> String {
-        // Replace characters that are problematic in filenames
-        name.chars()
-            .map(|c| match c {
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                c => c,
-            })
-            .collect::<String>()
-            .trim()
-            .to_string()
-    }
-
+impl DirectoryWriter {
     /// Clear all JSON files from directory (recursively)
     pub fn clear(&self) -> Result<()> {
         if !self.path.exists() {
@@ -353,14 +355,14 @@ mod tests {
         let data = vec![json!({
             "type": "dashboard",
             "id": "test",
-            "attributes": {"title": "Bad/Name:With*Special?Chars"}
+            "attributes": {"title": "Bad/Name:With*Special?Chars&More"}
         })];
 
         writer.write_all(&data).unwrap();
         assert!(
             temp.path()
                 .join("dashboard")
-                .join("Bad_Name_With_Special_Chars.json")
+                .join("Bad_Name_With_Special_Chars_More.json")
                 .exists()
         );
     }
@@ -381,6 +383,37 @@ mod tests {
 
         writer.clear().unwrap();
         assert_eq!(reader.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_preference_name_over_title() {
+        let temp = TempDir::new().unwrap();
+        let writer = DirectoryWriter::new(temp.path()).unwrap();
+
+        // Object with both title and name, should use name
+        let data = vec![json!({
+            "type": "index-pattern",
+            "id": "1",
+            "attributes": {
+                "title": "filebeat-*",
+                "name": "Filebeat Logs"
+            }
+        })];
+
+        writer.write_all(&data).unwrap();
+        assert!(
+            temp.path()
+                .join("index-pattern")
+                .join("Filebeat Logs.json")
+                .exists()
+        );
+        assert!(
+            !temp
+                .path()
+                .join("index-pattern")
+                .join("filebeat-*.json")
+                .exists()
+        );
     }
 
     #[test]

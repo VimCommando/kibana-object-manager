@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use crate::client::{Auth, KibanaClient};
 use crate::kibana::saved_objects::SavedObjectsManifest;
 use crate::kibana::spaces::{SpacesExtractor, SpacesManifest};
-use crate::storage::transform_env_file;
+use crate::storage::{sanitize_filename, transform_env_file};
 use url::Url;
 
 /// Migrate a legacy manifest.json file to the new manifest/ directory structure
@@ -180,9 +180,12 @@ fn migrate_object_files(project_dir: &Path) -> Result<()> {
             let obj_name = &filename[..dot_pos];
             let obj_type = &filename[dot_pos + 1..];
 
+            // Sanitize object name to ensure no shell-reserved characters (like '*')
+            let sanitized_name = sanitize_filename(obj_name);
+
             // Create hierarchical path: type/object_name.json
             let type_dir = objects_dir.join(obj_type);
-            let new_path = type_dir.join(format!("{}.json", obj_name));
+            let new_path = type_dir.join(format!("{}.json", sanitized_name));
 
             // Create type directory if it doesn't exist
             std::fs::create_dir_all(&type_dir)
@@ -565,9 +568,12 @@ fn migrate_legacy_object_files(project_dir: &Path) -> Result<()> {
             let obj_name = &filename[..dot_pos];
             let obj_type = &filename[dot_pos + 1..];
 
+            // Sanitize object name to ensure no shell-reserved characters (like '*')
+            let sanitized_name = sanitize_filename(obj_name);
+
             // Create hierarchical path: type/object_name.json
             let type_dir = objects_dir.join(obj_type);
-            let new_path = type_dir.join(format!("{}.json", obj_name));
+            let new_path = type_dir.join(format!("{}.json", sanitized_name));
 
             std::fs::create_dir_all(&type_dir)?;
             std::fs::rename(&path, &new_path)?;

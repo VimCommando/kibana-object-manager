@@ -289,18 +289,6 @@ pub async fn push_saved_objects(
                 }
             }
 
-            // Push agents for this space
-            if should_process_api("agents", api_filter_slice) {
-                match push_space_agents(&*project_dir, &space_client).await {
-                    Ok(count) => {
-                        s_ag = count;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
-                    }
-                }
-            }
-
             // Push tools for this space
             if should_process_api("tools", api_filter_slice) {
                 match push_space_tools(&*project_dir, &space_client).await {
@@ -309,6 +297,18 @@ pub async fn push_saved_objects(
                     }
                     Err(e) => {
                         log::warn!("Failed to push tools for space {}: {}", space_id.cyan(), e);
+                    }
+                }
+            }
+
+            // Push agents for this space
+            if should_process_api("agents", api_filter_slice) {
+                match push_space_agents(&*project_dir, &space_client).await {
+                    Ok(count) => {
+                        s_ag = count;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to push agents for space {}: {}", space_id.cyan(), e);
                     }
                 }
             }
@@ -386,17 +386,17 @@ pub async fn bundle_to_ndjson(
             }
         }
 
-        // Bundle agents for this space
-        if should_process_api("agents", api_filter) {
-            if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
-                log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
-            }
-        }
-
         // Bundle tools for this space
         if should_process_api("tools", api_filter) {
             if let Ok(count) = bundle_space_tools(project_dir, space_id).await {
                 log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
+            }
+        }
+
+        // Bundle agents for this space
+        if should_process_api("agents", api_filter) {
+            if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
+                log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
             }
         }
     }
