@@ -4,7 +4,7 @@
 
 use crate::etl::Transformer;
 use eyre::Result;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// Transformer that adds a "managed" flag to objects
 ///
@@ -49,7 +49,11 @@ impl Transformer for ManagedFlagAdder {
 
     fn transform(&self, mut input: Self::Input) -> Result<Self::Output> {
         if let Some(obj) = input.as_object_mut() {
-            obj.insert("managed".to_string(), json!(self.managed));
+            if self.managed {
+                obj.insert("managed".to_string(), json!(true));
+            } else {
+                obj.remove("managed");
+            }
         }
         Ok(input)
     }
@@ -82,12 +86,13 @@ mod tests {
         let input = json!({
             "id": "test",
             "type": "dashboard",
-            "attributes": {"title": "Test"}
+            "attributes": {"title": "Test"},
+            "managed": true
         });
 
         let output = adder.transform(input).unwrap();
 
-        assert_eq!(output["managed"], false);
+        assert_eq!(output.get("managed"), None);
         assert_eq!(output["id"], "test");
         assert_eq!(output["type"], "dashboard");
     }
