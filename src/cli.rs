@@ -11,7 +11,6 @@ use crate::{
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
     kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
-    migration::load_saved_objects_manifest,
     storage::{self, DirectoryReader, DirectoryWriter},
     transform::{
         FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, MultilineFieldFormatter,
@@ -510,6 +509,7 @@ pub async fn init_from_export(
 /// Can add from Kibana or from a file
 pub async fn add_objects_to_manifest(
     project_dir: impl AsRef<Path>,
+    space_id: &str,
     objects_to_add: Option<Vec<String>>,
     file_path: Option<impl AsRef<Path>>,
 ) -> Result<usize> {
@@ -517,9 +517,32 @@ pub async fn add_objects_to_manifest(
 
     let project_dir = project_dir.as_ref();
 
+    // Validate that space is managed (if spaces.yml exists)
+    let spaces_manifest_path = project_dir.join("spaces.yml");
+    if spaces_manifest_path.exists() {
+        let spaces_manifest = SpacesManifest::read(&spaces_manifest_path)?;
+        if !spaces_manifest.spaces.iter().any(|s| s.id == space_id) {
+            eyre::bail!(
+                "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
+                space_id.cyan(),
+                space_id
+            );
+        }
+    }
+
     // Load existing manifest
     log::info!("Loading existing manifest from {}", project_dir.display());
-    let mut manifest = load_saved_objects_manifest(project_dir)?;
+    let manifest_path = get_space_saved_objects_manifest(project_dir, space_id);
+    let mut manifest = if manifest_path.exists() {
+        SavedObjectsManifest::read(&manifest_path)?
+    } else {
+        log::info!("No existing manifest found, will create new one");
+        // Ensure manifest directory exists
+        if let Some(parent) = manifest_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        SavedObjectsManifest::new()
+    };
     log::info!("Current manifest has {} objects", manifest.count());
 
     let new_objects = if let Some(file) = file_path {
@@ -545,9 +568,7 @@ pub async fn add_objects_to_manifest(
         // Fetch from Kibana
         log::info!("Fetching {} object(s) from Kibana", object_specs.len());
         let client = load_kibana_client(project_dir)?;
-        // TODO: This needs to be refactored for multi-space support
-        // For now, hardcode "default" space until multi-space architecture is complete
-        let space_client = client.space("default")?;
+        let space_client = client.space(space_id)?;
 
         // Parse object specs (format: "type=id" or "type:id")
         let mut saved_objects = Vec::new();
@@ -585,14 +606,13 @@ pub async fn add_objects_to_manifest(
     }
 
     // Save updated manifest
-    let manifest_path = project_dir.join("manifest/saved_objects.json");
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     std::fs::write(&manifest_path, manifest_json)?;
 
     log::info!("✓ Updated manifest now has {} objects", manifest.count());
 
     // Write new objects to disk
-    let objects_dir = project_dir.join("objects");
+    let objects_dir = get_space_objects_dir(project_dir, space_id);
     let writer = DirectoryWriter::new_with_options(&objects_dir, true)?;
 
     // Transform: Drop metadata and unescape

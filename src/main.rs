@@ -399,7 +399,13 @@ async fn main() -> Result<()> {
             let count = match api.as_str() {
                 "objects" => {
                     // Legacy objects support: --objects flag or --file
-                    add_objects_to_manifest(&output_dir, objects, file).await?
+                    let target_space = space
+                        .as_ref()
+                        .and_then(|s| s.first())
+                        .map(|s| s.as_str())
+                        .unwrap_or("default");
+                    log::info!("Using space: {}", target_space.cyan());
+                    add_objects_to_manifest(&output_dir, target_space, objects, file).await?
                 }
                 "workflows" => {
                     // Workflows support: --query, --include, --exclude, or --file
