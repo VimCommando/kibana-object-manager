@@ -20,13 +20,13 @@ A Git-inspired CLI tool for managing Kibana saved objects in version control. Bu
 ## Installation
 
 Published on:
-- Homebrew: https://formulae.brew.sh/formula/kibob
+- Homebrew tap: https://github.com/VimCommando/homebrew-kibob
 - crates.io: https://crates.io/crates/kibana-object-manager
 
 ### From Homebrew
 
 ```bash
-brew install kibob
+brew install VimCommando/homebrew-kibob/kibob
 ```
 
 ### From Cargo
