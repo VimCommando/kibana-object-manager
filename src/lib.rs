@@ -11,7 +11,7 @@ pub mod storage;
 pub mod transform;
 
 // Re-exports for convenience
-pub use client::{Auth, AuthType, KibanaClient};
+pub use client::{ApiCapability, Auth, AuthType, KibanaClient, KibanaVersion, KibanaVersionInfo};
 pub use etl::{Extractor, IdentityTransformer, Loader, Pipeline, Transformer};
 pub use storage::{
     DirectoryReader, DirectoryWriter, GitIgnoreManager, ManifestDirectory, NdjsonReader,

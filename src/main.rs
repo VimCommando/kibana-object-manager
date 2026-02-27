@@ -3,7 +3,7 @@ use eyre::Result;
 use kibana_object_manager::{
     cli::{
         add_objects_to_manifest, bundle_to_ndjson, init_from_export, load_kibana_client,
-        pull_saved_objects, push_saved_objects,
+        pull_saved_objects, push_saved_objects, version_warning_message,
     },
     migration::{MigrationResult, migrate_to_multispace_unified},
 };
@@ -86,6 +86,7 @@ enum Commands {
     ///   kibob pull ./my-dashboards
     ///   kibob pull ./my-dashboards --space esdiag
     ///   kibob pull ./my-dashboards --api tools,agents
+    ///   kibob pull ./my-dashboards --force            # Bypass version checks (warning)
     Pull {
         /// Project directory containing manifest (default: current directory)
         #[arg(default_value = ".")]
@@ -95,9 +96,14 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         space: Option<Vec<String>>,
 
-        /// Comma-separated list of APIs to pull (e.g., "saved_objects,workflows,agents,tools,spaces")
+        /// Comma-separated APIs to pull with min versions:
+        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
         #[arg(long, value_delimiter = ',')]
         api: Option<Vec<String>>,
+
+        /// Bypass version compatibility checks and attempt API calls anyway (prints warning)
+        #[arg(long)]
+        force: bool,
     },
 
     /// Push (upload) local saved objects to Kibana
@@ -110,6 +116,7 @@ enum Commands {
     ///   kibob push . --managed false   # Editable in Kibana
     ///   kibob push . --space esdiag    # Push to specific space
     ///   kibob push . --api tools       # Push only tools
+    ///   kibob push . --force           # Bypass version checks (warning)
     Push {
         /// Project directory containing objects to upload
         #[arg(default_value = ".")]
@@ -123,9 +130,14 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         space: Option<Vec<String>>,
 
-        /// Comma-separated list of APIs to push (e.g., "saved_objects,workflows,agents,tools,spaces")
+        /// Comma-separated APIs to push with min versions:
+        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
         #[arg(long, value_delimiter = ',')]
         api: Option<Vec<String>>,
+
+        /// Bypass version compatibility checks and attempt API calls anyway (prints warning)
+        #[arg(long)]
+        force: bool,
     },
 
     /// Add items to an existing manifest
@@ -148,8 +160,10 @@ enum Commands {
     ///   kibob add tools .                              # Fetch all tools
     ///   kibob add tools . --include "^search"          # Include tools matching pattern
     ///   kibob add objects . --objects "dashboard=abc"  # Legacy: add specific objects by ID
+    ///   kibob add workflows . --force                  # Bypass version checks (warning)
     Add {
-        /// API to add to (objects, workflows, spaces, agents, tools)
+        /// API to add to:
+        /// objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
         api: String,
 
         /// Project directory with existing manifest
@@ -183,6 +197,10 @@ enum Commands {
         /// Exclude dependencies of added items (agents, tools, workflows)
         #[arg(long)]
         exclude_dependencies: bool,
+
+        /// Bypass version compatibility checks and attempt API calls anyway (prints warning)
+        #[arg(long)]
+        force: bool,
     },
 
     /// Bundle objects into distributable NDJSON files
@@ -327,6 +345,7 @@ async fn main() -> Result<()> {
             output_dir,
             space,
             api,
+            force,
         } => {
             log::info!("Pulling objects to: {}", output_dir.bright_black());
 
@@ -338,11 +357,15 @@ async fn main() -> Result<()> {
                 log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
             }
 
-            match pull_saved_objects(&output_dir, space.as_deref(), api.as_deref()).await {
+            match pull_saved_objects(&output_dir, space.as_deref(), api.as_deref(), force).await {
                 Ok(count) => {
                     log::info!("✓ Successfully pulled {} object(s)", count);
                 }
                 Err(e) => {
+                    if let Some(message) = version_warning_message(&e) {
+                        log::warn!("{}", message);
+                        std::process::exit(2);
+                    }
                     log::error!("Pull failed: {}", e);
                     return Err(e);
                 }
@@ -353,6 +376,7 @@ async fn main() -> Result<()> {
             managed,
             space,
             api,
+            force,
         } => {
             log::info!(
                 "Pushing {} objects from: {}",
@@ -372,11 +396,17 @@ async fn main() -> Result<()> {
                 log::info!("Filtering to API(s): {}", apis.join(", ").cyan());
             }
 
-            match push_saved_objects(&input_dir, managed, space.as_deref(), api.as_deref()).await {
+            match push_saved_objects(&input_dir, managed, space.as_deref(), api.as_deref(), force)
+                .await
+            {
                 Ok(count) => {
                     log::info!("✓ Successfully pushed {} object(s)", count);
                 }
                 Err(e) => {
+                    if let Some(message) = version_warning_message(&e) {
+                        log::warn!("{}", message);
+                        std::process::exit(2);
+                    }
                     log::error!("Push failed: {}", e);
                     return Err(e);
                 }
@@ -392,11 +422,12 @@ async fn main() -> Result<()> {
             objects,
             space,
             exclude_dependencies,
+            force,
         } => {
             log::info!("Adding {} to {}", api.cyan(), output_dir.bright_black());
 
             // Route to appropriate handler based on API type
-            let count = match api.as_str() {
+            let count_result: Result<usize> = match api.as_str() {
                 "objects" => {
                     // Legacy objects support: --objects flag or --file
                     let target_space = space
@@ -405,7 +436,7 @@ async fn main() -> Result<()> {
                         .map(|s| s.as_str())
                         .unwrap_or("default");
                     log::info!("Using space: {}", target_space.cyan());
-                    add_objects_to_manifest(&output_dir, target_space, objects, file).await?
+                    add_objects_to_manifest(&output_dir, target_space, objects, file, force).await
                 }
                 "workflows" => {
                     // Workflows support: --query, --include, --exclude, or --file
@@ -424,8 +455,9 @@ async fn main() -> Result<()> {
                         exclude,
                         file,
                         exclude_dependencies,
+                        force,
                     )
-                    .await?
+                    .await
                 }
                 "spaces" => {
                     // Spaces support: --query (ignored), --include, --exclude, or --file
@@ -438,8 +470,9 @@ async fn main() -> Result<()> {
                         include,
                         exclude,
                         file,
+                        force,
                     )
-                    .await?
+                    .await
                 }
                 "agents" => {
                     // Agents support: --query (ignored), --include, --exclude, or --file
@@ -458,8 +491,9 @@ async fn main() -> Result<()> {
                         exclude,
                         file,
                         exclude_dependencies,
+                        force,
                     )
-                    .await?
+                    .await
                 }
                 "tools" => {
                     // Tools support: --query (ignored), --include, --exclude, or --file
@@ -478,8 +512,9 @@ async fn main() -> Result<()> {
                         exclude,
                         file,
                         exclude_dependencies,
+                        force,
                     )
-                    .await?
+                    .await
                 }
                 _ => {
                     log::error!("Unknown API: {}", api);
@@ -490,7 +525,16 @@ async fn main() -> Result<()> {
                 }
             };
 
-            log::info!("✓ Added {} item(s)", count);
+            match count_result {
+                Ok(count) => log::info!("✓ Added {} item(s)", count),
+                Err(e) => {
+                    if let Some(message) = version_warning_message(&e) {
+                        log::warn!("{}", message);
+                        std::process::exit(2);
+                    }
+                    return Err(e);
+                }
+            }
         }
         Commands::Togo {
             input_dir,
