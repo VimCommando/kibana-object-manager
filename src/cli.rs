@@ -1,7 +1,9 @@
 //! CLI helper functions
 
 use crate::{
-    client::{ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo},
+    client::{
+        ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
+    },
     etl::{Extractor, Loader, Transformer},
     kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
     kibana::dependencies::{
@@ -122,7 +124,7 @@ fn capability_requested(capability: ApiCapability, filter: Option<&[String]>) ->
     }
 }
 
-fn is_older_major_minor(target: KibanaVersion, recorded: KibanaVersion) -> bool {
+fn is_older_major_minor(target: &KibanaVersion, recorded: &KibanaVersion) -> bool {
     target.major < recorded.major
         || (target.major == recorded.major && target.minor < recorded.minor)
 }
@@ -135,7 +137,7 @@ fn load_recorded_kibana_version(project_dir: &Path) -> Result<Option<KibanaVersi
 
     let manifest = SpacesManifest::read(&spaces_manifest_path)?;
     match manifest.kibana_version() {
-        Some(version) => match KibanaVersion::parse(version) {
+        Some(version) => match parse_kibana_version(version) {
             Ok(parsed) => Ok(Some(parsed)),
             Err(e) => {
                 log::warn!(
@@ -174,8 +176,8 @@ async fn run_version_preflight(
     let detected = client.server_version_info().await?;
     let recorded = load_recorded_kibana_version(project_dir)?;
 
-    if let Some(recorded_version) = recorded
-        && is_older_major_minor(detected.parsed, recorded_version) {
+    if let Some(recorded_version) = recorded.as_ref()
+        && is_older_major_minor(&detected.parsed, recorded_version) {
             let message = format!(
                 "{} requires --force because target Kibana {} is older than recorded repository version {}",
                 action, detected.parsed, recorded_version
@@ -244,10 +246,10 @@ pub async fn pull_saved_objects(
         ApiCapability::Workflows,
     ] {
         if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
-            && !KibanaClient::supports_capability(detected_version, capability)
+            && !KibanaClient::supports_capability(&detected_version, capability)
         {
             unsupported.push(KibanaClient::unsupported_capability_reason(
-                detected_version,
+                &detected_version,
                 capability,
             ));
         }
@@ -263,7 +265,7 @@ pub async fn pull_saved_objects(
 
     // Pull space definitions FIRST (before any other operations)
     let can_pull_spaces = !warning_exit
-        || KibanaClient::supports_capability(detected_version, ApiCapability::Spaces)
+        || KibanaClient::supports_capability(&detected_version, ApiCapability::Spaces)
         || force;
     if can_pull_spaces && should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice()))
     {
@@ -294,6 +296,7 @@ pub async fn pull_saved_objects(
         let client = client.clone();
         let project_dir = project_dir.clone();
         let api_filter = api_filter.clone();
+        let detected_version = detected_version.clone();
 
         set.spawn(async move {
             log::info!("Processing space: {}", space_id.cyan());
@@ -303,11 +306,11 @@ pub async fn pull_saved_objects(
             let space_client = client.space(&space_id)?;
             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
             let can_pull_workflows = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Workflows);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Workflows);
             let can_pull_agents = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Agents);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
             let can_pull_tools = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Tools);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
 
             // Pull saved objects for this space
             if should_process_api("saved_objects", api_filter_slice)
@@ -400,10 +403,10 @@ pub async fn push_saved_objects(
         ApiCapability::Workflows,
     ] {
         if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
-            && !KibanaClient::supports_capability(detected_version, capability)
+            && !KibanaClient::supports_capability(&detected_version, capability)
         {
             unsupported.push(KibanaClient::unsupported_capability_reason(
-                detected_version,
+                &detected_version,
                 capability,
             ));
         }
@@ -449,6 +452,7 @@ pub async fn push_saved_objects(
         let client = client.clone();
         let project_dir = project_dir.clone();
         let api_filter = api_filter.clone();
+        let detected_version = detected_version.clone();
 
         set.spawn(async move {
             log::info!("Processing space: {}", space_id.cyan());
@@ -461,11 +465,11 @@ pub async fn push_saved_objects(
             let space_client = client.space(&space_id)?;
             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
             let can_push_workflows = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Workflows);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Workflows);
             let can_push_agents = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Agents);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
             let can_push_tools = force
-                || KibanaClient::supports_capability(detected_version, ApiCapability::Tools);
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
 
             // Push saved objects for this space
             if should_process_api("saved_objects", api_filter_slice) {
@@ -583,16 +587,19 @@ pub async fn bundle_to_ndjson(
     let mut total_count = 0;
 
     let can_bundle_workflows = recorded_version
+        .as_ref()
         .map(|v| KibanaClient::supports_capability(v, ApiCapability::Workflows))
         .unwrap_or(true);
     let can_bundle_agents = recorded_version
+        .as_ref()
         .map(|v| KibanaClient::supports_capability(v, ApiCapability::Agents))
         .unwrap_or(true);
     let can_bundle_tools = recorded_version
+        .as_ref()
         .map(|v| KibanaClient::supports_capability(v, ApiCapability::Tools))
         .unwrap_or(true);
 
-    if let Some(version) = recorded_version {
+    if let Some(version) = recorded_version.as_ref() {
         if capability_requested(ApiCapability::Workflows, api_filter) && !can_bundle_workflows {
             log::warn!(
                 "{}",
@@ -939,9 +946,10 @@ pub async fn add_workflows_to_manifest(
     }
 
     if let Some(version) = detected_version
-        && !KibanaClient::supports_capability(version, ApiCapability::Workflows)
+        && !KibanaClient::supports_capability(&version, ApiCapability::Workflows)
     {
-        let reason = KibanaClient::unsupported_capability_reason(version, ApiCapability::Workflows);
+        let reason =
+            KibanaClient::unsupported_capability_reason(&version, ApiCapability::Workflows);
         if force {
             log::warn!("{}", reason);
             log::warn!("--force enabled: attempting workflows API calls anyway");
@@ -1926,9 +1934,9 @@ pub async fn add_agents_to_manifest(
     }
 
     if let Some(version) = detected_version
-        && !KibanaClient::supports_capability(version, ApiCapability::Agents)
+        && !KibanaClient::supports_capability(&version, ApiCapability::Agents)
     {
-        let reason = KibanaClient::unsupported_capability_reason(version, ApiCapability::Agents);
+        let reason = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Agents);
         if force {
             log::warn!("{}", reason);
             log::warn!("--force enabled: attempting agents API calls anyway");
@@ -2345,9 +2353,9 @@ pub async fn add_tools_to_manifest(
     }
 
     if let Some(version) = detected_version
-        && !KibanaClient::supports_capability(version, ApiCapability::Tools)
+        && !KibanaClient::supports_capability(&version, ApiCapability::Tools)
     {
-        let reason = KibanaClient::unsupported_capability_reason(version, ApiCapability::Tools);
+        let reason = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Tools);
         if force {
             log::warn!("{}", reason);
             log::warn!("--force enabled: attempting tools API calls anyway");
@@ -3382,12 +3390,12 @@ async fn resolve_and_add_dependencies(
         match dep {
             Dependency::Agent(id) => {
                 if !force
-                    && !KibanaClient::supports_capability(detected_version, ApiCapability::Agents)
+                    && !KibanaClient::supports_capability(&detected_version, ApiCapability::Agents)
                 {
                     log::warn!(
                         "{}",
                         KibanaClient::unsupported_capability_reason(
-                            detected_version,
+                            &detected_version,
                             ApiCapability::Agents
                         )
                     );
@@ -3436,12 +3444,12 @@ async fn resolve_and_add_dependencies(
             }
             Dependency::Tool(id) => {
                 if !force
-                    && !KibanaClient::supports_capability(detected_version, ApiCapability::Tools)
+                    && !KibanaClient::supports_capability(&detected_version, ApiCapability::Tools)
                 {
                     log::warn!(
                         "{}",
                         KibanaClient::unsupported_capability_reason(
-                            detected_version,
+                            &detected_version,
                             ApiCapability::Tools
                         )
                     );
@@ -3491,14 +3499,14 @@ async fn resolve_and_add_dependencies(
             Dependency::Workflow(id) => {
                 if !force
                     && !KibanaClient::supports_capability(
-                        detected_version,
+                        &detected_version,
                         ApiCapability::Workflows,
                     )
                 {
                     log::warn!(
                         "{}",
                         KibanaClient::unsupported_capability_reason(
-                            detected_version,
+                            &detected_version,
                             ApiCapability::Workflows
                         )
                     );
@@ -3699,18 +3707,18 @@ mod tests {
 
     #[test]
     fn test_is_older_major_minor() {
-        let recorded = KibanaVersion::parse("9.3.2").unwrap();
+        let recorded = parse_kibana_version("9.3.2").unwrap();
         assert!(is_older_major_minor(
-            KibanaVersion::parse("9.2.9").unwrap(),
-            recorded
+            &parse_kibana_version("9.2.9").unwrap(),
+            &recorded
         ));
         assert!(!is_older_major_minor(
-            KibanaVersion::parse("9.3.0").unwrap(),
-            recorded
+            &parse_kibana_version("9.3.0").unwrap(),
+            &recorded
         ));
         assert!(!is_older_major_minor(
-            KibanaVersion::parse("10.0.0").unwrap(),
-            recorded
+            &parse_kibana_version("10.0.0").unwrap(),
+            &recorded
         ));
     }
 
