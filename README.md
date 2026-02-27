@@ -19,7 +19,22 @@ A Git-inspired CLI tool for managing Kibana saved objects in version control. Bu
 
 ## Installation
 
-### From Cargo (Recommended)
+Published on:
+- crates.io: https://crates.io/crates/kibana-object-manager
+- Homebrew: https://formulae.brew.sh/formula/kibob
+
+From crates.io:
+```bash
+cargo install kibana-object-manager
+```
+
+### From Homebrew
+
+```bash
+brew install kibob
+```
+
+### From Cargo
 
 ```bash
 cargo install kibana-object-manager
@@ -32,12 +47,6 @@ git clone https://github.com/VimCommando/kibana-object-manager.git
 cd kibana-object-manager
 cargo build --release
 # Binary will be at target/release/kibob
-```
-
-### Future: Homebrew
-
-```bash
-brew install kibob  # Coming soon!
 ```
 
 ## Quick Start
