@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kibob CLI"
+  short_description: "Use Kibob CLI for Kibana object workflows"
+  default_prompt: "Use kibob commands to initialize, sync, and deploy Kibana objects safely."
