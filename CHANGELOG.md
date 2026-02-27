@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-27
+
+### Added
+- Kibana version capability checks for pull/push/add/bundle flows
+- `--force` override for operations that are gated by Kibana version support
+- Version-aware warnings that explain unsupported APIs and minimum required versions
+- OpenSpec `publish-kibob` release automation skill and helper script
+
+### Changed
+- Switched Kibana version parsing/comparison to the `semver` crate for more reliable compatibility checks
+- CLI messaging now reports detected Kibana version and capability thresholds
+
 ## [0.1.2] - 2026-02-27
 
 ### Added
@@ -98,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The original Kibana Object Manager was implemented as a Bash script with dependencies on external command-line tools. This version was superseded by the Rust rewrite for improved reliability, performance, and user experience.
 
-[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.2.0
 [0.1.2]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.2
 [0.1.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.0
