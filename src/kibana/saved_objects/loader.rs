@@ -70,7 +70,7 @@ impl SavedObjectsLoader {
         // Convert objects to NDJSON
         let ndjson = objects
             .iter()
-            .map(|obj| serde_json::to_string(obj))
+            .map(serde_json::to_string)
             .collect::<Result<Vec<_>, _>>()
             .with_context(|| "Failed to serialize objects to NDJSON")?
             .join("\n");

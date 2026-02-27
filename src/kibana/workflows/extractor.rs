@@ -99,7 +99,7 @@ impl WorkflowsExtractor {
         let workflows: Vec<Value> = search_result
             .get("results")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().cloned().collect())
+            .map(|arr| arr.to_vec())
             .unwrap_or_default();
 
         log::info!("Found {} workflow(s) via search", workflows.len());

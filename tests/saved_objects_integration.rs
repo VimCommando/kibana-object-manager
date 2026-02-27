@@ -36,7 +36,7 @@ async fn test_saved_objects_extract() -> Result<()> {
 
     println!("Extracted {} object(s)", objects.len());
     assert!(
-        objects.len() > 0,
+        !objects.is_empty(),
         "Should have extracted at least one object"
     );
 
@@ -76,7 +76,7 @@ async fn test_saved_objects_roundtrip() -> Result<()> {
         "Step 1: Extracted {} object(s) from test space",
         objects.len()
     );
-    assert!(objects.len() > 0, "Should have extracted objects");
+    assert!(!objects.is_empty(), "Should have extracted objects");
 
     // Step 2: Delete the object from test space
     let object_id = objects[0]["id"].as_str().unwrap();

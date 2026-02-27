@@ -79,15 +79,14 @@ fn process_multiline_fields(value: &mut Value, field_paths: &[String]) -> Result
             // The field exists - if it's a string with newlines, it will
             // automatically be written with triple-quotes by json_writer.
             // We don't need to do anything here - just log that we found it.
-            if let Some(s) = field_value.as_str() {
-                if s.contains('\n') {
+            if let Some(s) = field_value.as_str()
+                && s.contains('\n') {
                     log::trace!(
                         "MultilineFieldFormatter: Found multiline field '{}' with {} chars, will use triple-quote syntax",
                         path,
                         s.len()
                     );
                 }
-            }
         }
     }
 

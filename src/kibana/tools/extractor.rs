@@ -91,7 +91,7 @@ impl ToolsExtractor {
         let tools: Vec<Value> = search_result
             .get("results")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().cloned().collect())
+            .map(|arr| arr.to_vec())
             .unwrap_or_default();
 
         log::info!("Found {} tool(s) via search", tools.len());

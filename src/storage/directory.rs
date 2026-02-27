@@ -62,7 +62,7 @@ impl DirectoryReader {
             return Ok(0);
         }
 
-        Ok(self.count_recursive(&self.path)?)
+        self.count_recursive(&self.path)
     }
 
     fn count_recursive(&self, dir: &Path) -> Result<usize> {

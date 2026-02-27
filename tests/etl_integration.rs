@@ -181,8 +181,8 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
     impl Extractor for SingleAgentExtractor {
         type Item = Value;
 
-        fn extract(&self) -> impl std::future::Future<Output = Result<Vec<Self::Item>>> + Send {
-            async { Ok(vec![self.agent.clone()]) }
+        async fn extract(&self) -> Result<Vec<Self::Item>> {
+            Ok(vec![self.agent.clone()])
         }
     }
 
@@ -277,8 +277,8 @@ async fn test_tool_multiline_query_formatting() -> Result<()> {
     impl Extractor for SingleToolExtractor {
         type Item = Value;
 
-        fn extract(&self) -> impl std::future::Future<Output = Result<Vec<Self::Item>>> + Send {
-            async { Ok(vec![self.tool.clone()]) }
+        async fn extract(&self) -> Result<Vec<Self::Item>> {
+            Ok(vec![self.tool.clone()])
         }
     }
 

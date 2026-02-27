@@ -9,9 +9,18 @@ description = "A Git-inspired CLI tool for managing Kibana saved objects in vers
 license = "Apache-2.0"
 repository = "https://github.com/VimCommando/kibana-object-manager"
 homepage = "https://github.com/VimCommando/kibana-object-manager"
+documentation = "https://docs.rs/kibana-object-manager"
 readme = "README.md"
 keywords = ["kibana", "elasticsearch", "devops", "etl", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+include = [
+    "src/**",
+    "docs/**",
+    "Cargo.toml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
 
 [[bin]]
 name = "kibob"

@@ -21,7 +21,6 @@ use std::path::Path;
 /// ```
 ///
 /// This makes git diffs show actual line-by-line changes in the YAML content.
-
 /// Serialize a JSON value to a string with triple-quote multi-line strings.
 ///
 /// Any string field containing newlines will be written with triple-quote syntax.
@@ -269,12 +268,11 @@ fn normalize_triple_quotes(input: &str) -> String {
                                 // If it is, we should not close the string yet.
                                 // This handles cases where content ends with quotes, e.g. """content""""
                                 // where the last 3 quotes are the terminator, and the one before is part of content.
-                                if let Some(&next_char) = chars.peek() {
-                                    if next_char == '"' {
+                                if let Some(&next_char) = chars.peek()
+                                    && next_char == '"' {
                                         // Continue collecting quotes
                                         continue;
                                     }
-                                }
 
                                 // Check if the last 3 quotes form the closing delimiter
                                 // We need to be careful: if content ends with quotes, like `"text"`,
@@ -487,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_number_values() {
-        let value = json!({"int": 42, "float": 3.14});
+        let value = json!({"int": 42, "float": std::f64::consts::PI});
         let output = to_string_with_multiline(&value).unwrap();
         assert!(output.contains("42"));
         assert!(output.contains("3.14"));

@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod integration_test {
+mod tests {
     use crate::etl::Transformer;
     use crate::transform::{FieldUnescaper, VegaSpecUnescaper};
     use serde_json::json;

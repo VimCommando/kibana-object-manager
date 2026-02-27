@@ -502,14 +502,12 @@ pub async fn migrate_to_multispace_unified(
 
         // Clean up old manifest directory if it's empty
         let old_manifest_dir = project_dir.join("manifest");
-        if old_manifest_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&old_manifest_dir) {
-                if entries.count() == 0 {
+        if old_manifest_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&old_manifest_dir)
+                && entries.count() == 0 {
                     std::fs::remove_dir(&old_manifest_dir)?;
                     log::info!("Removed empty manifest/ directory");
                 }
-            }
-        }
 
         None
     } else {

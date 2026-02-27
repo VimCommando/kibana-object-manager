@@ -143,32 +143,28 @@ pub async fn pull_saved_objects(
             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
 
             // Pull saved objects for this space
-            if should_process_api("saved_objects", api_filter_slice) {
-                if let Ok(count) = pull_space_saved_objects(&*project_dir, &space_client).await {
+            if should_process_api("saved_objects", api_filter_slice)
+                && let Ok(count) = pull_space_saved_objects(&project_dir, &space_client).await {
                     space_total += count;
                 }
-            }
 
             // Pull workflows for this space
-            if should_process_api("workflows", api_filter_slice) {
-                if let Ok(count) = pull_space_workflows(&*project_dir, &space_client).await {
+            if should_process_api("workflows", api_filter_slice)
+                && let Ok(count) = pull_space_workflows(&project_dir, &space_client).await {
                     log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
                 }
-            }
 
             // Pull agents for this space
-            if should_process_api("agents", api_filter_slice) {
-                if let Ok(count) = pull_space_agents(&*project_dir, &space_client).await {
+            if should_process_api("agents", api_filter_slice)
+                && let Ok(count) = pull_space_agents(&project_dir, &space_client).await {
                     log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
                 }
-            }
 
             // Pull tools for this space
-            if should_process_api("tools", api_filter_slice) {
-                if let Ok(count) = pull_space_tools(&*project_dir, &space_client).await {
+            if should_process_api("tools", api_filter_slice)
+                && let Ok(count) = pull_space_tools(&project_dir, &space_client).await {
                     log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
                 }
-            }
 
             Ok::<usize, eyre::Report>(space_total)
         });
@@ -258,7 +254,7 @@ pub async fn push_saved_objects(
 
             // Push saved objects for this space
             if should_process_api("saved_objects", api_filter_slice) {
-                match push_space_saved_objects(&*project_dir, &space_client, managed).await {
+                match push_space_saved_objects(&project_dir, &space_client, managed).await {
                     Ok(count) => {
                         s_so = count;
                     }
@@ -274,7 +270,7 @@ pub async fn push_saved_objects(
 
             // Push workflows for this space
             if should_process_api("workflows", api_filter_slice) {
-                match push_space_workflows(&*project_dir, &space_client).await {
+                match push_space_workflows(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_wf = count;
                     }
@@ -290,7 +286,7 @@ pub async fn push_saved_objects(
 
             // Push tools for this space
             if should_process_api("tools", api_filter_slice) {
-                match push_space_tools(&*project_dir, &space_client).await {
+                match push_space_tools(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_tl = count;
                     }
@@ -302,7 +298,7 @@ pub async fn push_saved_objects(
 
             // Push agents for this space
             if should_process_api("agents", api_filter_slice) {
-                match push_space_agents(&*project_dir, &space_client).await {
+                match push_space_agents(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_ag = count;
                     }
@@ -368,36 +364,32 @@ pub async fn bundle_to_ndjson(
         log::info!("Bundling space: {}", space_id.cyan());
 
         // Bundle saved objects for this space
-        if should_process_api("saved_objects", api_filter) {
-            if let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await {
+        if should_process_api("saved_objects", api_filter)
+            && let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await {
                 total_count += count;
             }
-        }
 
         // Bundle workflows for this space
-        if should_process_api("workflows", api_filter) {
-            if let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
+        if should_process_api("workflows", api_filter)
+            && let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
                 log::debug!(
                     "Bundled {} workflow(s) for space {}",
                     count,
                     space_id.cyan()
                 );
             }
-        }
 
         // Bundle tools for this space
-        if should_process_api("tools", api_filter) {
-            if let Ok(count) = bundle_space_tools(project_dir, space_id).await {
+        if should_process_api("tools", api_filter)
+            && let Ok(count) = bundle_space_tools(project_dir, space_id).await {
                 log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
             }
-        }
 
         // Bundle agents for this space
-        if should_process_api("agents", api_filter) {
-            if let Ok(count) = bundle_space_agents(project_dir, space_id).await {
+        if should_process_api("agents", api_filter)
+            && let Ok(count) = bundle_space_agents(project_dir, space_id).await {
                 log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
             }
-        }
     }
 
     // Bundle space definitions (global)
@@ -715,11 +707,11 @@ pub async fn add_workflows_to_manifest(
                 // Check if it's an API response with "results" field
                 if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
                     log::info!("Read {} workflow(s) from JSON API response", results.len());
-                    results.iter().cloned().collect()
+                    results.to_vec()
                 } else if let Some(arr) = parsed.as_array() {
                     // Direct array of workflows
                     log::info!("Read {} workflow(s) from JSON array", arr.len());
-                    arr.iter().cloned().collect()
+                    arr.to_vec()
                 } else {
                     // Single workflow object
                     log::info!("Read 1 workflow from JSON file");
@@ -757,15 +749,12 @@ pub async fn add_workflows_to_manifest(
             let regex = regex::Regex::new(include_pattern)
                 .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
 
-            workflows = workflows
-                .into_iter()
-                .filter(|w| {
+            workflows.retain(|w| {
                     w.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| regex.is_match(name))
                         .unwrap_or(false)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After include filter '{}': {} workflow(s)",
@@ -779,15 +768,12 @@ pub async fn add_workflows_to_manifest(
             let regex = regex::Regex::new(exclude_pattern)
                 .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
 
-            workflows = workflows
-                .into_iter()
-                .filter(|w| {
+            workflows.retain(|w| {
                     w.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| !regex.is_match(name))
                         .unwrap_or(true)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After exclude filter '{}': {} workflow(s)",
@@ -945,7 +931,7 @@ pub async fn add_spaces_to_manifest(
                 // Spaces API returns an array directly
                 if let Some(arr) = parsed.as_array() {
                     log::info!("Read {} space(s) from JSON array", arr.len());
-                    arr.iter().cloned().collect()
+                    arr.to_vec()
                 } else {
                     // Single space object
                     log::info!("Read 1 space from JSON file");
@@ -982,15 +968,12 @@ pub async fn add_spaces_to_manifest(
             let regex = regex::Regex::new(include_pattern)
                 .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
 
-            spaces = spaces
-                .into_iter()
-                .filter(|s| {
+            spaces.retain(|s| {
                     s.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| regex.is_match(name))
                         .unwrap_or(false)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After include filter '{}': {} space(s)",
@@ -1004,15 +987,12 @@ pub async fn add_spaces_to_manifest(
             let regex = regex::Regex::new(exclude_pattern)
                 .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
 
-            spaces = spaces
-                .into_iter()
-                .filter(|s| {
+            spaces.retain(|s| {
                     s.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| !regex.is_match(name))
                         .unwrap_or(true)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After exclude filter '{}': {} space(s)",
@@ -1023,15 +1003,12 @@ pub async fn add_spaces_to_manifest(
 
         // Apply space ID list filter (if specified)
         if let Some(filter_ids) = space_filter {
-            spaces = spaces
-                .into_iter()
-                .filter(|s| {
+            spaces.retain(|s| {
                     s.get("id")
                         .and_then(|v| v.as_str())
                         .map(|id| filter_ids.contains(&id.to_string()))
                         .unwrap_or(false)
-                })
-                .collect();
+                });
 
             log::info!("After space ID filter: {} space(s)", spaces.len());
         }
@@ -1125,11 +1102,10 @@ fn get_target_space_ids_from_manifest(
 
     // Try to load from spaces.yml
     let manifest_path = project_dir.join("spaces.yml");
-    if manifest_path.exists() {
-        if let Ok(manifest) = SpacesManifest::read(&manifest_path) {
+    if manifest_path.exists()
+        && let Ok(manifest) = SpacesManifest::read(&manifest_path) {
             return manifest.spaces.into_iter().map(|s| s.id).collect();
         }
-    }
 
     // Default to ["default"]
     vec!["default".to_string()]
@@ -1688,7 +1664,7 @@ pub async fn add_agents_to_manifest(
                 // Check if it's an array
                 if let Some(arr) = parsed.as_array() {
                     log::info!("Read {} agent(s) from JSON array", arr.len());
-                    arr.iter().cloned().collect()
+                    arr.to_vec()
                 } else {
                     // Single agent object
                     log::info!("Read 1 agent from JSON file");
@@ -1723,15 +1699,12 @@ pub async fn add_agents_to_manifest(
             let regex = regex::Regex::new(include_pattern)
                 .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
 
-            agents = agents
-                .into_iter()
-                .filter(|a| {
+            agents.retain(|a| {
                     a.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| regex.is_match(name))
                         .unwrap_or(false)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After include filter '{}': {} agent(s)",
@@ -1745,15 +1718,12 @@ pub async fn add_agents_to_manifest(
             let regex = regex::Regex::new(exclude_pattern)
                 .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
 
-            agents = agents
-                .into_iter()
-                .filter(|a| {
+            agents.retain(|a| {
                     a.get("name")
                         .and_then(|v| v.as_str())
                         .map(|name| !regex.is_match(name))
                         .unwrap_or(true)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After exclude filter '{}': {} agent(s)",
@@ -2085,7 +2055,7 @@ pub async fn add_tools_to_manifest(
                 // Check if it's an array
                 if let Some(arr) = parsed.as_array() {
                     log::info!("Read {} tool(s) from JSON array", arr.len());
-                    arr.iter().cloned().collect()
+                    arr.to_vec()
                 } else {
                     // Single tool object
                     log::info!("Read 1 tool from JSON file");
@@ -2121,9 +2091,7 @@ pub async fn add_tools_to_manifest(
             let regex = regex::Regex::new(include_pattern)
                 .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
 
-            tools = tools
-                .into_iter()
-                .filter(|t| {
+            tools.retain(|t| {
                     // Try name first, fallback to id
                     let filter_field = t
                         .get("name")
@@ -2131,8 +2099,7 @@ pub async fn add_tools_to_manifest(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     regex.is_match(filter_field)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After include filter '{}': {} tool(s)",
@@ -2146,9 +2113,7 @@ pub async fn add_tools_to_manifest(
             let regex = regex::Regex::new(exclude_pattern)
                 .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
 
-            tools = tools
-                .into_iter()
-                .filter(|t| {
+            tools.retain(|t| {
                     // Try name first, fallback to id
                     let filter_field = t
                         .get("name")
@@ -2156,8 +2121,7 @@ pub async fn add_tools_to_manifest(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     !regex.is_match(filter_field)
-                })
-                .collect();
+                });
 
             log::info!(
                 "After exclude filter '{}': {} tool(s)",

@@ -40,49 +40,40 @@ fn unescape_vega_specs(value: &mut Value) -> Result<()> {
     match value {
         Value::Object(obj) => {
             // Check for Kibana saved object structure: attributes.visState
-            if let Some(attributes) = obj.get_mut("attributes") {
-                if let Value::Object(attr_obj) = attributes {
-                    if let Some(vis_state) = attr_obj.get_mut("visState") {
-                        if let Value::Object(vis_state_obj) = vis_state {
-                            if is_vega_visualization(vis_state_obj) {
-                                if let Some(spec_value) = vis_state_obj
+            if let Some(attributes) = obj.get_mut("attributes")
+                && let Value::Object(attr_obj) = attributes
+                    && let Some(vis_state) = attr_obj.get_mut("visState")
+                        && let Value::Object(vis_state_obj) = vis_state
+                            && is_vega_visualization(vis_state_obj)
+                                && let Some(spec_value) = vis_state_obj
                                     .get_mut("params")
                                     .and_then(|p| p.as_object_mut())
                                     .and_then(|params| params.get_mut("spec"))
                                 {
                                     unescape_spec_field(spec_value, "Kibana saved object")?;
                                 }
-                            }
-                        }
-                    }
-                }
-            }
 
             // Check if this object is a Vega visualization (direct format)
-            if is_vega_visualization(obj) {
-                if let Some(spec_value) = obj
+            if is_vega_visualization(obj)
+                && let Some(spec_value) = obj
                     .get_mut("params")
                     .and_then(|p| p.as_object_mut())
                     .and_then(|params| params.get_mut("spec"))
                 {
                     unescape_spec_field(spec_value, "direct format")?;
                 }
-            }
 
             // Check for embedded saved visualizations (dashboard panels)
-            if let Some(saved_vis) = obj.get_mut("savedVis") {
-                if let Value::Object(saved_vis_obj) = saved_vis {
-                    if is_vega_visualization(saved_vis_obj) {
-                        if let Some(spec_value) = saved_vis_obj
+            if let Some(saved_vis) = obj.get_mut("savedVis")
+                && let Value::Object(saved_vis_obj) = saved_vis
+                    && is_vega_visualization(saved_vis_obj)
+                        && let Some(spec_value) = saved_vis_obj
                             .get_mut("params")
                             .and_then(|p| p.as_object_mut())
                             .and_then(|params| params.get_mut("spec"))
                         {
                             unescape_spec_field(spec_value, "embedded")?;
                         }
-                    }
-                }
-            }
 
             // Recursively process all child objects and arrays
             for child_value in obj.values_mut() {
@@ -181,49 +172,40 @@ fn escape_vega_specs(value: &mut Value) -> Result<()> {
     match value {
         Value::Object(obj) => {
             // Check for Kibana saved object structure: attributes.visState
-            if let Some(attributes) = obj.get_mut("attributes") {
-                if let Value::Object(attr_obj) = attributes {
-                    if let Some(vis_state) = attr_obj.get_mut("visState") {
-                        if let Value::Object(vis_state_obj) = vis_state {
-                            if is_vega_visualization(vis_state_obj) {
-                                if let Some(spec_value) = vis_state_obj
+            if let Some(attributes) = obj.get_mut("attributes")
+                && let Value::Object(attr_obj) = attributes
+                    && let Some(vis_state) = attr_obj.get_mut("visState")
+                        && let Value::Object(vis_state_obj) = vis_state
+                            && is_vega_visualization(vis_state_obj)
+                                && let Some(spec_value) = vis_state_obj
                                     .get_mut("params")
                                     .and_then(|p| p.as_object_mut())
                                     .and_then(|params| params.get_mut("spec"))
                                 {
                                     escape_spec_field(spec_value, "Kibana saved object")?;
                                 }
-                            }
-                        }
-                    }
-                }
-            }
 
             // Check if this object is a Vega visualization (direct format)
-            if is_vega_visualization(obj) {
-                if let Some(spec_value) = obj
+            if is_vega_visualization(obj)
+                && let Some(spec_value) = obj
                     .get_mut("params")
                     .and_then(|p| p.as_object_mut())
                     .and_then(|params| params.get_mut("spec"))
                 {
                     escape_spec_field(spec_value, "direct format")?;
                 }
-            }
 
             // Check for embedded saved visualizations (dashboard panels)
-            if let Some(saved_vis) = obj.get_mut("savedVis") {
-                if let Value::Object(saved_vis_obj) = saved_vis {
-                    if is_vega_visualization(saved_vis_obj) {
-                        if let Some(spec_value) = saved_vis_obj
+            if let Some(saved_vis) = obj.get_mut("savedVis")
+                && let Value::Object(saved_vis_obj) = saved_vis
+                    && is_vega_visualization(saved_vis_obj)
+                        && let Some(spec_value) = saved_vis_obj
                             .get_mut("params")
                             .and_then(|p| p.as_object_mut())
                             .and_then(|params| params.get_mut("spec"))
                         {
                             escape_spec_field(spec_value, "embedded")?;
                         }
-                    }
-                }
-            }
 
             // Recursively process all child objects and arrays
             for child_value in obj.values_mut() {
