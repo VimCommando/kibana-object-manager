@@ -206,6 +206,34 @@ Automate dashboard deployments in CI/CD pipelines. Consistent environments from 
 - [Quick Reference](docs/QUICK_REFERENCE.md) - Command cheat sheet
 - [Contributing](CONTRIBUTING.md) - Development guidelines
 
+## Agent Skill
+
+This repository includes a Codex skill for `kibob` workflows:
+- `skills/kibob/SKILL.md`
+- `skills/kibob/references/kibob-commands.md`
+
+The skill is designed to help with:
+- Selecting the right `kibob` command and flags
+- Environment promotion workflows (`pull` -> `git commit` -> `push`)
+- Managed mode policy by environment:
+  - Production: `--managed true`
+  - Dev/test: `--managed false`
+
+Example promotion flow:
+
+```bash
+# Pull from dev
+kibob pull . --env .env.dev --space dev --api saved_objects,workflows,agents,tools
+git add .
+git commit -m "Sync from dev"
+
+# Push to stage (dev/test posture)
+kibob push . --env .env.stage --space stage --api saved_objects,workflows,agents,tools --managed false
+
+# Promote to production (production posture)
+kibob push . --env .env.prod --space prod --api saved_objects,workflows,agents,tools --managed true
+```
+
 ## Authentication
 
 kibob supports multiple authentication methods:
