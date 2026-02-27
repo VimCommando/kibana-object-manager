@@ -8,11 +8,82 @@ use crate::kibana::spaces::SpacesManifest;
 use base64::Engine;
 use eyre::{Context, Result, eyre};
 use reqwest::{Client, Method, multipart};
+use semver::Version;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{RwLock, Semaphore};
 use url::Url;
+
+/// Semantic version of a Kibana server.
+pub type KibanaVersion = Version;
+
+/// Parse Kibana version strings using semver with small compatibility fixes:
+/// - optional leading `v` prefix
+/// - missing patch in `major.minor` strings (normalized to `.0`)
+pub fn parse_kibana_version(version: &str) -> Result<KibanaVersion> {
+    let trimmed = version.trim().trim_start_matches('v');
+
+    if let Ok(parsed) = KibanaVersion::parse(trimmed) {
+        return Ok(parsed);
+    }
+
+    let dot_count = trimmed.matches('.').count();
+    let normalized = match dot_count {
+        0 => format!("{trimmed}.0.0"),
+        1 => format!("{trimmed}.0"),
+        _ => trimmed.to_string(),
+    };
+
+    KibanaVersion::parse(&normalized)
+        .with_context(|| format!("Invalid Kibana version '{}'", version))
+}
+
+/// Resolved Kibana version details from `/api/status`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KibanaVersionInfo {
+    pub raw: String,
+    pub parsed: KibanaVersion,
+}
+
+/// API families that are gated by minimum Kibana versions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApiCapability {
+    Spaces,
+    SavedObjects,
+    Agents,
+    Tools,
+    Workflows,
+}
+
+impl ApiCapability {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Spaces => "spaces",
+            Self::SavedObjects => "saved_objects",
+            Self::Agents => "agents",
+            Self::Tools => "tools",
+            Self::Workflows => "workflows",
+        }
+    }
+
+    pub fn minimum_version(self) -> KibanaVersion {
+        match self {
+            Self::Spaces | Self::SavedObjects => KibanaVersion::new(8, 0, 0),
+            Self::Agents | Self::Tools => KibanaVersion::new(9, 2, 0),
+            Self::Workflows => KibanaVersion::new(9, 3, 0),
+        }
+    }
+
+    pub fn maturity_note(self) -> Option<&'static str> {
+        match self {
+            Self::Agents | Self::Tools => Some("Tech preview in 9.2, GA in 9.3"),
+            Self::Workflows => Some("Tech preview in 9.3"),
+            _ => None,
+        }
+    }
+}
 
 /// Kibana client for making API requests.
 ///
@@ -51,6 +122,7 @@ pub struct KibanaClient {
     spaces: HashMap<String, String>, // id -> name (for validation)
     space: Option<String>,           // Current space context (None = root/default)
     semaphore: Arc<Semaphore>,       // Global concurrency limit
+    version_info: Arc<RwLock<Option<KibanaVersionInfo>>>,
 }
 
 impl KibanaClient {
@@ -130,6 +202,7 @@ impl KibanaClient {
             spaces,
             space: None, // Root mode
             semaphore,
+            version_info: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -181,7 +254,76 @@ impl KibanaClient {
             spaces: self.spaces.clone(),
             space,
             semaphore: self.semaphore.clone(),
+            version_info: self.version_info.clone(),
         })
+    }
+
+    /// Resolve and cache Kibana server version info from `/api/status`.
+    pub async fn server_version_info(&self) -> Result<KibanaVersionInfo> {
+        if let Some(cached) = self.version_info.read().await.clone() {
+            return Ok(cached);
+        }
+
+        let response = self
+            .request_raw(Method::GET, &HashMap::new(), "/api/status", None)
+            .await
+            .context("Failed to fetch Kibana status for version preflight")?;
+
+        if !response.status().is_success() {
+            eyre::bail!(
+                "Failed Kibana version preflight via /api/status: {}",
+                response.status()
+            );
+        }
+
+        let status: Value = response
+            .json()
+            .await
+            .context("Failed to parse /api/status response as JSON")?;
+        let raw = status
+            .get("version")
+            .and_then(|v| v.get("number"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("Missing version.number in /api/status response"))?
+            .to_string();
+        let parsed = parse_kibana_version(&raw)?;
+        let info = KibanaVersionInfo { raw, parsed };
+
+        *self.version_info.write().await = Some(info.clone());
+        Ok(info)
+    }
+
+    /// Resolve the normalized Kibana server version.
+    pub async fn server_version(&self) -> Result<KibanaVersion> {
+        Ok(self.server_version_info().await?.parsed)
+    }
+
+    /// Check if a capability is supported on a specific Kibana version.
+    pub fn supports_capability(version: &KibanaVersion, capability: ApiCapability) -> bool {
+        version >= &capability.minimum_version()
+    }
+
+    /// Build a user-facing unsupported message for a capability/version pair.
+    pub fn unsupported_capability_reason(
+        version: &KibanaVersion,
+        capability: ApiCapability,
+    ) -> String {
+        let minimum = capability.minimum_version();
+        match capability.maturity_note() {
+            Some(note) => format!(
+                "API '{}' requires Kibana {}+ (detected {}, {})",
+                capability.name(),
+                minimum,
+                version,
+                note
+            ),
+            None => format!(
+                "API '{}' requires Kibana {}+ (detected {})",
+                capability.name(),
+                minimum,
+                version
+            ),
+        }
     }
 
     /// Get the current space ID.
@@ -529,5 +671,34 @@ mod tests {
                 .to_string()
                 .contains("not found in manifest")
         );
+    }
+
+    #[test]
+    fn test_parse_kibana_version() {
+        let parsed = parse_kibana_version("9.3.2").unwrap();
+        assert_eq!(parsed, KibanaVersion::new(9, 3, 2));
+
+        let snapshot = parse_kibana_version("9.4.0-SNAPSHOT").unwrap();
+        assert_eq!(snapshot, KibanaVersion::parse("9.4.0-SNAPSHOT").unwrap());
+
+        let prefixed = parse_kibana_version("v9.5.1").unwrap();
+        assert_eq!(prefixed, KibanaVersion::new(9, 5, 1));
+
+        let missing_patch = parse_kibana_version("9.6").unwrap();
+        assert_eq!(missing_patch, KibanaVersion::new(9, 6, 0));
+    }
+
+    #[test]
+    fn test_capability_thresholds() {
+        let v92 = parse_kibana_version("9.2.1").unwrap();
+        let v91 = parse_kibana_version("9.1.9").unwrap();
+        let v93 = parse_kibana_version("9.3.0").unwrap();
+
+        assert!(KibanaClient::supports_capability(&v92, ApiCapability::Agents));
+        assert!(KibanaClient::supports_capability(&v92, ApiCapability::Tools));
+        assert!(!KibanaClient::supports_capability(&v91, ApiCapability::Agents));
+        assert!(!KibanaClient::supports_capability(&v91, ApiCapability::Tools));
+        assert!(KibanaClient::supports_capability(&v93, ApiCapability::Workflows));
+        assert!(!KibanaClient::supports_capability(&v92, ApiCapability::Workflows));
     }
 }

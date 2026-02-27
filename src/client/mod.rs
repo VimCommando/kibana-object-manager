@@ -7,4 +7,6 @@ mod auth;
 mod kibana;
 
 pub use auth::{Auth, AuthType};
-pub use kibana::KibanaClient;
+pub use kibana::{
+    ApiCapability, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
+};

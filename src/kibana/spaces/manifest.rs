@@ -5,6 +5,8 @@
 //!
 //! Example format:
 //! ```yaml
+//! kibana:
+//!   version: 9.3.2
 //! spaces:
 //!   - id: default
 //!     name: Default
@@ -34,22 +36,56 @@ impl SpaceEntry {
     }
 }
 
+/// Kibana metadata captured for this project
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KibanaMetadata {
+    /// Full Kibana version string from `/api/status` (e.g., "9.3.2")
+    pub version: String,
+}
+
+impl KibanaMetadata {
+    /// Create metadata with a specific version string
+    pub fn new(version: String) -> Self {
+        Self { version }
+    }
+}
+
 /// Spaces manifest structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpacesManifest {
+    /// Optional Kibana metadata for version compatibility checks
+    #[serde(default)]
+    pub kibana: Option<KibanaMetadata>,
     /// List of spaces to manage (with ID and name)
+    #[serde(default)]
     pub spaces: Vec<SpaceEntry>,
 }
 
 impl SpacesManifest {
     /// Create a new empty spaces manifest
     pub fn new() -> Self {
-        Self { spaces: Vec::new() }
+        Self {
+            kibana: None,
+            spaces: Vec::new(),
+        }
     }
 
     /// Create a manifest with specified spaces
     pub fn with_spaces(spaces: Vec<SpaceEntry>) -> Self {
-        Self { spaces }
+        Self {
+            kibana: None,
+            spaces,
+        }
+    }
+
+    /// Set Kibana version metadata
+    pub fn set_kibana_version(&mut self, version: impl Into<String>) {
+        self.kibana = Some(KibanaMetadata::new(version.into()));
+    }
+
+    /// Get Kibana version metadata if present
+    pub fn kibana_version(&self) -> Option<&str> {
+        self.kibana.as_ref().map(|k| k.version.as_str())
     }
 
     /// Add a space to the manifest
@@ -148,6 +184,7 @@ mod tests {
             SpaceEntry::new("default".to_string(), "Default".to_string()),
             SpaceEntry::new("marketing".to_string(), "Marketing".to_string()),
         ]);
+        assert_eq!(manifest.kibana_version(), None);
         assert_eq!(manifest.count(), 2);
         assert!(manifest.contains("default"));
         assert!(manifest.contains("marketing"));
@@ -203,16 +240,28 @@ mod tests {
 
     #[test]
     fn test_yaml_format() {
-        let manifest = SpacesManifest::with_spaces(vec![
+        let mut manifest = SpacesManifest::with_spaces(vec![
             SpaceEntry::new("space1".to_string(), "Space 1".to_string()),
             SpaceEntry::new("space2".to_string(), "Space 2".to_string()),
         ]);
+        manifest.set_kibana_version("9.3.2");
         let yaml = serde_yaml::to_string(&manifest).unwrap();
 
+        assert!(yaml.contains("kibana:"));
+        assert!(yaml.contains("version: 9.3.2"));
         assert!(yaml.contains("spaces:"));
         assert!(yaml.contains("id: space1"));
         assert!(yaml.contains("name: Space 1"));
         assert!(yaml.contains("id: space2"));
         assert!(yaml.contains("name: Space 2"));
+    }
+
+    #[test]
+    fn test_backward_compatible_without_kibana_metadata() {
+        let yaml = "spaces:\n  - id: default\n    name: Default\n";
+        let manifest: SpacesManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.kibana_version(), None);
+        assert_eq!(manifest.count(), 1);
+        assert!(manifest.contains("default"));
     }
 }

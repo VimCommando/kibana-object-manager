@@ -1,7 +1,9 @@
 //! CLI helper functions
 
 use crate::{
-    client::{Auth, KibanaClient},
+    client::{
+        ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
+    },
     etl::{Extractor, Loader, Transformer},
     kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
     kibana::dependencies::{
@@ -17,10 +19,11 @@ use crate::{
         VegaSpecEscaper, VegaSpecUnescaper,
     },
 };
-use eyre::{Context, Result};
+use eyre::{Context, Report, Result};
 use owo_colors::OwoColorize;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -61,6 +64,135 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
         .context("Failed to create Kibana client")
 }
 
+/// Warning report used to signal a version-gating warning exit (status code 2).
+#[derive(Debug)]
+pub struct VersionWarning {
+    message: String,
+}
+
+impl VersionWarning {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for VersionWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for VersionWarning {}
+
+fn version_warning(message: impl Into<String>) -> Report {
+    Report::new(VersionWarning::new(message))
+}
+
+/// Return warning text when an error represents a version warning.
+pub fn version_warning_message(report: &Report) -> Option<&str> {
+    report
+        .downcast_ref::<VersionWarning>()
+        .map(|warning| warning.message.as_str())
+}
+
+#[derive(Debug, Clone)]
+struct VersionPreflight {
+    detected: KibanaVersionInfo,
+    recorded: Option<KibanaVersion>,
+}
+
+fn parse_capability(api: &str) -> Option<ApiCapability> {
+    match api {
+        "saved_objects" | "saved_object" | "objects" | "object" => Some(ApiCapability::SavedObjects),
+        "workflows" | "workflow" => Some(ApiCapability::Workflows),
+        "agents" | "agent" => Some(ApiCapability::Agents),
+        "tools" | "tool" => Some(ApiCapability::Tools),
+        "spaces" | "space" => Some(ApiCapability::Spaces),
+        _ => None,
+    }
+}
+
+fn capability_requested(capability: ApiCapability, filter: Option<&[String]>) -> bool {
+    match filter {
+        None => true,
+        Some(values) => values
+            .iter()
+            .filter_map(|v| parse_capability(&v.to_lowercase()))
+            .any(|candidate| candidate == capability),
+    }
+}
+
+fn is_older_major_minor(target: &KibanaVersion, recorded: &KibanaVersion) -> bool {
+    target.major < recorded.major
+        || (target.major == recorded.major && target.minor < recorded.minor)
+}
+
+fn load_recorded_kibana_version(project_dir: &Path) -> Result<Option<KibanaVersion>> {
+    let spaces_manifest_path = project_dir.join("spaces.yml");
+    if !spaces_manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let manifest = SpacesManifest::read(&spaces_manifest_path)?;
+    match manifest.kibana_version() {
+        Some(version) => match parse_kibana_version(version) {
+            Ok(parsed) => Ok(Some(parsed)),
+            Err(e) => {
+                log::warn!(
+                    "Ignoring invalid spaces.yml kibana.version '{}': {}",
+                    version,
+                    e
+                );
+                Ok(None)
+            }
+        },
+        None => Ok(None),
+    }
+}
+
+fn persist_kibana_version(project_dir: &Path, version: &str) -> Result<()> {
+    let spaces_manifest_path = project_dir.join("spaces.yml");
+    let mut manifest = if spaces_manifest_path.exists() {
+        SpacesManifest::read(&spaces_manifest_path)?
+    } else {
+        let mut created = SpacesManifest::new();
+        created.add_space("default".to_string(), "Default".to_string());
+        created
+    };
+
+    manifest.set_kibana_version(version.to_string());
+    manifest.write(&spaces_manifest_path)?;
+    Ok(())
+}
+
+async fn run_version_preflight(
+    project_dir: &Path,
+    client: &KibanaClient,
+    action: &str,
+    force: bool,
+) -> Result<VersionPreflight> {
+    let detected = client.server_version_info().await?;
+    let recorded = load_recorded_kibana_version(project_dir)?;
+
+    if let Some(recorded_version) = recorded.as_ref()
+        && is_older_major_minor(&detected.parsed, recorded_version) {
+            let message = format!(
+                "{} requires --force because target Kibana {} is older than recorded repository version {}",
+                action, detected.parsed, recorded_version
+            );
+
+            if force {
+                log::warn!("{}", message);
+            } else {
+                return Err(version_warning(message));
+            }
+        }
+
+    Ok(VersionPreflight { detected, recorded })
+}
+
 /// Check if an API should be processed based on the filter
 fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
     match filter {
@@ -97,15 +229,46 @@ pub async fn pull_saved_objects(
     project_dir: impl AsRef<Path>,
     space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
+    force: bool,
 ) -> Result<usize> {
     let project_dir = Arc::<Path>::from(project_dir.as_ref());
     let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
 
     log::info!("Connecting to Kibana...");
     let client = load_kibana_client(&*project_dir)?;
+    let preflight = run_version_preflight(&project_dir, &client, "pull", force).await?;
+    let detected_version = preflight.detected.parsed;
+
+    let mut unsupported = Vec::new();
+    for capability in [
+        ApiCapability::Agents,
+        ApiCapability::Tools,
+        ApiCapability::Workflows,
+    ] {
+        if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
+            && !KibanaClient::supports_capability(&detected_version, capability)
+        {
+            unsupported.push(KibanaClient::unsupported_capability_reason(
+                &detected_version,
+                capability,
+            ));
+        }
+    }
+
+    let warning_exit = !force && !unsupported.is_empty();
+    for warning in &unsupported {
+        log::warn!("{}", warning);
+    }
+    if force && !unsupported.is_empty() {
+        log::warn!("--force enabled: attempting API calls despite unsupported version checks");
+    }
 
     // Pull space definitions FIRST (before any other operations)
-    if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
+    let can_pull_spaces = !warning_exit
+        || KibanaClient::supports_capability(&detected_version, ApiCapability::Spaces)
+        || force;
+    if can_pull_spaces && should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice()))
+    {
         let spaces_manifest_path = project_dir.join("spaces.yml");
         if spaces_manifest_path.exists() {
             log::info!("Pulling space definitions...");
@@ -133,6 +296,7 @@ pub async fn pull_saved_objects(
         let client = client.clone();
         let project_dir = project_dir.clone();
         let api_filter = api_filter.clone();
+        let detected_version = detected_version.clone();
 
         set.spawn(async move {
             log::info!("Processing space: {}", space_id.cyan());
@@ -141,6 +305,12 @@ pub async fn pull_saved_objects(
             // Get space client for this space
             let space_client = client.space(&space_id)?;
             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
+            let can_pull_workflows = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Workflows);
+            let can_pull_agents = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
+            let can_pull_tools = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
 
             // Pull saved objects for this space
             if should_process_api("saved_objects", api_filter_slice)
@@ -149,19 +319,22 @@ pub async fn pull_saved_objects(
                 }
 
             // Pull workflows for this space
-            if should_process_api("workflows", api_filter_slice)
+            if can_pull_workflows
+                && should_process_api("workflows", api_filter_slice)
                 && let Ok(count) = pull_space_workflows(&project_dir, &space_client).await {
                     log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
                 }
 
             // Pull agents for this space
-            if should_process_api("agents", api_filter_slice)
+            if can_pull_agents
+                && should_process_api("agents", api_filter_slice)
                 && let Ok(count) = pull_space_agents(&project_dir, &space_client).await {
                     log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
                 }
 
             // Pull tools for this space
-            if should_process_api("tools", api_filter_slice)
+            if can_pull_tools
+                && should_process_api("tools", api_filter_slice)
                 && let Ok(count) = pull_space_tools(&project_dir, &space_client).await {
                     log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
                 }
@@ -182,6 +355,19 @@ pub async fn pull_saved_objects(
         "✓ Pull complete: {} total saved object(s) across all spaces",
         total_count
     );
+
+    // Record the source cluster version after successful pull execution.
+    persist_kibana_version(&project_dir, &preflight.detected.raw)?;
+    if let Some(recorded) = preflight.recorded {
+        log::debug!("Repository kibana.version before pull: {}", recorded);
+    }
+
+    if warning_exit {
+        return Err(version_warning(
+            "One or more requested APIs are unsupported for the target Kibana version".to_string(),
+        ));
+    }
+
     Ok(total_count)
 }
 
@@ -200,12 +386,38 @@ pub async fn push_saved_objects(
     managed: bool,
     space_filter: Option<&[String]>,
     api_filter: Option<&[String]>,
+    force: bool,
 ) -> Result<usize> {
     let project_dir = Arc::<Path>::from(project_dir.as_ref());
     let api_filter = api_filter.map(|f| Arc::new(f.to_vec()));
 
     log::info!("Connecting to Kibana...");
     let client = load_kibana_client(&*project_dir)?;
+    let preflight = run_version_preflight(&project_dir, &client, "push", force).await?;
+    let detected_version = preflight.detected.parsed;
+
+    let mut unsupported = Vec::new();
+    for capability in [
+        ApiCapability::Agents,
+        ApiCapability::Tools,
+        ApiCapability::Workflows,
+    ] {
+        if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
+            && !KibanaClient::supports_capability(&detected_version, capability)
+        {
+            unsupported.push(KibanaClient::unsupported_capability_reason(
+                &detected_version,
+                capability,
+            ));
+        }
+    }
+    let warning_exit = !force && !unsupported.is_empty();
+    for warning in &unsupported {
+        log::warn!("{}", warning);
+    }
+    if force && !unsupported.is_empty() {
+        log::warn!("--force enabled: attempting API calls despite unsupported version checks");
+    }
 
     // Push space definitions FIRST (before any other operations)
     if should_process_api("spaces", api_filter.as_deref().map(|f| f.as_slice())) {
@@ -240,6 +452,7 @@ pub async fn push_saved_objects(
         let client = client.clone();
         let project_dir = project_dir.clone();
         let api_filter = api_filter.clone();
+        let detected_version = detected_version.clone();
 
         set.spawn(async move {
             log::info!("Processing space: {}", space_id.cyan());
@@ -251,6 +464,12 @@ pub async fn push_saved_objects(
             // Get space client for this space
             let space_client = client.space(&space_id)?;
             let api_filter_slice = api_filter.as_deref().map(|f| f.as_slice());
+            let can_push_workflows = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Workflows);
+            let can_push_agents = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
+            let can_push_tools = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
 
             // Push saved objects for this space
             if should_process_api("saved_objects", api_filter_slice) {
@@ -269,7 +488,7 @@ pub async fn push_saved_objects(
             }
 
             // Push workflows for this space
-            if should_process_api("workflows", api_filter_slice) {
+            if can_push_workflows && should_process_api("workflows", api_filter_slice) {
                 match push_space_workflows(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_wf = count;
@@ -285,7 +504,7 @@ pub async fn push_saved_objects(
             }
 
             // Push tools for this space
-            if should_process_api("tools", api_filter_slice) {
+            if can_push_tools && should_process_api("tools", api_filter_slice) {
                 match push_space_tools(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_tl = count;
@@ -297,7 +516,7 @@ pub async fn push_saved_objects(
             }
 
             // Push agents for this space
-            if should_process_api("agents", api_filter_slice) {
+            if can_push_agents && should_process_api("agents", api_filter_slice) {
                 match push_space_agents(&project_dir, &space_client).await {
                     Ok(count) => {
                         s_ag = count;
@@ -332,6 +551,13 @@ pub async fn push_saved_objects(
         total_agents,
         total_tools
     );
+
+    if warning_exit {
+        return Err(version_warning(
+            "One or more requested APIs are unsupported for the target Kibana version".to_string(),
+        ));
+    }
+
     Ok(total_saved_objects + total_workflows + total_agents + total_tools)
 }
 
@@ -354,10 +580,45 @@ pub async fn bundle_to_ndjson(
     api_filter: Option<&[String]>,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
+    let recorded_version = load_recorded_kibana_version(project_dir)?;
     // Determine which spaces to operate on (reads from spaces.yml directly)
     let target_space_ids = get_target_space_ids_from_manifest(project_dir, space_filter);
 
     let mut total_count = 0;
+
+    let can_bundle_workflows = recorded_version
+        .as_ref()
+        .map(|v| KibanaClient::supports_capability(v, ApiCapability::Workflows))
+        .unwrap_or(true);
+    let can_bundle_agents = recorded_version
+        .as_ref()
+        .map(|v| KibanaClient::supports_capability(v, ApiCapability::Agents))
+        .unwrap_or(true);
+    let can_bundle_tools = recorded_version
+        .as_ref()
+        .map(|v| KibanaClient::supports_capability(v, ApiCapability::Tools))
+        .unwrap_or(true);
+
+    if let Some(version) = recorded_version.as_ref() {
+        if capability_requested(ApiCapability::Workflows, api_filter) && !can_bundle_workflows {
+            log::warn!(
+                "{}",
+                KibanaClient::unsupported_capability_reason(version, ApiCapability::Workflows)
+            );
+        }
+        if capability_requested(ApiCapability::Agents, api_filter) && !can_bundle_agents {
+            log::warn!(
+                "{}",
+                KibanaClient::unsupported_capability_reason(version, ApiCapability::Agents)
+            );
+        }
+        if capability_requested(ApiCapability::Tools, api_filter) && !can_bundle_tools {
+            log::warn!(
+                "{}",
+                KibanaClient::unsupported_capability_reason(version, ApiCapability::Tools)
+            );
+        }
+    }
 
     // Bundle each managed space
     for space_id in &target_space_ids {
@@ -370,7 +631,8 @@ pub async fn bundle_to_ndjson(
             }
 
         // Bundle workflows for this space
-        if should_process_api("workflows", api_filter)
+        if can_bundle_workflows
+            && should_process_api("workflows", api_filter)
             && let Ok(count) = bundle_space_workflows(project_dir, space_id).await {
                 log::debug!(
                     "Bundled {} workflow(s) for space {}",
@@ -380,13 +642,15 @@ pub async fn bundle_to_ndjson(
             }
 
         // Bundle tools for this space
-        if should_process_api("tools", api_filter)
+        if can_bundle_tools
+            && should_process_api("tools", api_filter)
             && let Ok(count) = bundle_space_tools(project_dir, space_id).await {
                 log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
             }
 
         // Bundle agents for this space
-        if should_process_api("agents", api_filter)
+        if can_bundle_agents
+            && should_process_api("agents", api_filter)
             && let Ok(count) = bundle_space_agents(project_dir, space_id).await {
                 log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
             }
@@ -504,6 +768,7 @@ pub async fn add_objects_to_manifest(
     space_id: &str,
     objects_to_add: Option<Vec<String>>,
     file_path: Option<impl AsRef<Path>>,
+    force: bool,
 ) -> Result<usize> {
     use crate::kibana::saved_objects::{SavedObject, SavedObjectsExtractor, SavedObjectsManifest};
 
@@ -560,6 +825,7 @@ pub async fn add_objects_to_manifest(
         // Fetch from Kibana
         log::info!("Fetching {} object(s) from Kibana", object_specs.len());
         let client = load_kibana_client(project_dir)?;
+        let _preflight = run_version_preflight(project_dir, &client, "add", force).await?;
         let space_client = client.space(space_id)?;
 
         // Parse object specs (format: "type=id" or "type:id")
@@ -626,6 +892,7 @@ pub async fn add_objects_to_manifest(
 ///
 /// Can add from Kibana search API or from a file (.json or .ndjson)
 /// Optionally filter results by name using regex patterns (--include, --exclude)
+#[allow(clippy::too_many_arguments)]
 pub async fn add_workflows_to_manifest(
     project_dir: impl AsRef<Path>,
     space_id: &str,
@@ -634,6 +901,7 @@ pub async fn add_workflows_to_manifest(
     exclude: Option<String>,
     file_path: Option<String>,
     exclude_dependencies: bool,
+    force: bool,
 ) -> Result<usize> {
     use crate::kibana::workflows::WorkflowEntry;
 
@@ -666,6 +934,31 @@ pub async fn add_workflows_to_manifest(
         WorkflowsManifest::new()
     };
     log::info!("Current manifest has {} workflow(s)", manifest.count());
+
+    let requires_kibana_calls = file_path.is_none() || !exclude_dependencies;
+    let mut preflight_client: Option<KibanaClient> = None;
+    let mut detected_version: Option<KibanaVersion> = None;
+    if requires_kibana_calls {
+        let client = load_kibana_client(project_dir)?;
+        let preflight = run_version_preflight(project_dir, &client, "add", force).await?;
+        detected_version = Some(preflight.detected.parsed);
+        preflight_client = Some(client);
+    }
+
+    if let Some(version) = detected_version
+        && !KibanaClient::supports_capability(&version, ApiCapability::Workflows)
+    {
+        let reason =
+            KibanaClient::unsupported_capability_reason(&version, ApiCapability::Workflows);
+        if force {
+            log::warn!("{}", reason);
+            log::warn!("--force enabled: attempting workflows API calls anyway");
+        } else if file_path.is_none() {
+            return Err(version_warning(reason));
+        } else {
+            log::warn!("{}", reason);
+        }
+    }
 
     // Fetch workflows from API or file
     let new_workflows: Vec<serde_json::Value> = if let Some(file) = file_path {
@@ -731,7 +1024,9 @@ pub async fn add_workflows_to_manifest(
             "Searching workflows via API in space {}...",
             space_id.cyan()
         );
-        let client = load_kibana_client(project_dir)?;
+        let client = preflight_client
+            .clone()
+            .unwrap_or(load_kibana_client(project_dir)?);
         let space_client = client.space(space_id)?;
         let extractor = WorkflowsExtractor::new(space_client, None);
 
@@ -835,9 +1130,9 @@ pub async fn add_workflows_to_manifest(
     // Resolve dependencies if any
     let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
-        let client = load_kibana_client(project_dir)?;
-        dep_summary =
-            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        let client = preflight_client.unwrap_or(load_kibana_client(project_dir)?);
+        let version = client.server_version().await?;
+        dep_summary = resolve_and_add_dependencies(project_dir, space_id, &client, all_deps, version, force).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -877,6 +1172,7 @@ pub async fn add_spaces_to_manifest(
     include: Option<String>,
     exclude: Option<String>,
     file_path: Option<String>,
+    force: bool,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -952,6 +1248,7 @@ pub async fn add_spaces_to_manifest(
         }
         log::info!("Fetching spaces via API...");
         let client = load_kibana_client(project_dir)?;
+        let _preflight = run_version_preflight(project_dir, &client, "add", force).await?;
         let extractor = SpacesExtractor::new(client, None);
 
         extractor.search_spaces(query.as_deref()).await?
@@ -1583,6 +1880,7 @@ fn load_agents_manifest(project_dir: impl AsRef<Path>) -> Result<AgentsManifest>
 ///
 /// Can add from Kibana search API or from a file (.json or .ndjson)
 /// Optionally filter results by name using regex patterns (--include, --exclude)
+#[allow(clippy::too_many_arguments)]
 pub async fn add_agents_to_manifest(
     project_dir: impl AsRef<Path>,
     space_id: &str,
@@ -1591,6 +1889,7 @@ pub async fn add_agents_to_manifest(
     exclude: Option<String>,
     file_path: Option<String>,
     exclude_dependencies: bool,
+    force: bool,
 ) -> Result<usize> {
     use crate::kibana::agents::AgentEntry;
 
@@ -1623,6 +1922,30 @@ pub async fn add_agents_to_manifest(
         AgentsManifest::new()
     };
     log::info!("Current manifest has {} agent(s)", manifest.count());
+
+    let requires_kibana_calls = file_path.is_none() || !exclude_dependencies;
+    let mut preflight_client: Option<KibanaClient> = None;
+    let mut detected_version: Option<KibanaVersion> = None;
+    if requires_kibana_calls {
+        let client = load_kibana_client(project_dir)?;
+        let preflight = run_version_preflight(project_dir, &client, "add", force).await?;
+        detected_version = Some(preflight.detected.parsed);
+        preflight_client = Some(client);
+    }
+
+    if let Some(version) = detected_version
+        && !KibanaClient::supports_capability(&version, ApiCapability::Agents)
+    {
+        let reason = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Agents);
+        if force {
+            log::warn!("{}", reason);
+            log::warn!("--force enabled: attempting agents API calls anyway");
+        } else if file_path.is_none() {
+            return Err(version_warning(reason));
+        } else {
+            log::warn!("{}", reason);
+        }
+    }
 
     // Fetch agents from API or file
     let new_agents: Vec<serde_json::Value> = if let Some(file) = file_path {
@@ -1681,7 +2004,9 @@ pub async fn add_agents_to_manifest(
     } else {
         // Search via API
         log::info!("Searching agents via API in space {}...", space_id.cyan());
-        let client = load_kibana_client(project_dir)?;
+        let client = preflight_client
+            .clone()
+            .unwrap_or(load_kibana_client(project_dir)?);
         let space_client = client.space(space_id)?;
         let extractor = AgentsExtractor::new(space_client, None);
 
@@ -1778,9 +2103,9 @@ pub async fn add_agents_to_manifest(
     // Resolve dependencies if any
     let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
-        let client = load_kibana_client(project_dir)?;
-        dep_summary =
-            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        let client = preflight_client.unwrap_or(load_kibana_client(project_dir)?);
+        let version = client.server_version().await?;
+        dep_summary = resolve_and_add_dependencies(project_dir, space_id, &client, all_deps, version, force).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -1975,6 +2300,7 @@ fn load_tools_manifest(project_dir: impl AsRef<Path>) -> Result<ToolsManifest> {
 ///
 /// Can add from Kibana search API or from a file (.json or .ndjson)
 /// Optionally filter results by name using regex patterns (--include, --exclude)
+#[allow(clippy::too_many_arguments)]
 pub async fn add_tools_to_manifest(
     project_dir: impl AsRef<Path>,
     space_id: &str,
@@ -1983,6 +2309,7 @@ pub async fn add_tools_to_manifest(
     exclude: Option<String>,
     file_path: Option<String>,
     exclude_dependencies: bool,
+    force: bool,
 ) -> Result<usize> {
     let project_dir = project_dir.as_ref();
 
@@ -2014,6 +2341,30 @@ pub async fn add_tools_to_manifest(
         ToolsManifest::new()
     };
     log::info!("Current manifest has {} tool(s)", manifest.count());
+
+    let requires_kibana_calls = file_path.is_none() || !exclude_dependencies;
+    let mut preflight_client: Option<KibanaClient> = None;
+    let mut detected_version: Option<KibanaVersion> = None;
+    if requires_kibana_calls {
+        let client = load_kibana_client(project_dir)?;
+        let preflight = run_version_preflight(project_dir, &client, "add", force).await?;
+        detected_version = Some(preflight.detected.parsed);
+        preflight_client = Some(client);
+    }
+
+    if let Some(version) = detected_version
+        && !KibanaClient::supports_capability(&version, ApiCapability::Tools)
+    {
+        let reason = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Tools);
+        if force {
+            log::warn!("{}", reason);
+            log::warn!("--force enabled: attempting tools API calls anyway");
+        } else if file_path.is_none() {
+            return Err(version_warning(reason));
+        } else {
+            log::warn!("{}", reason);
+        }
+    }
 
     // Fetch tools from API or file
     let new_tools: Vec<serde_json::Value> = if let Some(file) = file_path {
@@ -2072,7 +2423,9 @@ pub async fn add_tools_to_manifest(
     } else {
         // Search via API
         log::info!("Searching tools via API in space {}...", space_id.cyan());
-        let client = load_kibana_client(project_dir)?;
+        let client = preflight_client
+            .clone()
+            .unwrap_or(load_kibana_client(project_dir)?);
         let space_client = client.space(space_id)?;
         let extractor = ToolsExtractor::new(space_client, None);
 
@@ -2174,9 +2527,9 @@ pub async fn add_tools_to_manifest(
     // Resolve dependencies if any
     let mut dep_summary = DependencySummary::new();
     if !all_deps.is_empty() {
-        let client = load_kibana_client(project_dir)?;
-        dep_summary =
-            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps).await?;
+        let client = preflight_client.unwrap_or(load_kibana_client(project_dir)?);
+        let version = client.server_version().await?;
+        dep_summary = resolve_and_add_dependencies(project_dir, space_id, &client, all_deps, version, force).await?;
     }
 
     // Create manifest directory if it doesn't exist
@@ -3025,6 +3378,8 @@ async fn resolve_and_add_dependencies(
     space_id: &str,
     client: &KibanaClient,
     initial_deps: Vec<Dependency>,
+    detected_version: KibanaVersion,
+    force: bool,
 ) -> Result<DependencySummary> {
     let client = client.space(space_id)?;
     let mut pending_deps = initial_deps;
@@ -3034,6 +3389,18 @@ async fn resolve_and_add_dependencies(
     while let Some(dep) = pending_deps.pop() {
         match dep {
             Dependency::Agent(id) => {
+                if !force
+                    && !KibanaClient::supports_capability(&detected_version, ApiCapability::Agents)
+                {
+                    log::warn!(
+                        "{}",
+                        KibanaClient::unsupported_capability_reason(
+                            &detected_version,
+                            ApiCapability::Agents
+                        )
+                    );
+                    continue;
+                }
                 if !processed_ids.insert(format!("agent:{}", id)) {
                     continue;
                 }
@@ -3076,6 +3443,18 @@ async fn resolve_and_add_dependencies(
                 }
             }
             Dependency::Tool(id) => {
+                if !force
+                    && !KibanaClient::supports_capability(&detected_version, ApiCapability::Tools)
+                {
+                    log::warn!(
+                        "{}",
+                        KibanaClient::unsupported_capability_reason(
+                            &detected_version,
+                            ApiCapability::Tools
+                        )
+                    );
+                    continue;
+                }
                 if !processed_ids.insert(format!("tool:{}", id)) {
                     continue;
                 }
@@ -3118,6 +3497,21 @@ async fn resolve_and_add_dependencies(
                 }
             }
             Dependency::Workflow(id) => {
+                if !force
+                    && !KibanaClient::supports_capability(
+                        &detected_version,
+                        ApiCapability::Workflows,
+                    )
+                {
+                    log::warn!(
+                        "{}",
+                        KibanaClient::unsupported_capability_reason(
+                            &detected_version,
+                            ApiCapability::Workflows
+                        )
+                    );
+                    continue;
+                }
                 if !processed_ids.insert(format!("workflow:{}", id)) {
                     continue;
                 }
@@ -3309,5 +3703,28 @@ mod tests {
             "1 agent(s), 2 tool(s), 3 workflow(s)"
         );
         assert_eq!(summary.total(), 6);
+    }
+
+    #[test]
+    fn test_is_older_major_minor() {
+        let recorded = parse_kibana_version("9.3.2").unwrap();
+        assert!(is_older_major_minor(
+            &parse_kibana_version("9.2.9").unwrap(),
+            &recorded
+        ));
+        assert!(!is_older_major_minor(
+            &parse_kibana_version("9.3.0").unwrap(),
+            &recorded
+        ));
+        assert!(!is_older_major_minor(
+            &parse_kibana_version("10.0.0").unwrap(),
+            &recorded
+        ));
+    }
+
+    #[test]
+    fn test_version_warning_downcast() {
+        let report = version_warning("test warning");
+        assert_eq!(version_warning_message(&report), Some("test warning"));
     }
 }
