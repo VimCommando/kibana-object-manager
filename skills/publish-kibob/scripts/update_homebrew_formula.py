@@ -53,8 +53,12 @@ def patch_formula(content: str, new_url: str, new_sha256: str) -> str:
     if not sha_pattern.search(content):
         raise ValueError("Could not find `sha256` line in formula")
 
-    content = url_pattern.sub(rf'\1{new_url}\2', content, count=1)
-    content = sha_pattern.sub(rf'\1{new_sha256}\2', content, count=1)
+    content = url_pattern.sub(
+        lambda m: f'{m.group(1)}{new_url}{m.group(2)}', content, count=1
+    )
+    content = sha_pattern.sub(
+        lambda m: f'{m.group(1)}{new_sha256}{m.group(2)}', content, count=1
+    )
     return content
 
 
