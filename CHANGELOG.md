@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-02-27
+
 ### Added
 - Redesigned `add` command with API-agnostic support for workflows, spaces, and objects
 - Regex-based filtering with `--include` and `--exclude` options for workflows and spaces
@@ -96,4 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The original Kibana Object Manager was implemented as a Bash script with dependencies on external command-line tools. This version was superseded by the Rust rewrite for improved reliability, performance, and user experience.
 
+[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.2
 [0.1.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.0
