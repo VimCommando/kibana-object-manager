@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kibob Publish"
+  short_description: "Publish kibob to crates.io and Homebrew"
+  default_prompt: "Run the kibob release workflow for crates.io and homebrew-kibob safely."
