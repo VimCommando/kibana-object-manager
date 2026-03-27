@@ -8,6 +8,7 @@ use kibana_object_manager::{
     migration::{MigrationResult, migrate_to_multispace_unified},
 };
 use owo_colors::OwoColorize;
+use std::path::{Path, PathBuf};
 
 // CLI Styling
 const STYLES: styling::Styles = styling::Styles::styled()
@@ -258,11 +259,30 @@ enum Commands {
     },
 }
 
+fn resolve_env_path(env: &str) -> PathBuf {
+    let env_path = Path::new(env);
+
+    if env == ".env" || env.contains(std::path::MAIN_SEPARATOR) || env.starts_with('.') {
+        return env_path.to_path_buf();
+    }
+
+    if env_path.exists() {
+        return env_path.to_path_buf();
+    }
+
+    PathBuf::from(format!(".env.{}", env))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    if let Err(e) = dotenvy::from_filename(&cli.env) {
-        log::warn!("Failed to load environment variables: {}", e);
+    let resolved_env = resolve_env_path(&cli.env);
+    if let Err(e) = dotenvy::from_filename(&resolved_env) {
+        log::warn!(
+            "Failed to load environment variables from {}: {}",
+            resolved_env.display(),
+            e
+        );
     }
 
     let log_level = match cli.debug {
@@ -592,7 +612,7 @@ async fn main() -> Result<()> {
                 project_dir.bright_black()
             );
 
-            match migrate_to_multispace_unified(&project_dir, backup, Some(&cli.env)).await? {
+            match migrate_to_multispace_unified(&project_dir, backup, Some(&resolved_env)).await? {
                 MigrationResult::MigratedWithBackup(backup_path) => {
                     let target_space = std::env::var("kibana_space")
                         .or_else(|_| std::env::var("KIBANA_SPACE"))

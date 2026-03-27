@@ -4,18 +4,19 @@ A Git-inspired CLI tool for managing Kibana saved objects in version control. Bu
 
 ## What is kibob?
 
-`kibob` (Kibana Object Manager) helps you manage Kibana dashboards, visualizations, and other saved objects using a familiar Git-like workflow. Version control your Kibana artifacts alongside your application code, deploy them across environments, and collaborate with your team using standard Git practices.
+`kibob` (Kibana Object Manager) helps you manage Kibana dashboards, visualizations, workflows, agents, tools, spaces, and other Kibana assets using a familiar Git-like workflow. Version control your Kibana artifacts alongside your application code, deploy them across environments, and collaborate with your team using standard Git practices.
 
 ### Key Features
 
-- **Git-like workflow** - `pull`, `push`, and version control your Kibana objects
-- **Spaces management** - Version control and deploy Kibana spaces alongside objects
-- **Workflows management** - Version control and deploy Kibana workflows
+- **Git-like workflow** - `pull`, `push`, and version control your Kibana assets
+- **Spaces management** - Version control and deploy Kibana spaces alongside assets
+- **Workflows, agents, and tools** - Manage newer Kibana APIs alongside saved objects
 - **Environment management** - Easy deployment across dev, staging, and production
-- **Manifest-based tracking** - Explicitly define which objects, spaces, and workflows to manage
-- **Managed vs. unmanaged** - Control whether objects can be edited in Kibana UI
-- **Modern architecture** - Built with async Rust, no external dependencies
-- **Fast and reliable** - ETL pipeline design with proper error handling
+- **Manifest-based tracking** - Explicitly define which objects, spaces, workflows, agents, and tools to manage
+- **Managed vs. unmanaged** - Control whether saved objects can be edited in the Kibana UI
+- **Flexible filtering** - Target specific spaces and APIs with `--space` and `--api`
+- **Modern architecture** - Built with Rust and a composable ETL pipeline
+- **Fast and reliable** - Concurrent requests, proper error handling, and deterministic file layouts
 
 ## Installation
 
@@ -25,19 +26,19 @@ Published on:
 
 ### From Homebrew
 
-```bash
+```sh
 brew install VimCommando/homebrew-kibob/kibob
 ```
 
 ### From Cargo
 
-```bash
+```sh
 cargo install kibana-object-manager
 ```
 
 ### From Source
 
-```bash
+```sh
 git clone https://github.com/VimCommando/kibana-object-manager.git
 cd kibana-object-manager
 cargo build --release
@@ -48,7 +49,9 @@ cargo build --release
 
 ### 1. Set up environment variables
 
-```bash
+You can either export variables in your shell or store them in a dotenv file and use `--env`.
+
+```sh
 export KIBANA_URL=http://localhost:5601
 export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD=changeme
@@ -56,29 +59,40 @@ export KIBANA_PASSWORD=changeme
 # export KIBANA_APIKEY=your_api_key_here
 ```
 
+Example `.env` file:
+
+```sh
+KIBANA_URL=http://localhost:5601
+KIBANA_USERNAME=elastic
+KIBANA_PASSWORD=changeme
+KIBANA_MAX_REQUESTS=8
+```
+
 ### 2. Test your connection
 
-```bash
+```sh
 kibob auth
+kibob --env local auth
 ```
 
 ### 3. Initialize a project from an export
 
-First, export your dashboards from Kibana UI (Stack Management → Saved Objects → Export).
+First, export your dashboards from Kibana UI (`Stack Management → Saved Objects → Export`).
 
-```bash
+```sh
 kibob init export.ndjson ./my-dashboards
 cd my-dashboards
 ```
 
 This creates:
-- `default/manifest/saved_objects.json` - Tracks which objects to manage
-- `default/objects/` - Directory with your objects organized by type
+- `manifest/saved_objects.json` - tracks which saved objects to manage
+- `objects/` - directory with your exported objects organized by type
 
 **Optional: Add spaces management**
 
-Create a `spaces.yml` to also manage Kibana spaces:
-```yaml
+Create a top-level `spaces.yml` to manage Kibana spaces:
+
+```yml
 spaces:
   - id: default
     name: Default
@@ -88,12 +102,13 @@ spaces:
     name: Engineering
 ```
 
-Now `pull` and `push` will also manage spaces! Each space's definition will be stored at `{space_id}/space.json`. See [Spaces Guide](docs/SPACES.md) for details.
+Now `pull`, `push`, and `togo` can also manage spaces. Each space definition is stored at `{space_id}/space.json`.
 
-**Optional: Add workflows management**
+**Optional: Add workflows, agents, and tools**
 
-Create per-space workflow manifests like `default/manifest/workflows.yml`:
-```yaml
+Create per-space manifests like these:
+
+```yml
 workflows:
   - id: workflow-123
     name: my-workflow
@@ -103,11 +118,23 @@ workflows:
     name: data-pipeline
 ```
 
-Now `pull` and `push` will also manage workflows!
+```yml
+agents:
+  - id: agent-123
+    name: support-agent
+```
+
+```yml
+tools:
+  - id: search-tool
+    name: search-tool
+```
+
+Now `pull`, `push`, and `togo` will also manage those APIs for each configured space.
 
 ### 4. Version control with Git
 
-```bash
+```sh
 git init
 git add .
 git commit -m "Initial dashboard import"
@@ -115,91 +142,287 @@ git commit -m "Initial dashboard import"
 
 ### 5. Pull changes from Kibana
 
-```bash
-kibob pull .
-git diff  # Review changes
+```sh
+kibob pull
+kibob pull --space default,marketing --api saved_objects,workflows,agents,tools
+git diff
 git add . && git commit -m "Update from Kibana"
 ```
 
 ### 6. Push to another environment
 
-```bash
-# Set production credentials
+```sh
 export KIBANA_URL=https://prod-kibana.example.com
 export KIBANA_APIKEY=prod_api_key
 
 # Deploy as managed objects (read-only in Kibana UI)
-kibob push . --managed true
+kibob push --managed true
+```
+
+Or with dotenv files:
+
+```sh
+kibob --env stage push --managed false
+kibob --env prod push --managed true
 ```
 
 ## CLI Commands
 
-### `kibob auth`
-Test connection to Kibana with current credentials.
+## Global Options
 
-### `kibob init <export.ndjson> <output_dir>`
-Initialize a new project from a Kibana export file.
+These options work with every command:
 
-### `kibob pull <dir> [--space <name>]`
-Fetch saved objects from Kibana (specified in manifest) and save to local files. Also pulls spaces if `spaces.yml` exists and workflows if per-space `manifest/workflows.yml` files exist.
-- `--space <name>`: Override the Kibana space (overrides KIBANA_SPACE env var)
+- `--env <FILE>` - load environment variables from a dotenv file. Default: `.env`. Shorthand values like `dev`, `stage`, or `prod` resolve to `.env.dev`, `.env.stage`, and `.env.prod`
+- `--debug` - enable debug-level logging
 
-### `kibob push <dir> [--managed true|false] [--space <name>]`
-Upload local objects to Kibana. Also pushes spaces if `spaces.yml` exists and workflows if per-space `manifest/workflows.yml` files exist.
-- `--managed true` (default): Objects are read-only in Kibana UI
-- `--managed false`: Objects can be edited in Kibana UI
-- `--space <name>`: Override the Kibana space (overrides KIBANA_SPACE env var)
+## `kibob auth`
 
-### `kibob add <api> <dir> [options]`
-Add items to an existing manifest. Supports: `objects`, `workflows`, `spaces`
+Test connection and authentication to Kibana with the current credentials.
 
-**For Workflows:**
-- `kibob add workflows .` - Search and add all workflows
-- `kibob add workflows . --query "alert"` - Search workflows matching "alert"
-- `kibob add workflows . --include "^prod"` - Include workflows matching regex "^prod"
-- `kibob add workflows . --exclude "test"` - Exclude workflows matching regex "test"
-- `kibob add workflows . --include "(?i)prod"` - Case-insensitive include
-- `kibob add workflows . --file export.json` - Add from API response file
-- `kibob add workflows . --file bundle.ndjson` - Add from bundle file
+Examples:
 
-**For Spaces:**
-- `kibob add spaces .` - Fetch and add all spaces
-- `kibob add spaces . --include "prod|staging"` - Include spaces matching pattern
-- `kibob add spaces . --exclude "(?i)test"` - Exclude test spaces (case-insensitive)
-- `kibob add spaces . --file spaces.json` - Add from API response file
-- `kibob add spaces . --file bundle.ndjson` - Add from bundle file
+```sh
+kibob auth
+kibob --env prod auth
+```
 
-**For Objects (legacy):**
-- `kibob add objects . --objects "dashboard=abc123,visualization=xyz789"`
-- `kibob add objects . --file export.ndjson`
+## `kibob init [export] [output_dir]`
 
-**Regex Filtering:**
-- `--include` and `--exclude` accept standard Rust regex patterns
-- Include filter is applied first, then exclude filter
-- Use `(?i)` prefix for case-insensitive matching
-- Examples: `^prod`, `test$`, `(?i)staging`, `dev|test`
+Initialize a new project from a Kibana NDJSON export file.
 
-### `kibob togo <dir>`
-Bundle objects into a distributable `bundle/` directory containing NDJSON files:
-- `bundle/{space_id}/saved_objects.ndjson` - Per-space saved objects
-- `bundle/spaces.ndjson` - Spaces (if spaces.yml exists)
-- `bundle/{space_id}/workflows.ndjson` - Per-space workflows (if manifest/workflows.yml exists)
+Defaults:
+- `export` defaults to `export.ndjson`
+- `output_dir` defaults to `manifest.json` in the current CLI definition
 
-The bundle directory can be easily zipped for distribution.
+Examples:
 
-### `kibob migrate <dir>`
-Migrate legacy `manifest.json` to new `manifest/saved_objects.json` format.
+```sh
+kibob init export.ndjson ./my-dashboards
+kibob init ./exports ./my-dashboards
+kibob init
+```
+
+Notes:
+- If the first argument is a directory, `kibob` looks for `export.ndjson` inside it.
+- `init` writes:
+  - `manifest/saved_objects.json`
+  - `objects/...`
+
+## `kibob pull [dir] [--space <space1,space2,...>] [--api <api1,api2,...>]`
+
+Fetch managed content from Kibana into local files.
+
+Defaults:
+- `dir` defaults to `.`
+- if `--space` is omitted, `pull` operates on all managed spaces known to the client
+- if `--api` is omitted, `pull` processes all supported APIs
+
+Supported API filters:
+- `saved_objects`
+- `objects`
+- `workflows`
+- `agents`
+- `tools`
+- `spaces`
+
+Examples:
+
+```sh
+kibob pull
+kibob pull --space default,marketing
+kibob pull --api saved_objects,workflows,agents,tools
+kibob --env dev pull --space default --api spaces
+```
+
+Notes:
+- `--space` accepts a comma-separated list.
+- `spaces` are pulled from top-level `spaces.yml` if it exists.
+- Per-space workflows, agents, and tools are pulled when their manifests exist:
+  - `{space_id}/manifest/workflows.yml`
+  - `{space_id}/manifest/agents.yml`
+  - `{space_id}/manifest/tools.yml`
+
+## `kibob push [dir] [--managed true|false] [--space <space1,space2,...>] [--api <api1,api2,...>]`
+
+Upload local content to Kibana.
+
+Defaults:
+- `dir` defaults to `.`
+- `--managed true`
+- if `--space` is omitted, `push` operates on all managed spaces known to the client
+- if `--api` is omitted, `push` processes all supported APIs
+
+Supported API filters:
+- `saved_objects`
+- `objects`
+- `workflows`
+- `agents`
+- `tools`
+- `spaces`
+
+Examples:
+
+```sh
+kibob push --managed true
+kibob push --managed false --space default,marketing
+kibob push --api tools,agents
+kibob --env prod push --space production --api saved_objects,workflows --managed true
+```
+
+Options:
+- `--managed true` - saved objects are marked managed/read-only in Kibana UI
+- `--managed false` - saved objects remain editable in Kibana UI
+- `--space <...>` - comma-separated list of target space IDs
+- `--api <...>` - comma-separated list of APIs to push
+
+## `kibob add <api> [dir] [options]`
+
+Add items to an existing manifest.
+
+Supported APIs:
+- `objects`
+- `workflows`
+- `spaces`
+- `agents`
+- `tools`
+
+Common options:
+- `--query <TEXT>` - search query for API-backed discovery
+- `--include <REGEX>` - include items whose name matches the regex
+- `--exclude <REGEX>` - exclude items whose name matches the regex after include filtering
+- `--file <FILE>` - load items from `.json` or `.ndjson`
+- `--space <space1,space2,...>` - space selection/filtering
+- `--exclude-dependencies` - do not automatically add discovered dependencies for workflows, agents, or tools
+
+Regex notes:
+- `--include` and `--exclude` use Rust regex syntax
+- include is applied first, then exclude
+- use `(?i)` for case-insensitive matching
+
+### Add workflows
+
+```sh
+kibob add workflows
+kibob add workflows --space marketing
+kibob add workflows --query "alert"
+kibob add workflows --include "^prod"
+kibob add workflows --exclude "test"
+kibob add workflows --file export.json
+kibob add workflows --exclude-dependencies
+```
+
+### Add agents
+
+```sh
+kibob add agents
+kibob add agents --space default
+kibob add agents --include "^support"
+kibob add agents --file agents.ndjson
+kibob add agents --exclude-dependencies
+```
+
+### Add tools
+
+```sh
+kibob add tools
+kibob add tools --space default
+kibob add tools --include "^search"
+kibob add tools --file tools.ndjson
+kibob add tools --exclude-dependencies
+```
+
+### Add spaces
+
+```sh
+kibob add spaces
+kibob add spaces --include "prod|staging"
+kibob add spaces --exclude "(?i)test"
+kibob add spaces --space default,marketing
+kibob add spaces --file spaces.json
+```
+
+### Add objects (legacy saved objects manifest support)
+
+```sh
+kibob add objects --objects "dashboard=abc123,visualization=xyz789"
+kibob add objects --file export.ndjson
+```
+
+Important notes:
+- For `objects`, `--objects` is required unless you use `--file`.
+- For `spaces`, `--query` is accepted by the CLI, but space discovery currently fetches all spaces and applies filtering afterward.
+- For non-`spaces` APIs, the CLI currently uses the first value from `--space` if multiple are supplied.
+
+## `kibob togo [dir] [--managed true|false] [--space <space1,space2,...>] [--api <api1,api2,...>]`
+
+Bundle local content into distributable NDJSON files under `bundle/`.
+
+Defaults:
+- `dir` defaults to `.`
+- `--managed true`
+
+Supported API filters:
+- `saved_objects`
+- `objects`
+- `workflows`
+- `agents`
+- `tools`
+- `spaces`
+
+Generated outputs can include:
+- `bundle/{space_id}/saved_objects.ndjson`
+- `bundle/{space_id}/workflows.ndjson`
+- `bundle/{space_id}/agents.ndjson`
+- `bundle/{space_id}/tools.ndjson`
+- `bundle/spaces.ndjson`
+
+Examples:
+
+```sh
+kibob togo
+kibob togo --space default,marketing
+kibob togo --api saved_objects,workflows,agents,tools
+zip -r dashboards.zip bundle/
+```
+
+Notes:
+- `bundle/spaces.ndjson` is generated when top-level `spaces.yml` exists.
+- `--api` lets you create partial bundles for specific APIs only.
+
+## `kibob migrate [dir] [--backup true|false]`
+
+Migrate legacy project structure into the multi-space layout.
+
+Defaults:
+- `dir` defaults to `.`
+- `--backup true`
+
+Examples:
+
+```sh
+kibob migrate ./old-project
+kibob migrate ./old-project --backup false
+kibob --env local migrate
+```
+
+Migration notes:
+- Legacy content is moved into the target space layout:
+  - `{space_id}/manifest/saved_objects.json`
+- At runtime the target space is resolved from `KIBANA_SPACE`, falling back to `default`.
 
 ## Use Cases
 
 ### For Kibana Admins
+
 Back up and version control your dashboards. Easily restore or roll back changes.
 
 ### For Developers
-Store dashboards in your application's Git repository. Deploy observability alongside code.
+
+Store dashboards and related Kibana assets in your application's Git repository. Deploy observability alongside code.
 
 ### For DevOps Engineers
-Automate dashboard deployments in CI/CD pipelines. Consistent environments from dev to production.
+
+Automate dashboard and asset deployments in CI/CD pipelines. Keep environments consistent from dev to production.
 
 ## Documentation
 
@@ -225,31 +448,33 @@ The skill is designed to help with:
 
 Example promotion flow:
 
-```bash
+```sh
 # Pull from dev
-kibob pull . --env .env.dev --space dev --api saved_objects,workflows,agents,tools
+kibob --env dev pull --space dev --api saved_objects,workflows,agents,tools
 git add .
 git commit -m "Sync from dev"
 
 # Push to stage (dev/test posture)
-kibob push . --env .env.stage --space stage --api saved_objects,workflows,agents,tools --managed false
+kibob --env stage push --space stage --api saved_objects,workflows,agents,tools --managed false
 
 # Promote to production (production posture)
-kibob push . --env .env.prod --space prod --api saved_objects,workflows,agents,tools --managed true
+kibob --env prod push --space prod --api saved_objects,workflows,agents,tools --managed true
 ```
 
 ## Authentication
 
-kibob supports multiple authentication methods:
+kibob supports multiple authentication methods.
 
 ### Basic Authentication
-```bash
+
+```sh
 export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD=changeme
 ```
 
 ### API Key
-```bash
+
+```sh
 export KIBANA_APIKEY=your_base64_encoded_key
 ```
 
@@ -257,30 +482,36 @@ export KIBANA_APIKEY=your_base64_encoded_key
 
 kibob uses a modern ETL (Extract-Transform-Load) pipeline architecture:
 
-```
+```text
 Pull: Kibana → Extract → Transform → Store Files
 Push: Read Files → Transform → Load → Kibana
 ```
 
 Built with:
-- **Rust** - Memory-safe, fast, reliable
-- **Tokio** - Async runtime for efficient I/O
+- **Rust** - memory-safe, fast, reliable
+- **Tokio** - async runtime for efficient I/O
 - **reqwest** - HTTP client with connection pooling
-- **Clap** - Modern CLI framework
-- **serde** - Robust JSON serialization
+- **Clap** - CLI framework
+- **serde** - JSON serialization
+- **dotenvy** - dotenv loading
+- **env_logger** - CLI logging
+- **owo-colors** - readable terminal output
 
 ## Project Structure
 
-```
+A multi-space project typically looks like this:
+
+```text
 my-dashboards/
-├── spaces.yml                # Global: managed spaces list
-├── default/                  # Default space (self-contained)
-│   ├── space.json           # Space definition
-│   ├── manifest/            # Per-space manifests
+├── spaces.yml
+├── default/
+│   ├── space.json
+│   ├── manifest/
 │   │   ├── saved_objects.json
 │   │   ├── workflows.yml
-│   │   └── agents.yml
-│   ├── objects/             # Saved objects organized by type
+│   │   ├── agents.yml
+│   │   └── tools.yml
+│   ├── objects/
 │   │   ├── dashboard/
 │   │   │   ├── abc-123.json
 │   │   │   └── xyz-789.json
@@ -288,32 +519,48 @@ my-dashboards/
 │   │   │   └── def-456.json
 │   │   └── index-pattern/
 │   │       └── logs-*.json
-│   ├── workflows/           # Workflow configurations
+│   ├── workflows/
 │   │   ├── my-workflow.json
 │   │   └── alert-workflow.json
-│   └── agents/              # Agent configurations
-│       └── my-agent.json
-├── marketing/               # Marketing space (self-contained)
+│   ├── agents/
+│   │   └── my-agent.json
+│   └── tools/
+│       └── search-tool.json
+├── marketing/
 │   ├── space.json
 │   ├── manifest/
-│   │   └── workflows.yml
-│   └── workflows/
-│       └── campaign-workflow.json
-└── bundle/                  # (Generated by 'togo' command)
+│   │   ├── workflows.yml
+│   │   └── tools.yml
+│   ├── workflows/
+│   │   └── campaign-workflow.json
+│   └── tools/
+│       └── campaign-tool.json
+└── bundle/
     ├── default/
     │   ├── saved_objects.ndjson
     │   ├── workflows.ndjson
-    │   └── agents.ndjson
+    │   ├── agents.ndjson
+    │   └── tools.ndjson
     ├── marketing/
-    │   └── workflows.ndjson
-    └── spaces.ndjson        # All space definitions
+    │   ├── workflows.ndjson
+    │   └── tools.ndjson
+    └── spaces.ndjson
+```
+
+A freshly initialized single-space project from `kibob init` starts simpler:
+
+```text
+my-dashboards/
+├── manifest/
+│   └── saved_objects.json
+└── objects/
 ```
 
 ## Managing Kibana Spaces
 
-`kibob` can also manage Kibana Spaces alongside saved objects. Create a `spaces.yml`:
+`kibob` can manage Kibana Spaces alongside saved objects. Create a top-level `spaces.yml`:
 
-```yaml
+```yml
 spaces:
   - id: default
     name: Default
@@ -324,13 +571,14 @@ spaces:
 ```
 
 Then use the same workflow:
-```bash
-kibob pull .    # Pulls space definitions to {space_id}/space.json
-kibob push .    # Creates/updates spaces in Kibana
-kibob togo .    # Bundles to bundle/spaces.ndjson
+
+```sh
+kibob pull    # Pulls space definitions to {space_id}/space.json
+kibob push    # Creates/updates spaces in Kibana
+kibob togo    # Bundles to bundle/spaces.ndjson
 ```
 
-Each space's definition is stored in its own directory as `{space_id}/space.json`. For example:
+Each space definition is stored in its own directory as `{space_id}/space.json`. For example:
 - `default/space.json`
 - `marketing/space.json`
 - `engineering/space.json`
@@ -341,12 +589,12 @@ See the [Spaces Guide](docs/SPACES.md) for complete documentation.
 
 If you have an existing project using the old Bash script:
 
-```bash
-# The new Rust version uses a different manifest format
+```sh
+# Migrate the legacy structure
 kibob migrate ./my-project
 
 # Review the migrated manifest
-cat manifest/saved_objects.json
+cat default/manifest/saved_objects.json
 
 # Test by pulling from Kibana
 kibob pull ./my-project
@@ -361,7 +609,9 @@ See [Migration Guide](docs/MIGRATION.md) for details.
 | `KIBANA_URL` | Kibana base URL | Required |
 | `KIBANA_USERNAME` | Basic auth username | Optional |
 | `KIBANA_PASSWORD` | Basic auth password | Optional |
-| `KIBANA_APIKEY` | API key (conflicts with user/pass) | Optional |
+| `KIBANA_APIKEY` | API key authentication | Optional |
+| `KIBANA_SPACE` | Default target space used by some workflows | `default` |
+| `KIBANA_MAX_REQUESTS` | Maximum number of concurrent requests | `8` |
 
 ## Support
 
@@ -370,7 +620,7 @@ See [Migration Guide](docs/MIGRATION.md) for details.
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 
