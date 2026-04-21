@@ -26,14 +26,14 @@ git push origin main --tags
 ## Homebrew Formula Update
 
 Formula file:
-- `Formula/kibob.rb` in `VimCommando/homebrew-kibob`
+- `Formula/kibob.rb` in `VimCommando/homebrew-tools`
 
 Preferred command:
 
 ```bash
 python skills/publish-kibob/scripts/update_homebrew_formula.py \
   --version <x.y.z> \
-  --formula /path/to/homebrew-kibob/Formula/kibob.rb
+  --formula /path/to/homebrew-tools/Formula/kibob.rb
 ```
 
 Update fields:
