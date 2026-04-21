@@ -1,6 +1,6 @@
 ---
 name: publish-kibob
-description: Publish a new kibob release to crates.io and the VimCommando/homebrew-kibob tap. Use when preparing or executing a versioned release, including version bumps, changelog updates, cargo publish, Git tag/release creation, and Homebrew formula url/sha256 updates.
+description: Publish a new kibob release to crates.io and the VimCommando/homebrew-tools tap. Use when preparing or executing a versioned release, including version bumps, changelog updates, cargo publish, Git tag/release creation, and Homebrew formula url/sha256 updates.
 ---
 
 # Publish Kibob
@@ -17,7 +17,7 @@ Read [references/release-checklist.md](references/release-checklist.md) at the s
 2. Prepare and verify the repository release commit.
 3. Publish to crates.io.
 4. Push git commit/tag.
-5. Update Homebrew formula in `VimCommando/homebrew-kibob`.
+5. Update Homebrew formula in `VimCommando/homebrew-tools`.
 6. Run post-release verification checks.
 
 ## Stage 1: Validate Inputs
@@ -59,20 +59,20 @@ Read [references/release-checklist.md](references/release-checklist.md) at the s
 
 ## Stage 5: Update Homebrew Tap
 
-- In `VimCommando/homebrew-kibob`, edit `Formula/kibob.rb`:
+- In `VimCommando/homebrew-tools`, edit `Formula/kibob.rb`:
   - Update `url` to new tag tarball URL.
   - Update `sha256` to tarball hash.
 - If tap repo does not exist yet:
-  - `brew tap-new VimCommando/homebrew-kibob`
-  - `gh repo create VimCommando/homebrew-kibob --public --source="$(brew --repository VimCommando/homebrew-kibob)" --push`
+  - `brew tap-new VimCommando/homebrew-tools`
+  - `gh repo create VimCommando/homebrew-tools --public --source="$(brew --repository VimCommando/homebrew-tools)" --push`
 - Preferred automation:
-  - `python skills/publish-kibob/scripts/update_homebrew_formula.py --version <version> --formula /path/to/homebrew-kibob/Formula/kibob.rb`
+  - `python skills/publish-kibob/scripts/update_homebrew_formula.py --version <version> --formula /path/to/homebrew-tools/Formula/kibob.rb`
 - Manual fallback hash command:
   - `curl -L "https://github.com/VimCommando/kibana-object-manager/archive/refs/tags/v<version>.tar.gz" | shasum -a 256`
 - Validate formula locally if possible:
-  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew audit --strict --tap VimCommando/homebrew-kibob kibob`
-  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source VimCommando/homebrew-kibob/kibob`
-  - `brew test VimCommando/homebrew-kibob/kibob`
+  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew audit --strict --tap VimCommando/tools kibob`
+  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source VimCommando/tools/kibob`
+  - `brew test VimCommando/tools/kibob`
 - Commit and push tap update (or open PR per maintainer workflow).
 
 ## Stage 6: Verify
@@ -82,8 +82,8 @@ Read [references/release-checklist.md](references/release-checklist.md) at the s
 - Optional: confirm GitHub release exists for `v<version>`.
 - Confirm Homebrew tap has updated formula and checksum.
 - Optionally test install path:
-  - `brew tap VimCommando/homebrew-kibob`
-  - `brew install VimCommando/homebrew-kibob/kibob`
+  - `brew tap VimCommando/tools`
+  - `brew install kibob`
   - `kibob --version`
 - Note: a tap formula does not automatically appear on `https://formulae.brew.sh/formula/<name>`. That page is for formulas indexed in Homebrew's main catalogs (for example `homebrew/core`).
 
