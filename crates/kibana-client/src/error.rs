@@ -13,17 +13,17 @@ pub trait ResultContext<T> {
 
 impl<T, E> ResultContext<T> for std::result::Result<T, E>
 where
-    E: fmt::Display,
+    E: Into<Error>,
 {
     fn context(self, message: impl Into<String>) -> Result<T> {
-        self.map_err(|err| Error::message(format!("{}: {err}", message.into())))
+        self.map_err(|err| Error::context(message, err.into()))
     }
 
     fn with_context<M>(self, message: impl FnOnce() -> M) -> Result<T>
     where
         M: Into<String>,
     {
-        self.map_err(|err| Error::message(format!("{}: {err}", message().into())))
+        self.map_err(|err| Error::context(message(), err.into()))
     }
 }
 
@@ -62,6 +62,10 @@ pub enum Error {
     Io(std::io::Error),
     SemaphoreClosed,
     Message(String),
+    Context {
+        message: String,
+        source: Box<Error>,
+    },
 }
 
 impl Error {
@@ -74,6 +78,13 @@ impl Error {
 
     pub fn message(message: impl Into<String>) -> Self {
         Self::Message(message.into())
+    }
+
+    pub fn context(message: impl Into<String>, source: Error) -> Self {
+        Self::Context {
+            message: message.into(),
+            source: Box::new(source),
+        }
     }
 }
 
@@ -112,6 +123,7 @@ impl fmt::Display for Error {
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::SemaphoreClosed => write!(f, "request semaphore closed"),
             Self::Message(message) => f.write_str(message),
+            Self::Context { message, source } => write!(f, "{message}: {source}"),
         }
     }
 }
@@ -128,6 +140,7 @@ impl std::error::Error for Error {
             Self::Yaml(err) => Some(err),
             Self::Version(err) => Some(err),
             Self::Io(err) => Some(err),
+            Self::Context { source, .. } => Some(source.as_ref()),
             _ => None,
         }
     }
@@ -184,5 +197,22 @@ impl From<semver::Error> for Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
         Self::Io(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn result_context_preserves_error_source() {
+        let result: std::result::Result<(), std::io::Error> =
+            Err(std::io::Error::other("disk full"));
+
+        let err = result.context("failed to read manifest").unwrap_err();
+
+        assert!(matches!(&err, Error::Context { .. }));
+        assert!(matches!(err.source(), Some(source) if source.is::<Error>()));
     }
 }
