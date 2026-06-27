@@ -101,7 +101,7 @@ pub struct ApiCapabilityWarning {
     pub message: String,
 }
 
-pub async fn plan_capabilities(
+pub fn plan_capabilities(
     version: &KibanaVersion,
     capabilities: impl IntoIterator<Item = ApiCapability>,
 ) -> CapabilityPlan {
@@ -421,8 +421,8 @@ mod tests {
         assert_eq!(bundle.by_space["default"].saved_objects.len(), 1);
     }
 
-    #[tokio::test]
-    async fn capability_plan_reports_boundaries() {
+    #[test]
+    fn capability_plan_reports_boundaries() {
         let version = crate::parse_kibana_version("9.2.0").unwrap();
         let plan = plan_capabilities(
             &version,
@@ -431,8 +431,7 @@ mod tests {
                 ApiCapability::Tools,
                 ApiCapability::Workflows,
             ],
-        )
-        .await;
+        );
 
         assert!(plan.supported.contains(&ApiCapability::Agents));
         assert!(plan.supported.contains(&ApiCapability::Tools));
