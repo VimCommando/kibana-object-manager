@@ -85,6 +85,25 @@ The `kibana-client` crate SHALL support syncing all supported API families witho
 - **AND** fetches missing dependencies through Kibana APIs
 - **AND** returns the expanded resources in the sync bundle rather than writing them to files
 
+### Requirement: Explicit Filesystem Manifest and Bundle Sync
+The `kibana-client` crate SHALL support reusable filesystem-backed sync for Kibana manifests and file-backed assets using caller-provided paths.
+
+#### Scenario: Read filesystem bundle from explicit path
+- **WHEN** a consumer asks the library to read a Kibana asset bundle from a provided path
+- **THEN** the library reads supported manifest files and file-backed saved objects, workflows, agents, and tools from that path
+- **AND** returns a `SyncBundle` or equivalent resource collection that can be pushed to Kibana
+- **AND** it does not infer the path from environment variables, process working directory, or CLI command state
+
+#### Scenario: Write filesystem bundle to explicit path
+- **WHEN** a consumer asks the library to write a pulled sync bundle to a provided path
+- **THEN** the library writes supported manifests and file-backed resources in a stable bundle layout
+- **AND** the written bundle can be read back by the library and pushed to another Kibana instance
+
+#### Scenario: CLI project policy remains outside filesystem sync
+- **WHEN** `kibob` uses the library filesystem sync APIs
+- **THEN** the CLI crate chooses default paths, command behavior, terminal output, gitignore behavior, and migration policy
+- **AND** the library only receives explicit paths, sync options, and resource data
+
 ### Requirement: Reusable Capability Gates
 The `kibana-client` crate SHALL expose Kibana version detection and API capability support checks for all supported API families.
 
@@ -157,4 +176,4 @@ The Kibana client SHALL expose:
 ### Requirement: Space Registry from Manifest
 **Reason**: A standalone library crate must not depend on `kibob` project files during client construction.
 
-**Migration**: `kibob` SHALL continue reading `spaces.yml` in the CLI crate, then pass the resulting space registry into `kibana-client` explicitly.
+**Migration**: `kibob` SHALL continue deciding when and where to load `spaces.yml`, then pass the resulting space registry into `kibana-client` explicitly. Explicit filesystem bundle APIs in `kibana-client` MAY read or write a spaces manifest when the caller provides the path.

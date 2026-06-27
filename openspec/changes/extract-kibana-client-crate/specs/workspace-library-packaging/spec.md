@@ -18,16 +18,22 @@ The repository SHALL be organized as a Cargo workspace with a reusable `kibana-c
 - **AND** the CLI crate depends on the `kibana-client` crate for Kibana API operations
 
 ### Requirement: Library Boundary Excludes CLI Concerns
-The `kibana-client` crate SHALL NOT depend on CLI-only concerns including command-line parsing, dotenv loading, terminal coloring, repository file layout, gitignore management, or migration code.
+The `kibana-client` crate SHALL NOT depend on CLI-only concerns including command-line parsing, dotenv loading, terminal coloring, implicit project-root discovery, gitignore management, migration code, or command exit policy.
 
 #### Scenario: CLI dependencies remain outside the library
 - **WHEN** the `kibana-client` crate manifest is inspected
 - **THEN** it does not declare dependencies on `clap`, `dotenvy`, `env_logger`, or `owo-colors`
 
-#### Scenario: Project storage remains outside the library
+#### Scenario: Filesystem APIs remain explicit
 - **WHEN** the `kibana-client` crate source is inspected
-- **THEN** it does not read or write `spaces.yml`
-- **AND** it does not know about `manifest/`, `objects/`, `bundle/`, or per-space project directories
+- **THEN** it does not read environment variables or the current working directory to discover a project root
+- **AND** filesystem manifest or bundle APIs operate only on caller-provided paths
+- **AND** it does not depend on gitignore helpers, migration helpers, terminal output, warning exit status, or `kibob` command semantics
+
+#### Scenario: Reusable bundle formats live in the library
+- **WHEN** an external consumer needs to version-control or bundle Kibana assets
+- **THEN** `kibana-client` may expose reusable manifest schemas, bundle schemas, and path-explicit filesystem readers or writers
+- **AND** those APIs are usable without constructing or invoking the `kibob` CLI
 
 ### Requirement: CLI Behavior Preservation
 The `kibana-object-manager` CLI crate SHALL preserve existing `kibob` user-facing commands and project file layout while consuming `kibana-client` internally.
@@ -51,6 +57,11 @@ External Rust crates SHALL be able to depend on `kibana-client` without building
 #### Scenario: ESDiag-compatible auth adaptation
 - **WHEN** a consumer has an existing URL and auth model equivalent to none, basic auth, or API key auth
 - **THEN** it can convert those values into `kibana-client` configuration without environment variables or `kibob` project files
+
+#### Scenario: ESDiag-compatible filesystem bundle loading
+- **WHEN** a consumer has a Kibana asset bundle containing manifests and file-backed resources
+- **THEN** it can load that bundle through `kibana-client` APIs using explicit paths
+- **AND** it can push the resulting resources to a target Kibana instance without invoking `kibob`
 
 ### Requirement: Independent Library Publication
 The `kibana-client` crate SHALL be prepared for independent publication as a reusable Rust library.

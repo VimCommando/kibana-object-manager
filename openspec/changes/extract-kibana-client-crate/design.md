@@ -8,23 +8,26 @@ The repository is currently a single Cargo package named `kibana-object-manager`
 - `src/cli.rs` owns command orchestration, environment loading, version preflight behavior, dependency resolution into files, and project path layout.
 - `src/storage`, `src/transform`, and `src/migration.rs` are tied to the `kibob` repository-on-disk format.
 
-The strongest coupling problem is that `KibanaClient::try_new` currently accepts a project directory and reads `spaces.yml` while constructing the HTTP client. That is useful for `kibob`, but wrong for ESDiag and other consumers because it forces a CLI project format into the reusable API.
+The strongest coupling problem is that `KibanaClient::try_new` currently accepts a project directory and reads `spaces.yml` while constructing the HTTP client. That is useful for `kibob`, but wrong for ESDiag and other consumers because it forces implicit CLI project discovery into the reusable HTTP client.
 
-ESDiag already has its own Kibana client and setup flow. It can benefit from the endpoint behavior in this repository, especially multipart saved object import, space management, internal-origin headers for workflows, agent/tool/workflow upsert semantics, capability gates, and dependency discovery. It should be able to adapt its existing host/auth configuration into the new library without using `kibob` manifests.
+ESDiag already has its own Kibana client and setup flow. It can benefit from the endpoint behavior in this repository, especially multipart saved object import, space management, internal-origin headers for workflows, agent/tool/workflow upsert semantics, capability gates, and dependency discovery. It should be able to adapt its existing host/auth configuration into the new library without being forced into `kibob` project discovery.
+
+ESDiag also needs to bundle and replay Kibana assets as files. That means filesystem support belongs in the reusable library, but as explicit manifest and bundle APIs rather than hidden client-construction behavior. The library can own stable Kibana asset bundle schemas and path-explicit readers/writers while the CLI owns defaults, migration, terminal output, and command policy.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
 - Convert the repository to a Cargo workspace with a reusable `kibana-client` crate and a `kibana-object-manager` CLI crate.
-- Make `kibana-client` consumable by any Rust crate through explicit configuration rather than filesystem conventions.
+- Make `kibana-client` consumable by any Rust crate through explicit client configuration rather than implicit CLI project discovery.
 - Make `kibana-client` independently publishable so ESDiag can depend on the crate directly.
 - Keep endpoint-specific Kibana behavior in the library, including required methods, paths, headers, multipart handling, and version/capability gates.
-- Provide storage-neutral sync operations so consumers can pull or push all supported API families without depending on `kibob` local file layout.
+- Provide storage-neutral sync operations so consumers can pull or push all supported API families without depending on `kibob` command behavior.
+- Provide explicit filesystem-backed manifest and bundle sync APIs so consumers can version-control, ship, and replay Kibana assets.
 - Use `tracing` for library instrumentation and avoid binding the library to a concrete logger.
 - Introduce a dedicated `kibana-client` error enum before external publication.
 - Preserve existing `kibob` command behavior, file formats, and CLI flags while making `kibob` call into the library crate.
-- Keep reusable domain logic independent from `clap`, `dotenvy`, `env_logger`, `owo-colors`, JSON5 formatting, git integration, and local migration code.
+- Keep reusable domain logic independent from `clap`, `dotenvy`, `env_logger`, `owo-colors`, git integration, terminal output, command exit policy, and local migration code.
 
 **Non-Goals:**
 
@@ -46,7 +49,7 @@ crates/
   kibana-object-manager/
 ```
 
-`kibana-client` will expose reusable Kibana API behavior. `kibana-object-manager` will own the `kibob` binary and all project-file behavior.
+`kibana-client` will expose reusable Kibana API behavior, sync models, manifest schemas, and explicit filesystem bundle helpers. `kibana-object-manager` will own the `kibob` binary, command defaults, project-root selection, migration behavior, and terminal presentation.
 
 Rationale: This makes the dependency direction explicit. The CLI can depend on the library, while the library cannot accidentally depend on CLI-only modules.
 
@@ -64,7 +67,7 @@ KibanaClient::builder(url)
     .build()
 ```
 
-The library may provide convenience constructors for a default single-space registry or for a caller-supplied list/map of spaces. It must not read `spaces.yml` implicitly.
+The library may provide convenience constructors for a default single-space registry or for a caller-supplied list/map of spaces. HTTP client construction must not read `spaces.yml` implicitly. Separate filesystem bundle APIs may read a spaces manifest when the caller explicitly provides the path.
 
 Rationale: ESDiag has its own `KnownHost` and settings model. A reusable client should accept values, not discover them from `kibob` project files.
 
@@ -84,7 +87,7 @@ Rationale: These endpoint details are precisely what ESDiag should not duplicate
 
 Alternative considered: expose only raw request helpers and let consumers implement API modules. Rejected because it would not solve ESDiag's need to sync all supported APIs.
 
-### 4) Introduce storage-neutral sync models
+### 4) Introduce storage-neutral sync models and explicit filesystem bundle APIs
 
 The library will expose sync-level models that represent what to transfer, not where to store it:
 
@@ -97,9 +100,21 @@ pub struct SyncSummary { ... }
 
 `SyncBundle` will group spaces, saved objects, workflows, agents, and tools by space where applicable. Pull sync returns a bundle. Push sync accepts a bundle or API-specific collections and applies them to Kibana. Dependency expansion operates on values and IDs, not on local files.
 
+The library will also expose explicit filesystem-backed sync helpers for version-controlled Kibana asset bundles:
+
+```rust
+let bundle = KibanaFsBundle::open(path)?.read(selection)?;
+push_sync(&client, bundle, options).await?;
+
+let bundle = pull_sync(&client, selection, options).await?;
+KibanaFsBundle::create(path)?.write(&bundle)?;
+```
+
+These APIs may know the stable bundle layout and manifest schemas, but they must only operate on paths supplied by the caller. They must not infer a project root from the process working directory, read dotenv state, initialize logging, create gitignore entries, perform migrations, or choose CLI warning/exit behavior.
+
 Rationale: This lets `kibob` adapt bundles to its directory layout while ESDiag can adapt them to embedded assets, setup flows, or runtime orchestration.
 
-Alternative considered: move current `pull_saved_objects` / `push_saved_objects` from `src/cli.rs` into the library unchanged. Rejected because those functions mix Kibana API calls with local path conventions and command policy.
+Alternative considered: move current `pull_saved_objects` / `push_saved_objects` from `src/cli.rs` into the library unchanged. Rejected because those functions mix Kibana API calls, local path conventions, command defaults, terminal presentation, and warning policy. The correct extraction is reusable file formats and path-explicit readers/writers.
 
 ### 5) Keep ETL traits only if they improve the library API
 
@@ -117,7 +132,7 @@ kibob pull
 
 ESDiag setup
   -> adapt KnownHost into KibanaClient config
-  -> build SyncBundle or call API modules directly
+  -> read bundled filesystem assets into SyncBundle or call API modules directly
   -> import saved objects, ensure spaces, sync agents/tools/workflows
 ```
 
@@ -126,13 +141,12 @@ ESDiag setup
 The CLI crate will retain:
 
 - dotenv and environment variable loading.
-- `spaces.yml` and per-space manifest reading/writing.
-- local path helpers for `{space}/manifest`, `{space}/objects`, `{space}/agents`, `{space}/tools`, and bundles.
+- default path selection for `spaces.yml`, per-space manifests, objects, API resources, and bundles.
 - JSON5 formatting and saved object transforms.
 - logging presentation, colored output, and warning exit status mapping.
 - migration and `togo` packaging.
 
-Rationale: These behaviors define `kibob`, not a general Kibana client.
+Rationale: These behaviors define `kibob`, not a general Kibana client. Reusable manifest schemas, bundle schemas, and path-explicit filesystem readers/writers are not CLI policy and may live in `kibana-client`.
 
 ### 7) Preserve capability gates in the library, apply command policy in the CLI
 
@@ -186,10 +200,11 @@ Alternative considered: keep `eyre` in the public API for the first release. Rej
 5. Replace manifest-bound client construction with explicit space registry configuration.
 6. Replace library `log` instrumentation with `tracing` events and keep subscriber initialization in the CLI crate.
 7. Add storage-neutral sync models and services over the existing API modules.
-8. Update `kibana-object-manager` imports to use `kibana-client`.
-9. Keep storage, transforms, migration, and CLI helpers in the CLI crate, adapting them to library sync/API types.
-10. Update docs and examples to show both `kibob` usage and library usage.
-11. Run the full test suite, publish dry-run, and fix tests to reflect new crate paths.
+8. Add explicit filesystem-backed manifest and bundle readers/writers over the sync models.
+9. Update `kibana-object-manager` imports to use `kibana-client`.
+10. Keep transforms, migration, default path selection, and CLI helpers in the CLI crate, adapting them to library sync/API types.
+11. Update docs and examples to show both `kibob` usage and library usage.
+12. Run the full test suite, publish dry-run, and fix tests to reflect new crate paths.
 
 Rollback strategy: since this is a repository-local refactor before external release, rollback is a normal git revert of the workspace split. No persisted user data migration is required.
 
