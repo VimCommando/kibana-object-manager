@@ -13,8 +13,7 @@ pub trait ResultContext<T> {
 
 impl<T, E> ResultContext<T> for std::result::Result<T, E>
 where
-    E: std::error::Error + Send + Sync + 'static,
-    Error: From<E>,
+    E: fmt::Display,
 {
     fn context(self, message: impl Into<String>) -> Result<T> {
         self.map_err(|err| Error::message(format!("{}: {err}", message.into())))

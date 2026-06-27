@@ -29,7 +29,6 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "^4.5", features = ["derive"] }
 dotenvy = "^0.15"
-env_logger = "^0.11"
 eyre = "^0.6"
 json5 = "^1.0"
 kibana-client = { version = "0.1.0", path = "../kibana-client" }

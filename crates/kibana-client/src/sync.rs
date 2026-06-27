@@ -131,8 +131,43 @@ pub async fn pull_sync(
     options: &SyncOptions,
 ) -> Result<SyncBundle> {
     let mut bundle = SyncBundle::default();
+    let include_spaces = selection.include_spaces
+        && capability_allowed(
+            client,
+            ApiCapability::Spaces,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_saved_objects = selection.saved_objects.is_some()
+        && capability_allowed(
+            client,
+            ApiCapability::SavedObjects,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_workflows = selection.include_workflows
+        && capability_allowed(
+            client,
+            ApiCapability::Workflows,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_agents = selection.include_agents
+        && capability_allowed(
+            client,
+            ApiCapability::Agents,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_tools = selection.include_tools
+        && capability_allowed(
+            client,
+            ApiCapability::Tools,
+            &options.unsupported_api_policy,
+        )
+        .await?;
 
-    if selection.include_spaces {
+    if include_spaces {
         bundle.spaces = SpacesExtractor::all(client.clone()).extract().await?;
     }
 
@@ -140,32 +175,32 @@ pub async fn pull_sync(
         let space_client = client.space(space_id)?;
         let mut space_bundle = SpaceBundle::default();
 
-        if let Some(manifest) = &selection.saved_objects {
+        if include_saved_objects && let Some(manifest) = &selection.saved_objects {
             space_bundle.saved_objects =
                 SavedObjectsExtractor::new(space_client.clone(), manifest.clone())
                     .extract()
                     .await?;
         }
 
-        if selection.include_workflows {
+        if include_workflows {
             space_bundle.workflows = WorkflowsExtractor::new(space_client.clone(), None)
                 .search_workflows(None, None)
                 .await?;
         }
 
-        if selection.include_agents {
+        if include_agents {
             space_bundle.agents = AgentsExtractor::new(space_client.clone(), None)
                 .search_agents(None)
                 .await?;
         }
 
-        if selection.include_tools {
+        if include_tools {
             space_bundle.tools = ToolsExtractor::new(space_client, None)
                 .search_tools(None)
                 .await?;
         }
 
-        if options.expand_dependencies {
+        if options.expand_dependencies && (include_agents || include_tools || include_workflows) {
             expand_dependencies(client, space_id, &mut space_bundle).await?;
         }
 
@@ -181,8 +216,55 @@ pub async fn push_sync(
     options: &SyncOptions,
 ) -> Result<SyncSummary> {
     let mut summary = SyncSummary::default();
+    let include_spaces = !bundle.spaces.is_empty()
+        && capability_allowed(
+            client,
+            ApiCapability::Spaces,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_saved_objects = bundle
+        .by_space
+        .values()
+        .any(|space_bundle| !space_bundle.saved_objects.is_empty())
+        && capability_allowed(
+            client,
+            ApiCapability::SavedObjects,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_workflows = bundle
+        .by_space
+        .values()
+        .any(|space_bundle| !space_bundle.workflows.is_empty())
+        && capability_allowed(
+            client,
+            ApiCapability::Workflows,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_agents = bundle
+        .by_space
+        .values()
+        .any(|space_bundle| !space_bundle.agents.is_empty())
+        && capability_allowed(
+            client,
+            ApiCapability::Agents,
+            &options.unsupported_api_policy,
+        )
+        .await?;
+    let include_tools = bundle
+        .by_space
+        .values()
+        .any(|space_bundle| !space_bundle.tools.is_empty())
+        && capability_allowed(
+            client,
+            ApiCapability::Tools,
+            &options.unsupported_api_policy,
+        )
+        .await?;
 
-    if !bundle.spaces.is_empty() {
+    if include_spaces {
         summary.spaces_attempted = bundle.spaces.len();
         summary.spaces_applied = SpacesLoader::new(client.clone())
             .with_overwrite(options.overwrite)
@@ -193,29 +275,61 @@ pub async fn push_sync(
     for (space_id, space_bundle) in &bundle.by_space {
         let space_client = client.space(space_id)?;
 
-        summary.saved_objects_attempted += space_bundle.saved_objects.len();
-        summary.saved_objects_applied += SavedObjectsLoader::new(space_client.clone())
-            .with_overwrite(options.overwrite)
-            .load(space_bundle.saved_objects.clone())
-            .await?;
+        if include_saved_objects {
+            summary.saved_objects_attempted += space_bundle.saved_objects.len();
+            summary.saved_objects_applied += SavedObjectsLoader::new(space_client.clone())
+                .with_overwrite(options.overwrite)
+                .load(space_bundle.saved_objects.clone())
+                .await?;
+        }
 
-        summary.tools_attempted += space_bundle.tools.len();
-        summary.tools_applied += ToolsLoader::new(space_client.clone())
-            .load(space_bundle.tools.clone())
-            .await?;
+        if include_tools {
+            summary.tools_attempted += space_bundle.tools.len();
+            summary.tools_applied += ToolsLoader::new(space_client.clone())
+                .load(space_bundle.tools.clone())
+                .await?;
+        }
 
-        summary.agents_attempted += space_bundle.agents.len();
-        summary.agents_applied += AgentsLoader::new(space_client.clone())
-            .load(space_bundle.agents.clone())
-            .await?;
+        if include_agents {
+            summary.agents_attempted += space_bundle.agents.len();
+            summary.agents_applied += AgentsLoader::new(space_client.clone())
+                .load(space_bundle.agents.clone())
+                .await?;
+        }
 
-        summary.workflows_attempted += space_bundle.workflows.len();
-        summary.workflows_applied += WorkflowsLoader::new(space_client)
-            .load(space_bundle.workflows.clone())
-            .await?;
+        if include_workflows {
+            summary.workflows_attempted += space_bundle.workflows.len();
+            summary.workflows_applied += WorkflowsLoader::new(space_client)
+                .load(space_bundle.workflows.clone())
+                .await?;
+        }
     }
 
     Ok(summary)
+}
+
+async fn capability_allowed(
+    client: &KibanaClient,
+    capability: ApiCapability,
+    policy: &UnsupportedApiPolicy,
+) -> Result<bool> {
+    if *policy == UnsupportedApiPolicy::Force {
+        return Ok(true);
+    }
+
+    let version = client.server_version().await?;
+    if KibanaClient::supports_capability(&version, capability) {
+        return Ok(true);
+    }
+
+    let reason = KibanaClient::unsupported_capability_reason(&version, capability);
+    match policy {
+        UnsupportedApiPolicy::Skip => tracing::debug!("{reason}; skipping"),
+        UnsupportedApiPolicy::Warn => tracing::warn!("{reason}; skipping"),
+        UnsupportedApiPolicy::Force => {}
+    }
+
+    Ok(false)
 }
 
 pub async fn expand_dependencies(
