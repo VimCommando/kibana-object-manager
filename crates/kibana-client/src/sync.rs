@@ -101,6 +101,29 @@ pub struct ApiCapabilityWarning {
     pub message: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DependencyExpansionCapabilities {
+    pub agents: bool,
+    pub tools: bool,
+    pub workflows: bool,
+}
+
+impl DependencyExpansionCapabilities {
+    pub fn all() -> Self {
+        Self {
+            agents: true,
+            tools: true,
+            workflows: true,
+        }
+    }
+}
+
+impl Default for DependencyExpansionCapabilities {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
 pub fn plan_capabilities(
     version: &KibanaVersion,
     capabilities: impl IntoIterator<Item = ApiCapability>,
@@ -201,7 +224,17 @@ pub async fn pull_sync(
         }
 
         if options.expand_dependencies && (include_agents || include_tools || include_workflows) {
-            expand_dependencies(client, space_id, &mut space_bundle).await?;
+            expand_dependencies(
+                client,
+                space_id,
+                &mut space_bundle,
+                DependencyExpansionCapabilities {
+                    agents: include_agents,
+                    tools: include_tools,
+                    workflows: include_workflows,
+                },
+            )
+            .await?;
         }
 
         bundle.by_space.insert(space_id.clone(), space_bundle);
@@ -336,36 +369,48 @@ pub async fn expand_dependencies(
     client: &KibanaClient,
     space_id: &str,
     bundle: &mut SpaceBundle,
+    capabilities: DependencyExpansionCapabilities,
 ) -> Result<()> {
     let space_client = client.space(space_id)?;
-    let existing_agents = ids(&bundle.agents);
-    let existing_tools = ids(&bundle.tools);
-    let existing_workflows = ids(&bundle.workflows);
+    let mut existing_agents = ids(&bundle.agents);
+    let mut existing_tools = ids(&bundle.tools);
+    let mut existing_workflows = ids(&bundle.workflows);
+    let mut processed = HashSet::new();
+    let mut pending = Vec::new();
 
-    let mut wanted = HashSet::new();
     for agent in &bundle.agents {
-        wanted.extend(find_agent_dependencies(agent));
+        pending.extend(find_agent_dependencies(agent));
     }
     for tool in &bundle.tools {
-        wanted.extend(find_tool_dependencies(tool));
+        pending.extend(find_tool_dependencies(tool));
     }
     for workflow in &bundle.workflows {
-        wanted.extend(find_workflow_dependencies(workflow));
+        pending.extend(find_workflow_dependencies(workflow));
     }
 
-    for dependency in wanted {
+    while let Some(dependency) = pending.pop() {
+        if !processed.insert(dependency.clone()) {
+            continue;
+        }
+
         match dependency {
-            Dependency::Agent(id) if !existing_agents.contains(&id) => {
+            Dependency::Agent(id) if !existing_agents.contains(&id) && capabilities.agents => {
                 let fetched =
                     fetch_dependency(&space_client, "api/agent_builder/agents", &id).await?;
+                existing_agents.insert(id);
+                pending.extend(find_agent_dependencies(&fetched));
                 bundle.agents.push(fetched);
             }
-            Dependency::Tool(id) if !existing_tools.contains(&id) => {
+            Dependency::Tool(id) if !existing_tools.contains(&id) && capabilities.tools => {
                 let fetched =
                     fetch_dependency(&space_client, "api/agent_builder/tools", &id).await?;
+                existing_tools.insert(id);
+                pending.extend(find_tool_dependencies(&fetched));
                 bundle.tools.push(fetched);
             }
-            Dependency::Workflow(id) if !existing_workflows.contains(&id) => {
+            Dependency::Workflow(id)
+                if !existing_workflows.contains(&id) && capabilities.workflows =>
+            {
                 let path = format!("api/workflows/{id}");
                 let response = space_client.get_internal(&path).await?;
                 if !response.status().is_success() {
@@ -373,7 +418,19 @@ pub async fn expand_dependencies(
                     let body = response.text().await.unwrap_or_default();
                     return Err(Error::api_response(status, body));
                 }
-                bundle.workflows.push(response.json().await?);
+                let fetched = response.json().await?;
+                existing_workflows.insert(id);
+                pending.extend(find_workflow_dependencies(&fetched));
+                bundle.workflows.push(fetched);
+            }
+            Dependency::Agent(id) if !capabilities.agents => {
+                tracing::debug!("skipping dependent agent {id}; agent API is not enabled")
+            }
+            Dependency::Tool(id) if !capabilities.tools => {
+                tracing::debug!("skipping dependent tool {id}; tool API is not enabled")
+            }
+            Dependency::Workflow(id) if !capabilities.workflows => {
+                tracing::debug!("skipping dependent workflow {id}; workflow API is not enabled")
             }
             _ => {}
         }
