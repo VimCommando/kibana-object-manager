@@ -47,20 +47,20 @@ cargo build --release
 
 ## Library Crate
 
-This repository also publishes `kibana-client` as a standalone library for Rust
+This repository also publishes `kibana-sync` as a standalone library for Rust
 applications that need Kibana API behavior without the `kibob` project layout or
 CLI policy.
 
 ```toml
 [dependencies]
-kibana-client = "0.1"
+kibana-sync = "0.1"
 ```
 
 ```rust,no_run
-use kibana_client::{Auth, KibanaClient};
+use kibana_sync::{Auth, KibanaClient};
 use url::Url;
 
-# async fn run() -> kibana_client::Result<()> {
+# async fn run() -> kibana_sync::Result<()> {
 let client = KibanaClient::builder(Url::parse("http://localhost:5601")?)
     .auth(Auth::basic("elastic", "changeme"))
     .max_concurrency(8)
@@ -76,7 +76,7 @@ let version = esdiag.server_version().await?;
 # }
 ```
 
-`kibana-client` exposes saved objects, spaces, agents, tools, workflows,
+`kibana-sync` exposes saved objects, spaces, agents, tools, workflows,
 capability gates, dependency discovery, tracing instrumentation, and
 storage-neutral sync models. It does not read `spaces.yml`; `kibob` reads that
 file in the CLI crate and passes the resulting registry into the library.

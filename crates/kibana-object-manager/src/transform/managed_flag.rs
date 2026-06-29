@@ -3,7 +3,7 @@
 //! Adds the "managed: true" flag to objects being imported to Kibana.
 
 use crate::etl::Transformer;
-use kibana_client::Result;
+use kibana_sync::Result;
 use serde_json::{Value, json};
 
 /// Transformer that adds a "managed" flag to objects

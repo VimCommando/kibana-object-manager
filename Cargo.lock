@@ -776,22 +776,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kibana-client"
-version = "0.1.0"
-dependencies = [
- "base64",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "url",
- "yaml_serde",
-]
-
-[[package]]
 name = "kibana-object-manager"
 version = "0.3.0"
 dependencies = [
@@ -799,7 +783,7 @@ dependencies = [
  "dotenvy",
  "eyre",
  "json5",
- "kibana-client",
+ "kibana-sync",
  "log",
  "owo-colors",
  "regex",
@@ -811,6 +795,22 @@ dependencies = [
  "tokio",
  "tracing-log",
  "tracing-subscriber",
+ "url",
+ "yaml_serde",
+]
+
+[[package]]
+name = "kibana-sync"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
  "url",
  "yaml_serde",
 ]

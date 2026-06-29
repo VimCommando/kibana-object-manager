@@ -3,7 +3,7 @@
 use crate::etl::{Extractor, Loader};
 use crate::storage::{from_json5_str, to_string_with_multiline};
 
-use kibana_client::{Error, Result, ResultContext};
+use kibana_sync::{Error, Result, ResultContext};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 

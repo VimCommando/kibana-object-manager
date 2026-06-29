@@ -4,7 +4,7 @@
 //! for better version control and readability in saved JSON files.
 
 use crate::etl::Transformer;
-use kibana_client::Result;
+use kibana_sync::Result;
 use serde_json::Value;
 
 /// Transformer that formats YAML string fields to multi-line format

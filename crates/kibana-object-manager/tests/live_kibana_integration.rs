@@ -59,7 +59,7 @@ async fn live_saved_objects_roundtrip_in_owned_space() -> Result<()> {
         assert_eq!(exported.len(), 1);
         assert_eq!(exported[0]["type"], "index-pattern");
         assert!(exported[0].get("attributes").is_some());
-        Ok::<(), kibana_client::Error>(())
+        Ok::<(), kibana_sync::Error>(())
     }
     .await;
 
@@ -82,7 +82,7 @@ async fn live_spaces_create_fetch_and_delete() -> Result<()> {
         let fetched = extractor.fetch_space(&space_id).await?;
         assert_eq!(fetched["id"], space_id);
         assert_eq!(fetched["name"], space_id);
-        Ok::<(), kibana_client::Error>(())
+        Ok::<(), kibana_sync::Error>(())
     }
     .await;
 
@@ -143,7 +143,7 @@ async fn live_supported_api_smoke_tests() -> Result<()> {
             }
         }
 
-        Ok::<(), kibana_client::Error>(())
+        Ok::<(), kibana_sync::Error>(())
     }
     .await;
 
@@ -153,7 +153,7 @@ async fn live_supported_api_smoke_tests() -> Result<()> {
     Ok(())
 }
 
-fn optional_api_unavailable(error: &kibana_client::Error) -> bool {
+fn optional_api_unavailable(error: &kibana_sync::Error) -> bool {
     if std::env::var("KIBANA_TEST_STRICT_OPTIONAL_APIS").as_deref() == Ok("1") {
         return false;
     }

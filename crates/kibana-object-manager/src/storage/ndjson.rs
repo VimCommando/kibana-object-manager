@@ -2,7 +2,7 @@
 
 use crate::etl::{Extractor, Loader};
 
-use kibana_client::{Result, ResultContext};
+use kibana_sync::{Result, ResultContext};
 use serde_json::Value;
 use std::path::Path;
 

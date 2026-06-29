@@ -6,7 +6,7 @@
 //! No parsing or validation is performed - this is purely for whitespace preservation.
 
 use crate::etl::Transformer;
-use kibana_client::Result;
+use kibana_sync::Result;
 use serde_json::Value;
 
 /// Transformer that marks multiline string fields for triple-quote formatting

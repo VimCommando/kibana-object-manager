@@ -1768,7 +1768,7 @@ pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
     let formatted_workflows = workflows
         .into_iter()
         .map(|w| formatter.transform(w))
-        .collect::<std::result::Result<Vec<_>, kibana_client::Error>>();
+        .collect::<std::result::Result<Vec<_>, kibana_sync::Error>>();
     let formatted_workflows = formatted_workflows?;
 
     // Write each workflow to its own JSON file
@@ -2197,7 +2197,7 @@ pub async fn pull_agents(project_dir: impl AsRef<Path>) -> Result<usize> {
     let agents: Vec<_> = agents
         .into_iter()
         .map(|agent| formatter.transform(agent))
-        .collect::<std::result::Result<_, kibana_client::Error>>()?;
+        .collect::<std::result::Result<_, kibana_sync::Error>>()?;
 
     // Write each agent to its own JSON file
     let agents_dir = project_dir.join("agents");
@@ -2622,7 +2622,7 @@ pub async fn pull_tools(project_dir: impl AsRef<Path>) -> Result<usize> {
     let tools: Vec<_> = tools
         .into_iter()
         .map(|tool| formatter.transform(tool))
-        .collect::<std::result::Result<_, kibana_client::Error>>()?;
+        .collect::<std::result::Result<_, kibana_sync::Error>>()?;
 
     // Write each tool to its own JSON file
     let tools_dir = project_dir.join("tools");
@@ -2819,7 +2819,7 @@ async fn pull_space_workflows(project_dir: &Path, client: &KibanaClient) -> Resu
     let formatted_workflows = workflows
         .into_iter()
         .map(|w| formatter.transform(w))
-        .collect::<std::result::Result<Vec<_>, kibana_client::Error>>();
+        .collect::<std::result::Result<Vec<_>, kibana_sync::Error>>();
     let formatted_workflows = formatted_workflows?;
 
     // Write each workflow to its own JSON file
@@ -2869,7 +2869,7 @@ async fn pull_space_agents(project_dir: &Path, client: &KibanaClient) -> Result<
     let agents: Vec<_> = agents
         .into_iter()
         .map(|agent| formatter.transform(agent))
-        .collect::<std::result::Result<_, kibana_client::Error>>()?;
+        .collect::<std::result::Result<_, kibana_sync::Error>>()?;
 
     // Write each agent to its own JSON file
     let agents_dir = get_space_agents_dir(project_dir, space_id);
@@ -2916,7 +2916,7 @@ async fn pull_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<u
     let tools: Vec<_> = tools
         .into_iter()
         .map(|tool| formatter.transform(tool))
-        .collect::<std::result::Result<_, kibana_client::Error>>()?;
+        .collect::<std::result::Result<_, kibana_sync::Error>>()?;
 
     // Write each tool to its own JSON file
     let tools_dir = get_space_tools_dir(project_dir, space_id);

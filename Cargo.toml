@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/kibana-client",
+    "crates/kibana-sync",
     "crates/kibana-object-manager",
 ]
 resolver = "3"

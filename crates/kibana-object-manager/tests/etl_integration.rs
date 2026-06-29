@@ -58,7 +58,7 @@ impl MockSavedObjectsExtractor {
 impl Extractor for MockSavedObjectsExtractor {
     type Item = Value;
 
-    async fn extract(&self) -> kibana_client::Result<Vec<Self::Item>> {
+    async fn extract(&self) -> kibana_sync::Result<Vec<Self::Item>> {
         Ok(self.objects.clone())
     }
 }
@@ -80,7 +80,7 @@ impl Transformer for FieldDropper {
     type Input = Value;
     type Output = Value;
 
-    fn transform(&self, mut input: Self::Input) -> kibana_client::Result<Self::Output> {
+    fn transform(&self, mut input: Self::Input) -> kibana_sync::Result<Self::Output> {
         // Drop fields from root object
         if let Some(obj) = input.as_object_mut() {
             for field in &self.fields_to_drop {
@@ -105,7 +105,7 @@ impl Transformer for ManagedFlagAdder {
     type Input = Value;
     type Output = Value;
 
-    fn transform(&self, mut input: Self::Input) -> kibana_client::Result<Self::Output> {
+    fn transform(&self, mut input: Self::Input) -> kibana_sync::Result<Self::Output> {
         if let Some(obj) = input.as_object_mut() {
             obj.insert("managed".to_string(), json!(true));
         }
@@ -181,7 +181,7 @@ async fn test_agent_multiline_instructions_formatting() -> Result<()> {
     impl Extractor for SingleAgentExtractor {
         type Item = Value;
 
-        async fn extract(&self) -> kibana_client::Result<Vec<Self::Item>> {
+        async fn extract(&self) -> kibana_sync::Result<Vec<Self::Item>> {
             Ok(vec![self.agent.clone()])
         }
     }
@@ -277,7 +277,7 @@ async fn test_tool_multiline_query_formatting() -> Result<()> {
     impl Extractor for SingleToolExtractor {
         type Item = Value;
 
-        async fn extract(&self) -> kibana_client::Result<Vec<Self::Item>> {
+        async fn extract(&self) -> kibana_sync::Result<Vec<Self::Item>> {
             Ok(vec![self.tool.clone()])
         }
     }

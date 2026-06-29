@@ -18,14 +18,14 @@ ESDiag also needs to bundle and replay Kibana assets as files. That means filesy
 
 **Goals:**
 
-- Convert the repository to a Cargo workspace with a reusable `kibana-client` crate and a `kibana-object-manager` CLI crate.
-- Make `kibana-client` consumable by any Rust crate through explicit client configuration rather than implicit CLI project discovery.
-- Make `kibana-client` independently publishable so ESDiag can depend on the crate directly.
+- Convert the repository to a Cargo workspace with a reusable `kibana-sync` crate and a `kibana-object-manager` CLI crate.
+- Make `kibana-sync` consumable by any Rust crate through explicit client configuration rather than implicit CLI project discovery.
+- Make `kibana-sync` independently publishable so ESDiag can depend on the crate directly.
 - Keep endpoint-specific Kibana behavior in the library, including required methods, paths, headers, multipart handling, and version/capability gates.
 - Provide storage-neutral sync operations so consumers can pull or push all supported API families without depending on `kibob` command behavior.
 - Provide explicit filesystem-backed manifest and bundle sync APIs so consumers can version-control, ship, and replay Kibana assets.
 - Use `tracing` for library instrumentation and avoid binding the library to a concrete logger.
-- Introduce a dedicated `kibana-client` error enum before external publication.
+- Introduce a dedicated `kibana-sync` error enum before external publication.
 - Preserve existing `kibob` command behavior, file formats, and CLI flags while making `kibob` call into the library crate.
 - Keep reusable domain logic independent from `clap`, `dotenvy`, `env_logger`, `owo-colors`, git integration, terminal output, command exit policy, and local migration code.
 
@@ -45,11 +45,11 @@ The repository will become a Cargo workspace:
 
 ```text
 crates/
-  kibana-client/
+  kibana-sync/
   kibana-object-manager/
 ```
 
-`kibana-client` will expose reusable Kibana API behavior, sync models, manifest schemas, and explicit filesystem bundle helpers. `kibana-object-manager` will own the `kibob` binary, command defaults, project-root selection, migration behavior, and terminal presentation.
+`kibana-sync` will expose reusable Kibana API behavior, sync models, manifest schemas, and explicit filesystem bundle helpers. `kibana-object-manager` will own the `kibob` binary, command defaults, project-root selection, migration behavior, and terminal presentation.
 
 Rationale: This makes the dependency direction explicit. The CLI can depend on the library, while the library cannot accidentally depend on CLI-only modules.
 
@@ -57,7 +57,7 @@ Alternative considered: keep a single package with feature flags. Rejected becau
 
 ### 2) Remove filesystem-bound client construction
 
-`kibana-client` constructors will accept explicit configuration:
+`kibana-sync` constructors will accept explicit configuration:
 
 ```rust
 KibanaClient::builder(url)
@@ -118,7 +118,7 @@ Alternative considered: move current `pull_saved_objects` / `push_saved_objects`
 
 ### 5) Keep ETL traits only if they improve the library API
 
-The current `Extractor`, `Transformer`, `Loader`, and `Pipeline` traits are useful internally and can move into `kibana-client` if the API modules continue to use them. They should not force consumers into an ETL-only API. The library should also expose direct methods and sync services.
+The current `Extractor`, `Transformer`, `Loader`, and `Pipeline` traits are useful internally and can move into `kibana-sync` if the API modules continue to use them. They should not force consumers into an ETL-only API. The library should also expose direct methods and sync services.
 
 Data flow after the refactor:
 
@@ -127,7 +127,7 @@ kibob pull
   -> read spaces.yml and manifests from project directory
   -> build KibanaClient from explicit config
   -> create SyncSelection / API manifests
-  -> kibana-client fetches resources and dependencies
+  -> kibana-sync fetches resources and dependencies
   -> kibob writes JSON5/YAML/NDJSON files
 
 ESDiag setup
@@ -146,17 +146,17 @@ The CLI crate will retain:
 - logging presentation, colored output, and warning exit status mapping.
 - migration and `togo` packaging.
 
-Rationale: These behaviors define `kibob`, not a general Kibana client. Reusable manifest schemas, bundle schemas, and path-explicit filesystem readers/writers are not CLI policy and may live in `kibana-client`.
+Rationale: These behaviors define `kibob`, not a general Kibana client. Reusable manifest schemas, bundle schemas, and path-explicit filesystem readers/writers are not CLI policy and may live in `kibana-sync`.
 
 ### 7) Preserve capability gates in the library, apply command policy in the CLI
 
-`kibana-client` will expose `ApiCapability`, minimum versions, version parsing, server version retrieval, and support checks. The CLI decides whether unsupported requested APIs produce warnings, skipped operations, or status code 2.
+`kibana-sync` will expose `ApiCapability`, minimum versions, version parsing, server version retrieval, and support checks. The CLI decides whether unsupported requested APIs produce warnings, skipped operations, or status code 2.
 
 Rationale: Support detection is reusable; command exit policy is not.
 
-### 8) Publish `kibana-client` independently
+### 8) Publish `kibana-sync` independently
 
-`kibana-client` will be prepared as an independently published crate, not merely a path/git dependency used by sibling crates. Its manifest will include publish-ready package metadata, license, repository, documentation, keywords/categories, and a README or crate-level documentation suitable for docs.rs.
+`kibana-sync` will be prepared as an independently published crate, not merely a path/git dependency used by sibling crates. Its manifest will include publish-ready package metadata, license, repository, documentation, keywords/categories, and a README or crate-level documentation suitable for docs.rs.
 
 Rationale: ESDiag should be able to depend on the client crate as a normal library dependency, and publication forces a cleaner public API boundary.
 
@@ -172,7 +172,7 @@ Alternative considered: keep `log` in the library and let ESDiag bridge log reco
 
 ### 10) Introduce a dedicated client error enum
 
-`kibana-client` will expose a dedicated non-exhaustive error enum and a crate-local `Result<T>` alias. The error enum will cover HTTP transport errors, URL/header construction, JSON/YAML/NDJSON serialization, multipart construction, semver parsing, unsupported capability checks, invalid or unknown spaces, missing resource identifiers, API response failures with status/body, and sync/dependency failures.
+`kibana-sync` will expose a dedicated non-exhaustive error enum and a crate-local `Result<T>` alias. The error enum will cover HTTP transport errors, URL/header construction, JSON/YAML/NDJSON serialization, multipart construction, semver parsing, unsupported capability checks, invalid or unknown spaces, missing resource identifiers, API response failures with status/body, and sync/dependency failures.
 
 The CLI crate may convert these errors into `eyre::Report` at its boundary to preserve ergonomic CLI error handling and warning exit behavior.
 
@@ -184,7 +184,7 @@ Alternative considered: keep `eyre` in the public API for the first release. Rej
 
 - [Risk] The split can become a large mechanical refactor with high merge risk. -> Mitigation: move code in layers: workspace first, client construction second, API modules third, CLI orchestration last.
 - [Risk] Public API may overfit `kibob` and still feel awkward in ESDiag. -> Mitigation: require constructors and sync APIs to accept explicit values and storage-neutral bundles.
-- [Risk] Moving ETL traits into `kibana-client` may make the library feel too framework-like. -> Mitigation: keep direct API methods public and treat ETL traits as optional building blocks.
+- [Risk] Moving ETL traits into `kibana-sync` may make the library feel too framework-like. -> Mitigation: keep direct API methods public and treat ETL traits as optional building blocks.
 - [Risk] `kibob` behavior may regress while internals move. -> Mitigation: run existing integration tests and add focused tests around CLI path adaptation and library constructors.
 - [Risk] External consumers may need richer typed models later. -> Mitigation: keep `serde_json::Value` payload support as the stable baseline and add typed wrappers incrementally.
 - [Risk] Designing the error enum too narrowly could make early releases painful to consume. -> Mitigation: mark the enum `#[non_exhaustive]`, preserve source errors, and include API status/body context.
@@ -194,14 +194,14 @@ Alternative considered: keep `eyre` in the public API for the first release. Rej
 ## Migration Plan
 
 1. Convert the repository root to a Cargo workspace and move the current binary package to `crates/kibana-object-manager`.
-2. Create `crates/kibana-client` with package metadata and library exports.
+2. Create `crates/kibana-sync` with package metadata and library exports.
 3. Add the public error enum, crate-local `Result<T>` alias, and conversion points from request/serialization/version errors.
-4. Move auth, client request plumbing, version/capability logic, endpoint modules, dependency discovery, and any required ETL traits into `kibana-client`.
+4. Move auth, client request plumbing, version/capability logic, endpoint modules, dependency discovery, and any required ETL traits into `kibana-sync`.
 5. Replace manifest-bound client construction with explicit space registry configuration.
 6. Replace library `log` instrumentation with `tracing` events and keep subscriber initialization in the CLI crate.
 7. Add storage-neutral sync models and services over the existing API modules.
 8. Add explicit filesystem-backed manifest and bundle readers/writers over the sync models.
-9. Update `kibana-object-manager` imports to use `kibana-client`.
+9. Update `kibana-object-manager` imports to use `kibana-sync`.
 10. Keep transforms, migration, default path selection, and CLI helpers in the CLI crate, adapting them to library sync/API types.
 11. Update docs and examples to show both `kibob` usage and library usage.
 12. Run the full test suite, publish dry-run, and fix tests to reflect new crate paths.

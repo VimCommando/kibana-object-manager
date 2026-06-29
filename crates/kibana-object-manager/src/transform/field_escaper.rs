@@ -4,7 +4,7 @@
 //! in Kibana saved objects that store nested JSON as strings.
 
 use crate::etl::Transformer;
-use kibana_client::{Result, ResultContext};
+use kibana_sync::{Result, ResultContext};
 use serde_json::Value;
 
 /// Transformer that escapes specific fields (converts objects to JSON strings)

@@ -4,7 +4,7 @@
 //! that should not be version controlled.
 
 use crate::etl::Transformer;
-use kibana_client::Result;
+use kibana_sync::Result;
 use serde_json::Value;
 
 /// Transformer that drops specified fields from objects

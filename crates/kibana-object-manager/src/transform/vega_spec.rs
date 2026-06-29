@@ -1,5 +1,5 @@
 use crate::etl::Transformer;
-use kibana_client::{Result, ResultContext};
+use kibana_sync::{Result, ResultContext};
 use serde_json::{Map, Value};
 
 /// Transformer that unescapes Vega specification fields for readable Git diffs.
