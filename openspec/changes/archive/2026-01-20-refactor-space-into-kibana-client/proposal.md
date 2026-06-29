@@ -17,7 +17,7 @@ The current architecture separates space management (`SpaceContext`) from HTTP c
 
 ## Impact
 
-- Affected specs: kibana-client (new capability)
+- Affected specs: kibana-sync (new capability)
 - Affected code:
   - `src/client/kibana.rs` - Major refactor to two structs
   - `src/client/mod.rs` - Update exports
