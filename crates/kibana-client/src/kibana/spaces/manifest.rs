@@ -134,7 +134,7 @@ impl SpacesManifest {
             )
         })?;
 
-        let manifest: Self = serde_yaml::from_str(&content)
+        let manifest: Self = yaml_serde::from_str(&content)
             .with_context(|| "Failed to parse spaces manifest YAML")?;
 
         Ok(manifest)
@@ -147,7 +147,7 @@ impl SpacesManifest {
             std::fs::create_dir_all(parent)?;
         }
 
-        let yaml = serde_yaml::to_string(self)
+        let yaml = yaml_serde::to_string(self)
             .with_context(|| "Failed to serialize spaces manifest to YAML")?;
 
         std::fs::write(path.as_ref(), yaml).with_context(|| {
@@ -245,7 +245,7 @@ mod tests {
             SpaceEntry::new("space2".to_string(), "Space 2".to_string()),
         ]);
         manifest.set_kibana_version("9.3.2");
-        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        let yaml = yaml_serde::to_string(&manifest).unwrap();
 
         assert!(yaml.contains("kibana:"));
         assert!(yaml.contains("version: 9.3.2"));
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_backward_compatible_without_kibana_metadata() {
         let yaml = "spaces:\n  - id: default\n    name: Default\n";
-        let manifest: SpacesManifest = serde_yaml::from_str(yaml).unwrap();
+        let manifest: SpacesManifest = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(manifest.kibana_version(), None);
         assert_eq!(manifest.count(), 1);
         assert!(manifest.contains("default"));

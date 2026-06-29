@@ -57,7 +57,7 @@ pub enum Error {
     HeaderValue(reqwest::header::InvalidHeaderValue),
     HeaderToStr(reqwest::header::ToStrError),
     Json(serde_json::Error),
-    Yaml(serde_yaml::Error),
+    Yaml(yaml_serde::Error),
     Version(semver::Error),
     Io(std::io::Error),
     SemaphoreClosed,
@@ -182,8 +182,8 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl From<serde_yaml::Error> for Error {
-    fn from(err: serde_yaml::Error) -> Self {
+impl From<yaml_serde::Error> for Error {
+    fn from(err: yaml_serde::Error) -> Self {
         Self::Yaml(err)
     }
 }

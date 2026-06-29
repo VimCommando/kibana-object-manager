@@ -71,7 +71,7 @@ impl ToolsManifest {
             format!("Failed to read tools manifest: {}", path.as_ref().display())
         })?;
 
-        let manifest: Self = serde_yaml::from_str(&content)
+        let manifest: Self = yaml_serde::from_str(&content)
             .with_context(|| "Failed to parse tools manifest YAML")?;
 
         Ok(manifest)
@@ -84,7 +84,7 @@ impl ToolsManifest {
             std::fs::create_dir_all(parent)?;
         }
 
-        let yaml = serde_yaml::to_string(self)
+        let yaml = yaml_serde::to_string(self)
             .with_context(|| "Failed to serialize tools manifest to YAML")?;
 
         std::fs::write(path.as_ref(), yaml).with_context(|| {
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_yaml_format() {
         let manifest = ToolsManifest::with_tools(vec!["tool1".to_string(), "tool2".to_string()]);
-        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        let yaml = yaml_serde::to_string(&manifest).unwrap();
 
         assert!(yaml.contains("tools:"));
         assert!(yaml.contains("tool1"));

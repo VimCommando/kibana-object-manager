@@ -124,7 +124,7 @@ impl WorkflowsManifest {
             )
         })?;
 
-        let manifest: Self = serde_yaml::from_str(&content)
+        let manifest: Self = yaml_serde::from_str(&content)
             .with_context(|| "Failed to parse workflows manifest YAML")?;
 
         Ok(manifest)
@@ -137,7 +137,7 @@ impl WorkflowsManifest {
             std::fs::create_dir_all(parent)?;
         }
 
-        let yaml = serde_yaml::to_string(self)
+        let yaml = yaml_serde::to_string(self)
             .with_context(|| "Failed to serialize workflows manifest to YAML")?;
 
         std::fs::write(path.as_ref(), yaml).with_context(|| {
@@ -279,7 +279,7 @@ mod tests {
             WorkflowEntry::new("wf1", "workflow1"),
             WorkflowEntry::new("wf2", "workflow2"),
         ]);
-        let yaml = serde_yaml::to_string(&manifest).unwrap();
+        let yaml = yaml_serde::to_string(&manifest).unwrap();
 
         assert!(yaml.contains("workflows:"));
         assert!(yaml.contains("id: wf1"));

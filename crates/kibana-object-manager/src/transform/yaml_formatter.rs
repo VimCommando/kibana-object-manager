@@ -164,16 +164,16 @@ impl YamlFormatter {
     /// # Note
     ///
     /// This function attempts to preserve the original YAML structure,
-    /// including key order, but this depends on the serde_yaml implementation.
+    /// including key order, but this depends on the yaml_serde implementation.
     fn format_yaml_string(yaml_str: &str) -> std::result::Result<String, String> {
         // Parse YAML to validate and get structured data
-        let parsed: serde_yaml::Value =
-            serde_yaml::from_str(yaml_str).map_err(|e| format!("Invalid YAML: {}", e))?;
+        let parsed: yaml_serde::Value =
+            yaml_serde::from_str(yaml_str).map_err(|e| format!("Invalid YAML: {}", e))?;
 
         // Re-serialize with proper formatting
-        // Note: serde_yaml should preserve key order in most cases,
+        // Note: yaml_serde should preserve key order in most cases,
         // but this is not guaranteed by the YAML 1.2 spec
-        serde_yaml::to_string(&parsed).map_err(|e| format!("Failed to serialize YAML: {}", e))
+        yaml_serde::to_string(&parsed).map_err(|e| format!("Failed to serialize YAML: {}", e))
     }
 }
 
@@ -524,8 +524,8 @@ mod tests {
         let second_yaml = second["yaml"].as_str().unwrap();
 
         // Parse both to verify they're semantically equivalent
-        let first_parsed: serde_yaml::Value = serde_yaml::from_str(first_yaml).unwrap();
-        let second_parsed: serde_yaml::Value = serde_yaml::from_str(second_yaml).unwrap();
+        let first_parsed: yaml_serde::Value = yaml_serde::from_str(first_yaml).unwrap();
+        let second_parsed: yaml_serde::Value = yaml_serde::from_str(second_yaml).unwrap();
 
         assert_eq!(first_parsed, second_parsed);
     }
