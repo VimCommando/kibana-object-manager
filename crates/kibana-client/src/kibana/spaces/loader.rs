@@ -82,16 +82,14 @@ impl Loader for SpacesLoader {
 
                 // Check existence
                 let path = format!("/api/spaces/space/{}", space_id);
-                let exists = match client.get(&path).await?.status().as_u16() {
+                let response = client.get(&path).await?;
+                let status = response.status();
+                let exists = match status.as_u16() {
                     200 => true,
                     404 => false,
-                    status => {
-                        tracing::warn!(
-                            "{} {} - unexpected status when checking existence",
-                            status.to_string(),
-                            space_id
-                        );
-                        false
+                    _ => {
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(Error::api_response(status, body));
                     }
                 };
 
@@ -133,8 +131,8 @@ impl Loader for SpacesLoader {
                         count += 1;
                     }
                 }
-                Ok(Err(e)) => tracing::error!("Failed to load space: {}", e),
-                Err(e) => tracing::error!("Task panicked: {}", e),
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(Error::message(format!("space load task panicked: {e}"))),
             }
         }
 
@@ -147,7 +145,12 @@ impl Loader for SpacesLoader {
 mod tests {
     use super::*;
     use crate::client::Auth;
+    use reqwest::StatusCode;
     use serde_json::json;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+    use std::thread;
     use url::Url;
 
     #[test]
@@ -176,7 +179,73 @@ mod tests {
 
         let result = loader.load(vec![space]).await;
 
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
+        assert!(matches!(
+            result,
+            Err(Error::MissingResourceId { resource: "space" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_unexpected_existence_status_fails_with_response() {
+        let (url, request_rx, server) = start_one_response_server(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 11\r\n\r\nserver down",
+        );
+        let client = KibanaClient::new(url, Auth::None).unwrap();
+        let loader = SpacesLoader::new(client);
+
+        let result = loader
+            .load(vec![json!({
+                "id": "marketing",
+                "name": "Marketing"
+            })])
+            .await;
+
+        let request_line = request_rx.recv().unwrap();
+        server.join().unwrap();
+
+        assert_eq!(request_line, "GET /api/spaces/space/marketing HTTP/1.1");
+        assert!(matches!(
+            result,
+            Err(Error::ApiResponse {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body
+            }) if body == "server down"
+        ));
+    }
+
+    fn start_one_response_server(
+        response: &'static str,
+    ) -> (Url, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_request(stream, response, request_tx);
+        });
+
+        (url, request_rx, server)
+    }
+
+    fn handle_request(stream: TcpStream, response: &'static str, request_tx: mpsc::Sender<String>) {
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        request_tx
+            .send(request_line.trim_end().to_string())
+            .unwrap();
+
+        let mut header = String::new();
+        loop {
+            header.clear();
+            reader.read_line(&mut header).unwrap();
+            if header == "\r\n" || header.is_empty() {
+                break;
+            }
+        }
+
+        let mut stream = reader.into_inner();
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
     }
 }
