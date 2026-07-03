@@ -284,7 +284,7 @@ fn read_referenced_content(root: &Path) -> Result<Vec<ReferencedContent>> {
         .canonicalize()
         .with_context(|| format!("Failed to resolve skill directory: {}", root.display()))?;
     let mut files = Vec::new();
-    collect_markdown_files(root, &canonical_root, root, &mut files)?;
+    collect_markdown_files(&canonical_root, root, &mut files)?;
     files.sort();
     let metadata = read_referenced_content_metadata(root)?;
 
@@ -372,7 +372,6 @@ fn metadata_entry_for<'a>(
 }
 
 fn collect_markdown_files(
-    root: &Path,
     canonical_root: &Path,
     directory: &Path,
     files: &mut Vec<PathBuf>,
@@ -391,7 +390,7 @@ fn collect_markdown_files(
         }
 
         if path.is_dir() {
-            collect_markdown_files(root, canonical_root, &path, files)?;
+            collect_markdown_files(canonical_root, &path, files)?;
         } else if path.extension().and_then(|extension| extension.to_str()) == Some("md")
             && path.file_name().and_then(|name| name.to_str()) != Some(SKILL_FILE)
         {
@@ -399,7 +398,6 @@ fn collect_markdown_files(
         }
     }
 
-    let _ = root;
     Ok(())
 }
 

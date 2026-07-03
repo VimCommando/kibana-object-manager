@@ -2738,6 +2738,7 @@ pub async fn add_skills_to_manifest(
         }
     }
 
+    let filters_applied_before_fetch = file_path.is_none() && query.is_none();
     let new_skills: Vec<Value> = if let Some(file) = file_path {
         read_agent_builder_values_from_file(&file, "skill")?
     } else {
@@ -2757,6 +2758,8 @@ pub async fn add_skills_to_manifest(
         } else {
             log::info!("Searching skills via API in space {}...", space_id.cyan());
             let listed = extractor.search_skills(false).await?;
+            log::info!("Found {} skill(s) before filtering", listed.len());
+            let listed = filter_skills(listed, &include, &exclude)?;
             let mut skills = Vec::new();
             for skill in listed {
                 if is_readonly(&skill) {
@@ -2776,34 +2779,11 @@ pub async fn add_skills_to_manifest(
         }
     };
 
-    log::info!("Found {} skill(s) before filtering", new_skills.len());
-
-    let filtered_skills: Vec<Value> = {
-        let mut skills = new_skills;
-
-        if let Some(include_pattern) = &include {
-            let regex = regex::Regex::new(include_pattern)
-                .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
-            skills.retain(|skill| regex.is_match(skill_filter_field(skill)));
-            log::info!(
-                "After include filter '{}': {} skill(s)",
-                include_pattern,
-                skills.len()
-            );
-        }
-
-        if let Some(exclude_pattern) = &exclude {
-            let regex = regex::Regex::new(exclude_pattern)
-                .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
-            skills.retain(|skill| !regex.is_match(skill_filter_field(skill)));
-            log::info!(
-                "After exclude filter '{}': {} skill(s)",
-                exclude_pattern,
-                skills.len()
-            );
-        }
-
-        skills
+    let filtered_skills = if filters_applied_before_fetch {
+        new_skills
+    } else {
+        log::info!("Found {} skill(s) before filtering", new_skills.len());
+        filter_skills(new_skills, &include, &exclude)?
     };
 
     log::info!("Adding {} skill(s) after filtering", filtered_skills.len());
@@ -2928,6 +2908,36 @@ fn skill_filter_field(skill: &Value) -> &str {
         .or_else(|| skill.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
+}
+
+fn filter_skills(
+    mut skills: Vec<Value>,
+    include: &Option<String>,
+    exclude: &Option<String>,
+) -> Result<Vec<Value>> {
+    if let Some(include_pattern) = include {
+        let regex = regex::Regex::new(include_pattern)
+            .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+        skills.retain(|skill| regex.is_match(skill_filter_field(skill)));
+        log::info!(
+            "After include filter '{}': {} skill(s)",
+            include_pattern,
+            skills.len()
+        );
+    }
+
+    if let Some(exclude_pattern) = exclude {
+        let regex = regex::Regex::new(exclude_pattern)
+            .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+        skills.retain(|skill| !regex.is_match(skill_filter_field(skill)));
+        log::info!(
+            "After exclude filter '{}': {} skill(s)",
+            exclude_pattern,
+            skills.len()
+        );
+    }
+
+    Ok(skills)
 }
 
 /// Pull tools from Kibana to local directory

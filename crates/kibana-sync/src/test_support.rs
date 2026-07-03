@@ -3,8 +3,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use url::Url;
 
 #[derive(Clone, Debug)]
@@ -26,20 +30,38 @@ pub(crate) struct RecordedRequest {
 #[derive(Debug)]
 pub(crate) struct TestServer {
     url: Url,
+    addr: SocketAddr,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl TestServer {
     pub(crate) fn new(responses: Vec<MockResponse>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        listener
+            .set_nonblocking(true)
+            .expect("set test server nonblocking");
         let addr = listener.local_addr().expect("test server address");
         let requests = Arc::new(Mutex::new(Vec::new()));
         let thread_requests = requests.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let thread_running = running.clone();
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             for expected in responses {
-                let Ok((stream, _)) = listener.accept() else {
-                    break;
+                let stream = loop {
+                    if !thread_running.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => return,
+                    }
                 };
                 handle_connection(stream, expected, &thread_requests);
             }
@@ -47,7 +69,10 @@ impl TestServer {
 
         Self {
             url: server_url(addr),
+            addr,
             requests,
+            running,
+            handle: Some(handle),
         }
     }
 
@@ -64,6 +89,16 @@ impl TestServer {
 
     pub(crate) fn requests(&self) -> Vec<RecordedRequest> {
         self.requests.lock().expect("requests lock").clone()
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.addr);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
