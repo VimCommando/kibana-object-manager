@@ -49,6 +49,8 @@ Use a markdown-first per-space layout:
 
 ```text
 <space>/
+  manifest/
+    skills.yml
   skills/
     <skill-id-or-slug>/
       SKILL.md
@@ -57,17 +59,19 @@ Use a markdown-first per-space layout:
 bundle/<space>/skills.ndjson
 ```
 
-`SKILL.md` is the source of truth at rest. It contains YAML frontmatter with `id`, `name`, `description`, `tool_ids`, and `experimental`, followed by the markdown body that maps to the API `content` field. Additional markdown files under the skill directory are converted into `referenced_content` entries when generating API or NDJSON JSON.
+`manifest/skills.yml` lists the user-created Skills tracked for the space by `id` and `name`, matching the manifest pattern used by Agents, Tools, and Workflows. When present, the manifest is the tracked-resource source of truth for read, push, and bundle flows: only listed Skills are included, in manifest order, and a listed Skill missing from `skills/` is an error. When absent, the system discovers all `skills/*/SKILL.md` directories for backwards-compatible local editing.
+
+`SKILL.md` is the content source of truth at rest. It contains YAML frontmatter with `id`, `name`, `description`, `tool_ids`, and `experimental`, followed by the markdown body that maps to the API `content` field. Additional markdown files under the skill directory are converted into `referenced_content` entries when generating API or NDJSON JSON.
 
 Referenced content is derived from the directory structure:
 
 - `name`: markdown filename without the `.md` extension
-- `relativePath`: subdirectory path relative to the skill directory
+- `relativePath`: subdirectory path relative to the skill directory, projected to Kibana as `./subdirectory` for non-root files
 - `content`: file contents
 
 The generated `referenced_content` objects contain only those three fields.
 
-Use a sanitized form of the Skill `id` as the default skill directory name, but treat `SKILL.md` frontmatter `id` as authoritative. For markdown files directly under the skill directory, generate `relativePath: ""`. Generate referenced content in deterministic relative-path order. Preserve markdown bytes as text exactly through export/import, including newline content. Reject referenced files that escape the skill directory, including symlink traversal. When writing from JSON, sanitize filesystem names for safety but preserve original JSON `id`, `name`, and `relativePath` values for round trips.
+Use a sanitized form of the Skill `id` as the default skill directory name, but treat `SKILL.md` frontmatter `id` as authoritative. For markdown files directly under the skill directory, generate `relativePath: ""`. For nested markdown files, write them under plain filesystem subdirectories and project them to Kibana JSON as `./subdirectory`, matching the 9.4 Skills API validator. Generate referenced content in deterministic relative-path order. Preserve markdown bytes as text exactly through export/import, including newline content. Reject referenced files that escape the skill directory, including symlink traversal. When writing from JSON, sanitize filesystem names for safety while preserving original Skill `id` and referenced content `name`; normalize nested `relativePath` values to the Kibana-accepted `./subdirectory` form when projecting to API JSON.
 
 Rationale: Skills are author-facing markdown assets. Keeping them as directories avoids forcing users to edit a JSON blob and mirrors the shape of a standard skill package while still preserving a deterministic JSON projection for Kibana.
 
@@ -75,6 +79,7 @@ Alternatives considered:
 
 - Store the API payload as `skills/*.json5`: rejected because the desired at-rest representation is a standard skill directory, with JSON produced only for NDJSON bundles and API calls.
 - Keep `referenced_content` in `SKILL.md` frontmatter: rejected because referenced content should be derived from actual markdown files in the directory tree.
+- Omit a Skills manifest because Skills are directory-backed: rejected because users still need the same explicit tracked-resource list and ordering available for Agents, Tools, and Workflows.
 
 ### 3) Project between skill directories and Kibana JSON
 
@@ -86,6 +91,7 @@ Load API responses as tolerant JSON values, then write user-created Skills to th
 - Read API `content` from the `SKILL.md` markdown body.
 - Build `referenced_content` by walking markdown files under the skill directory, excluding `SKILL.md`.
 - Remove read-only/system fields such as `readonly`, `schema`, `type`, `built_in`, `source`, `created_at`, and `updated_at` when projecting API responses.
+- Preserve `experimental` in the local `SKILL.md` frontmatter and bundle representation, but omit it from create/update API bodies because Kibana 9.4 rejects it as an additional property.
 - Remove `id` from update bodies because `skillId` is path-owned.
 - Serialize `tool_ids` and `referenced_content` as stable arrays, including empty arrays when absent in local files.
 
@@ -135,7 +141,7 @@ Alternatives considered:
 
 ### 7) Validate referenced content by cloning `threat-hunting`
 
-Use the built-in `threat-hunting` Skill as the live validation source because it includes out-of-the-box `referenced_content`. Validation should fetch/export `threat-hunting`, write it to the skill directory format, rename the Skill `id` and `name`, and import the renamed copy as a new user-created Skill. The import projection must not send `readonly` or other system metadata from the source Skill. The renamed test Skill should be deleted at the end, with best-effort cleanup if validation fails after creation.
+Use the built-in `threat-hunting` Skill as the default live validation source because it includes out-of-the-box `referenced_content` where that Security Solution skill is installed. Validation should fetch/export the source Skill, write it to the skill directory format, rename the Skill `id` and `name`, and import the renamed copy as a new user-created Skill. The import projection must not send `readonly`, `experimental`, or other system metadata from the source Skill. The renamed test Skill should be deleted at the end, with best-effort cleanup if validation fails after creation. The live test accepts a `KIBANA_TEST_SOURCE_SKILL_ID` override for Kibana deployments that do not expose `threat-hunting`; the override must point to an out-of-the-box Skill with `referenced_content`.
 
 Live validation may source `KIBANA_URL` and `KIBANA_APIKEY` from `.env.test` at execution time and should target the `esdiag` space. These credentials must not be read into planning artifacts, logged, written to generated files, or committed.
 

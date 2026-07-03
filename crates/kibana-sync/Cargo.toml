@@ -1,10 +1,10 @@
 [package]
 name = "kibana-sync"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 authors = ["Ryan Eno"]
-description = "Reusable Kibana sync library for saved objects, spaces, agents, tools, and workflows"
+description = "Reusable Kibana sync library for saved objects, spaces, agents, tools, skills, and workflows"
 license = "Apache-2.0"
 repository = "https://github.com/VimCommando/kibana-object-manager"
 homepage = "https://github.com/VimCommando/kibana-object-manager"

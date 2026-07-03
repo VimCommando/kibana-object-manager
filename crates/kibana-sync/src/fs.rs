@@ -6,6 +6,7 @@
 
 use crate::kibana::agents::{AgentEntry, AgentsManifest};
 use crate::kibana::saved_objects::{SavedObject, SavedObjectsManifest};
+use crate::kibana::skills::{SkillEntry, SkillsManifest, skill_to_directory, skill_to_value};
 use crate::kibana::spaces::{SpaceEntry, SpacesManifest};
 use crate::kibana::tools::ToolsManifest;
 use crate::kibana::workflows::{WorkflowEntry, WorkflowsManifest};
@@ -32,6 +33,7 @@ use std::path::{Path, PathBuf};
 ///     workflows/
 ///     agents/
 ///     tools/
+///     skills/
 /// ```
 #[derive(Clone, Debug)]
 pub struct KibanaFsBundle {
@@ -75,6 +77,7 @@ impl KibanaFsBundle {
             include_workflows: true,
             include_agents: true,
             include_tools: true,
+            include_skills: true,
         };
 
         self.read(&selection)
@@ -106,6 +109,10 @@ impl KibanaFsBundle {
 
             if selection.include_tools {
                 space_bundle.tools = self.read_tools(space_id)?;
+            }
+
+            if selection.include_skills {
+                space_bundle.skills = self.read_skills(space_id)?;
             }
 
             bundle.by_space.insert(space_id.clone(), space_bundle);
@@ -171,6 +178,12 @@ impl KibanaFsBundle {
                 &bundle.tools,
                 named_resource_file_name,
             )?;
+        }
+
+        if !bundle.skills.is_empty() {
+            let manifest = skills_manifest(&bundle.skills)?;
+            manifest.write(manifest_dir.join("skills.yml"))?;
+            write_skill_directories(&self.skills_dir(space_id), &bundle.skills)?;
         }
 
         Ok(())
@@ -272,6 +285,55 @@ impl KibanaFsBundle {
             .collect()
     }
 
+    fn read_skills(&self, space_id: &str) -> Result<Vec<Value>> {
+        let root = self.skills_dir(space_id);
+        let manifest_path = self.skills_manifest_path(space_id);
+        let manifest = if manifest_path.exists() {
+            Some(SkillsManifest::read(manifest_path)?)
+        } else {
+            None
+        };
+
+        if !root.exists() {
+            if let Some(manifest) = manifest
+                && let Some(entry) = manifest.skills.first()
+            {
+                return Err(missing_manifest_resource("skill", &entry.id, &root));
+            }
+            return Ok(Vec::new());
+        }
+
+        let mut directories = Vec::new();
+        for entry in std::fs::read_dir(&root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() && path.join("SKILL.md").exists() {
+                directories.push(path);
+            }
+        }
+        directories.sort();
+
+        let values = directories
+            .into_iter()
+            .map(|directory| skill_to_value(&directory, true))
+            .collect::<Result<Vec<_>>>()?;
+
+        let Some(manifest) = manifest else {
+            return Ok(values);
+        };
+        manifest
+            .skills
+            .iter()
+            .map(|entry| {
+                values
+                    .iter()
+                    .find(|value| value.get("id").and_then(|id| id.as_str()) == Some(&entry.id))
+                    .cloned()
+                    .ok_or_else(|| missing_manifest_resource("skill", &entry.id, &root))
+            })
+            .collect()
+    }
+
     fn read_spaces(&self) -> Result<Vec<Value>> {
         let path = self.spaces_manifest_path();
         if !path.exists() {
@@ -333,6 +395,7 @@ impl KibanaFsBundle {
             || self.workflows_dir(space_id).exists()
             || self.agents_dir(space_id).exists()
             || self.tools_dir(space_id).exists()
+            || self.skills_dir(space_id).exists()
             || self.manifest_dir(space_id).exists()
     }
 
@@ -364,6 +427,10 @@ impl KibanaFsBundle {
         self.manifest_dir(space_id).join("tools.yml")
     }
 
+    fn skills_manifest_path(&self, space_id: &str) -> PathBuf {
+        self.manifest_dir(space_id).join("skills.yml")
+    }
+
     fn objects_dir(&self, space_id: &str) -> PathBuf {
         self.space_dir(space_id).join("objects")
     }
@@ -378,6 +445,10 @@ impl KibanaFsBundle {
 
     fn tools_dir(&self, space_id: &str) -> PathBuf {
         self.space_dir(space_id).join("tools")
+    }
+
+    fn skills_dir(&self, space_id: &str) -> PathBuf {
+        self.space_dir(space_id).join("skills")
     }
 }
 
@@ -470,6 +541,13 @@ fn write_json_file(path: &Path, value: &Value) -> Result<()> {
         .with_context(|| format!("Failed to write JSON resource: {}", path.display()))
 }
 
+fn write_skill_directories(root: &Path, values: &[Value]) -> Result<()> {
+    for value in values {
+        skill_to_directory(root, value)?;
+    }
+    Ok(())
+}
+
 fn saved_object_relative_path(value: &Value) -> Result<PathBuf> {
     let object_type = required_str(value, "type", "saved object")?;
     let id = required_str(value, "id", "saved object")?;
@@ -532,6 +610,16 @@ fn tools_manifest(values: &[Value]) -> Result<ToolsManifest> {
         tools.push(required_str(value, "id", "tool")?.to_string());
     }
     Ok(ToolsManifest::with_tools(tools))
+}
+
+fn skills_manifest(values: &[Value]) -> Result<SkillsManifest> {
+    let mut entries = Vec::with_capacity(values.len());
+    for value in values {
+        let id = required_str(value, "id", "skill")?;
+        let name = optional_str(value, "name").unwrap_or(id);
+        entries.push(SkillEntry::new(id, name));
+    }
+    Ok(SkillsManifest::with_skills(entries))
 }
 
 fn required_str<'a>(
@@ -599,6 +687,16 @@ mod tests {
                 workflows: vec![json!({"id": "workflow-1", "name": "Daily Workflow"})],
                 agents: vec![json!({"id": "agent-1", "name": "Support Agent"})],
                 tools: vec![json!({"id": "tool-1", "name": "Search Tool"})],
+                skills: vec![json!({
+                    "id": "skill-1",
+                    "name": "Skill One",
+                    "description": "Skill description",
+                    "content": "Main skill body\n",
+                    "tool_ids": ["tool-1"],
+                    "referenced_content": [
+                        {"name": "query", "relativePath": "./examples", "content": "from logs\n"}
+                    ]
+                })],
             },
         );
 
@@ -631,6 +729,13 @@ mod tests {
                 .join("default/tools/Search Tool--tool-1.json")
                 .exists()
         );
+        assert!(bundle_path.join("default/manifest/skills.yml").exists());
+        assert!(bundle_path.join("default/skills/skill-1/SKILL.md").exists());
+        assert!(
+            bundle_path
+                .join("default/skills/skill-1/examples/query.md")
+                .exists()
+        );
 
         let reader = KibanaFsBundle::open(&bundle_path).unwrap();
         let read = reader.read_all().unwrap();
@@ -652,6 +757,58 @@ mod tests {
             read.by_space["default"].tools,
             bundle.by_space["default"].tools
         );
+        assert_eq!(
+            read.by_space["default"].skills,
+            bundle.by_space["default"].skills
+        );
+    }
+
+    #[test]
+    fn round_trips_skills_only_bundle() {
+        let temp = TempDir::new().unwrap();
+        let bundle_path = temp.path().join("bundle");
+
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            SpaceBundle {
+                skills: vec![json!({
+                    "id": "skill-only",
+                    "name": "Skill Only",
+                    "description": "Only skill resources",
+                    "content": "Main instructions\n",
+                    "tool_ids": [],
+                    "referenced_content": []
+                })],
+                ..SpaceBundle::default()
+            },
+        );
+
+        KibanaFsBundle::create(&bundle_path)
+            .unwrap()
+            .write(&bundle)
+            .unwrap();
+
+        assert!(
+            bundle_path
+                .join("default/skills/skill-only/SKILL.md")
+                .exists()
+        );
+        assert!(bundle_path.join("default/manifest/skills.yml").exists());
+
+        let read = KibanaFsBundle::open(&bundle_path)
+            .unwrap()
+            .read_all()
+            .unwrap();
+
+        assert_eq!(
+            read.by_space["default"].skills,
+            bundle.by_space["default"].skills
+        );
+        assert!(read.by_space["default"].saved_objects.is_empty());
+        assert!(read.by_space["default"].workflows.is_empty());
+        assert!(read.by_space["default"].agents.is_empty());
+        assert!(read.by_space["default"].tools.is_empty());
     }
 
     #[test]
@@ -668,6 +825,7 @@ mod tests {
                 workflows: vec![json!({"id": "workflow-1", "name": "Workflow"})],
                 agents: vec![json!({"id": "agent-1", "name": "Agent"})],
                 tools: vec![json!({"id": "tool-1", "name": "Tool"})],
+                skills: vec![json!({"id": "skill-1", "name": "Skill", "content": "Body\n"})],
             },
         );
         fs_bundle.write(&bundle).unwrap();
@@ -679,6 +837,7 @@ mod tests {
             include_workflows: true,
             include_agents: false,
             include_tools: true,
+            include_skills: true,
         };
 
         let read = KibanaFsBundle::open(&bundle_path)
@@ -691,6 +850,7 @@ mod tests {
         assert_eq!(space.workflows.len(), 1);
         assert!(space.agents.is_empty());
         assert_eq!(space.tools.len(), 1);
+        assert_eq!(space.skills.len(), 1);
     }
 
     #[test]
@@ -764,6 +924,10 @@ mod tests {
                     json!({"id": "tool-1", "name": "Tool One"}),
                     json!({"id": "tool-2", "name": "Tool Two"}),
                 ],
+                skills: vec![
+                    json!({"id": "skill-1", "name": "Skill One", "content": "Body one\n"}),
+                    json!({"id": "skill-2", "name": "Skill Two", "content": "Body two\n"}),
+                ],
             },
         );
         fs_bundle.write(&bundle).unwrap();
@@ -779,6 +943,9 @@ mod tests {
             .unwrap();
         ToolsManifest::with_tools(vec!["tool-2".to_string()])
             .write(bundle_path.join("default/manifest/tools.yml"))
+            .unwrap();
+        SkillsManifest::with_skills(vec![SkillEntry::new("skill-2", "Skill Two")])
+            .write(bundle_path.join("default/manifest/skills.yml"))
             .unwrap();
 
         write_json_file(
@@ -801,6 +968,8 @@ mod tests {
         assert_eq!(space.agents[0]["id"], "agent-2");
         assert_eq!(space.tools.len(), 1);
         assert_eq!(space.tools[0]["id"], "tool-2");
+        assert_eq!(space.skills.len(), 1);
+        assert_eq!(space.skills[0]["id"], "skill-2");
     }
 
     #[test]
@@ -829,6 +998,54 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("missing-tool"));
+        assert!(err.to_string().contains("listed in the manifest"));
+    }
+
+    #[test]
+    fn manifest_listed_missing_skill_is_an_error() {
+        let temp = TempDir::new().unwrap();
+        let bundle_path = temp.path().join("bundle");
+        let fs_bundle = KibanaFsBundle::create(&bundle_path).unwrap();
+
+        let mut bundle = SyncBundle::default();
+        bundle.by_space.insert(
+            "default".to_string(),
+            SpaceBundle {
+                skills: vec![json!({"id": "skill-1", "name": "Skill One", "content": "Body\n"})],
+                ..SpaceBundle::default()
+            },
+        );
+        fs_bundle.write(&bundle).unwrap();
+
+        SkillsManifest::with_skills(vec![SkillEntry::new("missing-skill", "Missing Skill")])
+            .write(bundle_path.join("default/manifest/skills.yml"))
+            .unwrap();
+
+        let err = KibanaFsBundle::open(&bundle_path)
+            .unwrap()
+            .read_all()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("missing-skill"));
+        assert!(err.to_string().contains("listed in the manifest"));
+    }
+
+    #[test]
+    fn manifest_listed_skill_without_skills_directory_is_an_error() {
+        let temp = TempDir::new().unwrap();
+        let bundle_path = temp.path().join("bundle");
+        KibanaFsBundle::create(&bundle_path).unwrap();
+
+        SkillsManifest::with_skills(vec![SkillEntry::new("missing-skill", "Missing Skill")])
+            .write(bundle_path.join("default/manifest/skills.yml"))
+            .unwrap();
+
+        let err = KibanaFsBundle::open(&bundle_path)
+            .unwrap()
+            .read_all()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("missing-skill"));
         assert!(err.to_string().contains("listed in the manifest"));
     }
 

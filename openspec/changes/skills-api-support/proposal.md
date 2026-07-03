@@ -31,5 +31,5 @@ Kibana now exposes Skills as a first-class Agent Builder API alongside Agents, T
 
 - Affected code: `crates/kibana-sync/src/kibana`, `crates/kibana-sync/src/fs.rs`, `crates/kibana-sync/src/client/kibana.rs`, `crates/kibana-object-manager/src/cli.rs`, `crates/kibana-object-manager/src/main.rs`, documentation, and integration tests.
 - API impact: uses Kibana Skills endpoints under `/api/agent_builder/skills`, including space-prefixed variants through the existing `SpaceClient`.
-- Storage impact: adds per-space `skills/<skill-id>/SKILL.md` directories with referenced markdown content, plus `bundle/{space_id}/skills.ndjson` for bundle exports.
+- Storage impact: adds per-space `manifest/skills.yml` tracked Skill manifests, `skills/<skill-id>/SKILL.md` directories with referenced markdown content, and `bundle/{space_id}/skills.ndjson` for bundle exports.
 - Compatibility impact: Skills become a version-gated Agent Builder capability requiring Kibana `9.4.0` or newer, labeled experimental as of `9.4`, and skipped with the same unsupported-API warning behavior as Agents, Tools, and Workflows.

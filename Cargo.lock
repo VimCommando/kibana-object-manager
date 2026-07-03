@@ -709,6 +709,7 @@ dependencies = [
  "serial_test",
  "tempfile",
  "tokio",
+ "tracing",
  "tracing-log",
  "tracing-subscriber",
  "url",
@@ -717,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "kibana-sync"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "reqwest",
