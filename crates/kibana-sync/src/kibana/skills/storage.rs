@@ -148,7 +148,20 @@ pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
 }
 
 pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
+    let canonical_directory = directory
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve skill directory: {}", directory.display()))?;
     let skill_file = directory.join(SKILL_FILE);
+    let canonical_skill_file = skill_file
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve skill file: {}", skill_file.display()))?;
+    if !canonical_skill_file.starts_with(&canonical_directory) {
+        return Err(Error::message(format!(
+            "skill file escapes skill directory: {}",
+            skill_file.display()
+        )));
+    }
+
     let content = std::fs::read_to_string(&skill_file)
         .with_context(|| format!("Failed to read skill file: {}", skill_file.display()))?;
     let (frontmatter, body) = parse_skill_markdown(&content)?;
@@ -716,6 +729,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_skill_file_symlink_escape() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        let outside = temp.path().join("outside.md");
+        std::fs::write(&outside, "---\nid: escaped\n---\nBody\n").unwrap();
+        symlink_file(&outside, &skill_dir.join(SKILL_FILE)).unwrap();
+
+        let err = read_skill_directory(&skill_dir).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("skill file escapes skill directory")
+        );
+    }
+
+    #[test]
     fn rejects_parent_relative_path() {
         let skill = json!({
             "id": "bad-skill",
@@ -728,5 +758,15 @@ mod tests {
         let err = skill_to_directory(temp.path(), &skill).unwrap_err();
 
         assert!(err.to_string().contains("unsafe referenced content"));
+    }
+
+    #[cfg(unix)]
+    fn symlink_file(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(source, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_file(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(source, link)
     }
 }

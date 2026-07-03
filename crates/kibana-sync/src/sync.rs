@@ -389,17 +389,17 @@ pub async fn push_sync(
                 .await?;
         }
 
-        if include_agents {
-            summary.agents_attempted += space_bundle.agents.len();
-            summary.agents_applied += AgentsLoader::new(space_client.clone())
-                .load(space_bundle.agents.clone())
-                .await?;
-        }
-
         if include_skills {
             summary.skills_attempted += space_bundle.skills.len();
             summary.skills_applied += SkillsLoader::new(space_client.clone())
                 .load(space_bundle.skills.clone())
+                .await?;
+        }
+
+        if include_agents {
+            summary.agents_attempted += space_bundle.agents.len();
+            summary.agents_applied += AgentsLoader::new(space_client.clone())
+                .load(space_bundle.agents.clone())
                 .await?;
         }
 
