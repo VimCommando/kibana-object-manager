@@ -3480,9 +3480,8 @@ async fn push_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<
 
     log::info!("Pushing skills for space {}", space_id.cyan());
 
-    let count = skills.len();
     let loader = SkillsLoader::new(client.clone());
-    loader.load(skills).await?;
+    let count = loader.load(skills).await?;
 
     log::info!("✓ Pushed {} skill(s) for space {}", count, space_id.cyan());
     Ok(count)

@@ -3,9 +3,13 @@
 use crate::{Error, Result, ResultContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Component, Path, PathBuf},
+};
 
 const SKILL_FILE: &str = "SKILL.md";
+const REFERENCED_CONTENT_METADATA_FILE: &str = ".referenced_content.yml";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillFrontmatter {
@@ -33,6 +37,20 @@ pub struct SkillDirectory {
     pub frontmatter: SkillFrontmatter,
     pub content: String,
     pub referenced_content: Vec<ReferencedContent>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct ReferencedContentMetadata {
+    #[serde(default)]
+    entries: Vec<ReferencedContentMetadataEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReferencedContentMetadataEntry {
+    path: String,
+    name: String,
+    #[serde(rename = "relativePath")]
+    relative_path: String,
 }
 
 impl SkillDirectory {
@@ -190,11 +208,21 @@ fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
 }
 
 fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Result<()> {
+    let mut metadata = ReferencedContentMetadata::default();
+    let mut seen_paths = BTreeSet::new();
+
     for entry in entries {
         let relative_dir = safe_relative_dir(&entry.relative_path)?;
-        let path = root
-            .join(relative_dir)
-            .join(format!("{}.md", sanitize_path_component(&entry.name)));
+        let file_name = format!("{}.md", sanitize_path_component(&entry.name));
+        let relative_file = relative_dir.join(file_name);
+        let metadata_path = metadata_path_for(&relative_file)?;
+        if !seen_paths.insert(metadata_path.clone()) {
+            return Err(Error::message(format!(
+                "duplicate referenced content path after sanitization: {metadata_path}"
+            )));
+        }
+
+        let path = root.join(&relative_file);
         if path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE) {
             return Err(Error::message(
                 "referenced content cannot be written as SKILL.md",
@@ -206,7 +234,15 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
         }
         std::fs::write(&path, &entry.content)
             .with_context(|| format!("Failed to write referenced content: {}", path.display()))?;
+
+        metadata.entries.push(ReferencedContentMetadataEntry {
+            path: metadata_path,
+            name: entry.name.clone(),
+            relative_path: normalize_api_relative_path(&entry.relative_path)?,
+        });
     }
+
+    write_referenced_content_metadata(root, &metadata)?;
     Ok(())
 }
 
@@ -217,6 +253,7 @@ fn read_referenced_content(root: &Path) -> Result<Vec<ReferencedContent>> {
     let mut files = Vec::new();
     collect_markdown_files(root, &canonical_root, root, &mut files)?;
     files.sort();
+    let metadata = read_referenced_content_metadata(root)?;
 
     let mut entries = files
         .into_iter()
@@ -228,12 +265,18 @@ fn read_referenced_content(root: &Path) -> Result<Vec<ReferencedContent>> {
                 ))
             })?;
             let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-            let relative_path = path_to_api_relative_path(parent);
-            let name = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .ok_or_else(|| Error::message("referenced content filename is not UTF-8"))?
-                .to_string();
+            let metadata_entry = metadata_entry_for(&metadata, relative)?;
+            let relative_path = metadata_entry
+                .map(|entry| entry.relative_path.clone())
+                .unwrap_or_else(|| path_to_api_relative_path(parent));
+            let name = if let Some(entry) = metadata_entry {
+                entry.name.clone()
+            } else {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or_else(|| Error::message("referenced content filename is not UTF-8"))?
+                    .to_string()
+            };
             let content = std::fs::read_to_string(&path).with_context(|| {
                 format!("Failed to read referenced content: {}", path.display())
             })?;
@@ -251,6 +294,48 @@ fn read_referenced_content(root: &Path) -> Result<Vec<ReferencedContent>> {
     });
 
     Ok(entries)
+}
+
+fn read_referenced_content_metadata(root: &Path) -> Result<ReferencedContentMetadata> {
+    let path = root.join(REFERENCED_CONTENT_METADATA_FILE);
+    if !path.exists() {
+        return Ok(ReferencedContentMetadata::default());
+    }
+
+    let content = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Failed to read referenced content metadata: {}",
+            path.display()
+        )
+    })?;
+    yaml_serde::from_str(&content).context("Failed to parse referenced content metadata")
+}
+
+fn write_referenced_content_metadata(
+    root: &Path,
+    metadata: &ReferencedContentMetadata,
+) -> Result<()> {
+    if metadata.entries.is_empty() {
+        return Ok(());
+    }
+
+    let path = root.join(REFERENCED_CONTENT_METADATA_FILE);
+    let yaml = yaml_serde::to_string(metadata)
+        .context("Failed to serialize referenced content metadata")?;
+    std::fs::write(&path, yaml).with_context(|| {
+        format!(
+            "Failed to write referenced content metadata: {}",
+            path.display()
+        )
+    })
+}
+
+fn metadata_entry_for<'a>(
+    metadata: &'a ReferencedContentMetadata,
+    relative: &Path,
+) -> Result<Option<&'a ReferencedContentMetadataEntry>> {
+    let path = metadata_path_for(relative)?;
+    Ok(metadata.entries.iter().find(|entry| entry.path == path))
 }
 
 fn collect_markdown_files(
@@ -334,6 +419,58 @@ fn safe_relative_dir(relative_path: &str) -> Result<PathBuf> {
     }
 
     Ok(path)
+}
+
+fn normalize_api_relative_path(relative_path: &str) -> Result<String> {
+    let mut parts = Vec::new();
+    if relative_path.is_empty() {
+        return Ok(String::new());
+    }
+
+    for component in Path::new(relative_path).components() {
+        match component {
+            Component::Normal(value) => {
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| Error::message("relativePath contains non-UTF-8 data"))?;
+                parts.push(value);
+            }
+            Component::CurDir => {}
+            _ => {
+                return Err(Error::message(format!(
+                    "unsafe referenced content relativePath: {relative_path}"
+                )));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(format!("./{}", parts.join("/")))
+    }
+}
+
+fn metadata_path_for(relative: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(value) => {
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| Error::message("referenced content path is not UTF-8"))?;
+                parts.push(value);
+            }
+            _ => {
+                return Err(Error::message(format!(
+                    "unsafe referenced content path: {}",
+                    relative.display()
+                )));
+            }
+        }
+    }
+
+    Ok(parts.join("/"))
 }
 
 fn path_to_api_relative_path(path: &Path) -> String {
@@ -449,6 +586,36 @@ mod tests {
         assert!(projected.get("id").is_none());
         assert_eq!(projected["tool_ids"], json!([]));
         assert_eq!(projected["referenced_content"], json!([]));
+    }
+
+    #[test]
+    fn preserves_referenced_content_values_when_paths_are_sanitized() {
+        let temp = TempDir::new().unwrap();
+        let skill = json!({
+            "id": "sanitize-skill",
+            "name": "Sanitize Skill",
+            "content": "Body\n",
+            "referenced_content": [
+                {
+                    "name": "query:prod",
+                    "relativePath": "./examples:prod",
+                    "content": "from logs\n"
+                }
+            ]
+        });
+
+        let dir = skill_to_directory(temp.path(), &skill).unwrap();
+
+        assert!(dir.join("examples_prod/query_prod.md").exists());
+        assert!(dir.join(REFERENCED_CONTENT_METADATA_FILE).exists());
+
+        let projected = skill_to_value(&dir, true).unwrap();
+        assert_eq!(projected["referenced_content"][0]["name"], "query:prod");
+        assert_eq!(
+            projected["referenced_content"][0]["relativePath"],
+            "./examples:prod"
+        );
+        assert_eq!(projected["referenced_content"][0]["content"], "from logs\n");
     }
 
     #[test]

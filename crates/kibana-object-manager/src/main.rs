@@ -17,6 +17,7 @@ use tracing_subscriber::{
 };
 
 fn init_logging(filter: &str) {
+    let _ = tracing_log::LogTracer::init();
     let _ = tracing_subscriber::fmt()
         .fmt_fields(AnsiPassthroughFields)
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))

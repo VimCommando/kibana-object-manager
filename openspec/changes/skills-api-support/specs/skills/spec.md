@@ -55,6 +55,7 @@ The system SHALL represent user-created Kibana Skills at rest as per-skill direc
 - **THEN** it sanitizes filesystem path components for portability and safety
 - **AND** preserves original Skill `id` and referenced content `name` values when projecting back to Kibana JSON
 - **AND** normalizes nested referenced content `relativePath` values to the Kibana-accepted `./subdirectory` form
+- **AND** uses sidecar metadata when sanitization is needed to preserve referenced content `name` and `relativePath` values
 
 ### Requirement: Skills Extraction
 The system SHALL fetch Skills from Kibana using the documented Skills API endpoints.
