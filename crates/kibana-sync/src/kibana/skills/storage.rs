@@ -190,7 +190,7 @@ pub fn sanitize_path_component(value: &str) -> String {
         .trim()
         .to_string();
 
-    if sanitized.is_empty() {
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
         "unnamed".to_string()
     } else {
         sanitized
@@ -632,6 +632,22 @@ mod tests {
         assert!(projected.get("id").is_none());
         assert_eq!(projected["tool_ids"], json!([]));
         assert_eq!(projected["referenced_content"], json!([]));
+    }
+
+    #[test]
+    fn sanitizes_dot_path_skill_ids() {
+        let temp = TempDir::new().unwrap();
+        let skill = json!({
+            "id": "..",
+            "name": "Dot Dot",
+            "content": "Body\n"
+        });
+
+        let dir = skill_to_directory(temp.path(), &skill).unwrap();
+
+        assert_eq!(dir, temp.path().join("unnamed"));
+        assert!(dir.join(SKILL_FILE).exists());
+        assert!(!temp.path().join(SKILL_FILE).exists());
     }
 
     #[test]
