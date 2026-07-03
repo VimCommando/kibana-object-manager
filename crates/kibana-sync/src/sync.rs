@@ -244,22 +244,36 @@ pub async fn pull_sync(
             let extractor = SkillsExtractor::new(space_client.clone(), None);
             let skills = extractor.search_skills(false).await?;
             let mut set = JoinSet::new();
-            for skill in skills.iter().filter(|skill| !is_readonly(skill)) {
+            for (index, skill) in skills
+                .iter()
+                .filter(|skill| !is_readonly(skill))
+                .enumerate()
+            {
                 if let Some(skill_id) = skill.get("id").and_then(|id| id.as_str()) {
                     let extractor = SkillsExtractor::new(space_client.clone(), None);
                     let skill_id = skill_id.to_string();
-                    set.spawn(async move { extractor.fetch_skill(&skill_id).await });
+                    set.spawn(async move {
+                        let skill = extractor.fetch_skill(&skill_id).await?;
+                        Ok::<_, Error>((index, skill))
+                    });
                 }
             }
 
+            let mut fetched_skills = Vec::new();
             while let Some(result) = set.join_next().await {
                 match result {
-                    Ok(Ok(skill)) if !is_readonly(&skill) => space_bundle.skills.push(skill),
+                    Ok(Ok((index, skill))) if !is_readonly(&skill) => {
+                        fetched_skills.push((index, skill));
+                    }
                     Ok(Ok(_)) => {}
                     Ok(Err(err)) => tracing::warn!("{}", err),
                     Err(err) => tracing::error!("Task panicked: {}", err),
                 }
             }
+            fetched_skills.sort_by_key(|(index, _)| *index);
+            space_bundle
+                .skills
+                .extend(fetched_skills.into_iter().map(|(_, skill)| skill));
         }
 
         if options.expand_dependencies

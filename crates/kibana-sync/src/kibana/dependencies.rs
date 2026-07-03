@@ -4,7 +4,7 @@
 //! (Agents, Tools, and Workflows) based on their JSON definitions.
 
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Represents a dependency on another Kibana object
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -19,7 +19,7 @@ pub enum Dependency {
 ///
 /// Agents usually depend on Tools listed in `configuration.tools`.
 pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
-    let mut deps = Vec::new();
+    let mut agent_tools = BTreeSet::new();
     if let Some(tools) = agent
         .get("configuration")
         .and_then(|c| c.get("tools"))
@@ -28,12 +28,12 @@ pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
         for tool in tools {
             if let Some(tool_id) = tool.as_str() {
                 // Legacy or simple format: array of strings
-                deps.push(Dependency::Tool(tool_id.to_string()));
+                agent_tools.insert(tool_id.to_string());
             } else if let Some(tool_ids) = tool.get("tool_ids").and_then(|ids| ids.as_array()) {
                 // New format: array of objects with tool_ids array
                 for id in tool_ids {
                     if let Some(id_str) = id.as_str() {
-                        deps.push(Dependency::Tool(id_str.to_string()));
+                        agent_tools.insert(id_str.to_string());
                     }
                 }
             }
@@ -44,6 +44,10 @@ pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
     let mut tools = HashSet::new();
     let mut workflows = HashSet::new();
     recursive_find_deps(agent, &mut agents, &mut skills, &mut tools, &mut workflows);
+    agent_tools.extend(tools);
+
+    let mut deps = Vec::new();
+    deps.extend(agent_tools.into_iter().map(Dependency::Tool));
     deps.extend(skills.into_iter().map(Dependency::Skill));
     deps
 }
@@ -217,6 +221,21 @@ mod tests {
         assert_eq!(deps.len(), 2);
         assert!(deps.contains(&Dependency::Skill("skill-a".to_string())));
         assert!(deps.contains(&Dependency::Skill("skill-b".to_string())));
+
+        let agent_with_generic_tool_keys = json!({
+            "id": "agent-4",
+            "configuration": {
+                "toolId": "tool-e",
+                "nested": {
+                    "tool_ids": ["tool-f", "tool-g"]
+                }
+            }
+        });
+        let deps = find_agent_dependencies(&agent_with_generic_tool_keys);
+        assert_eq!(deps.len(), 3);
+        assert!(deps.contains(&Dependency::Tool("tool-e".to_string())));
+        assert!(deps.contains(&Dependency::Tool("tool-f".to_string())));
+        assert!(deps.contains(&Dependency::Tool("tool-g".to_string())));
     }
 
     #[test]
