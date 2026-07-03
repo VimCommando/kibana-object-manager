@@ -90,9 +90,9 @@ impl SkillDirectory {
                     .iter()
                     .map(|entry| {
                         serde_json::json!({
-                            "name": entry.name,
-                            "relativePath": entry.relative_path,
-                            "content": entry.content,
+                            "name": entry.name.clone(),
+                            "relativePath": entry.relative_path.clone(),
+                            "content": entry.content.clone(),
                         })
                     })
                     .collect(),
@@ -241,7 +241,8 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
 
     for entry in entries {
         let relative_dir = safe_relative_dir(&entry.relative_path)?;
-        let file_name = format!("{}.md", sanitize_path_component(&entry.name));
+        let sanitized_name = sanitize_path_component(&entry.name);
+        let file_name = format!("{sanitized_name}.md");
         let relative_file = relative_dir.join(file_name);
         let metadata_path = metadata_path_for(&relative_file)?;
         if !seen_paths.insert(metadata_path.clone()) {
@@ -263,11 +264,15 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
         std::fs::write(&path, &entry.content)
             .with_context(|| format!("Failed to write referenced content: {}", path.display()))?;
 
-        metadata.entries.push(ReferencedContentMetadataEntry {
-            path: metadata_path,
-            name: entry.name.clone(),
-            relative_path: normalize_api_relative_path(&entry.relative_path)?,
-        });
+        let normalized_relative_path = normalize_api_relative_path(&entry.relative_path)?;
+        let derived_relative_path = path_to_api_relative_path(&relative_dir);
+        if sanitized_name != entry.name || derived_relative_path != normalized_relative_path {
+            metadata.entries.push(ReferencedContentMetadataEntry {
+                path: metadata_path,
+                name: entry.name.clone(),
+                relative_path: normalized_relative_path,
+            });
+        }
     }
 
     write_referenced_content_metadata(root, &metadata)?;
@@ -583,6 +588,7 @@ mod tests {
         assert!(dir.join("SKILL.md").exists());
         assert!(dir.join("overview.md").exists());
         assert!(dir.join("examples/query.md").exists());
+        assert!(!dir.join(REFERENCED_CONTENT_METADATA_FILE).exists());
 
         let read = read_skill_directory(&dir).unwrap();
         assert_eq!(read.frontmatter.id, "threat-hunting-copy");
