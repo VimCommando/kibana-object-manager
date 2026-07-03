@@ -4,7 +4,7 @@
 //! (Agents, Tools, and Workflows) based on their JSON definitions.
 
 use serde_json::Value;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 /// Represents a dependency on another Kibana object
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -39,10 +39,10 @@ pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
             }
         }
     }
-    let mut skills = HashSet::new();
-    let mut agents = HashSet::new();
-    let mut tools = HashSet::new();
-    let mut workflows = HashSet::new();
+    let mut skills = BTreeSet::new();
+    let mut agents = BTreeSet::new();
+    let mut tools = BTreeSet::new();
+    let mut workflows = BTreeSet::new();
     recursive_find_deps(agent, &mut agents, &mut skills, &mut tools, &mut workflows);
     agent_tools.extend(tools);
 
@@ -87,10 +87,10 @@ pub fn find_tool_dependencies(tool: &Value) -> Vec<Dependency> {
 /// Workflows are complex and can contain references to Agents, Tools,
 /// and other Workflows anywhere in their definition.
 pub fn find_workflow_dependencies(workflow: &Value) -> Vec<Dependency> {
-    let mut agents = HashSet::new();
-    let mut skills = HashSet::new();
-    let mut tools = HashSet::new();
-    let mut workflows = HashSet::new();
+    let mut agents = BTreeSet::new();
+    let mut skills = BTreeSet::new();
+    let mut tools = BTreeSet::new();
+    let mut workflows = BTreeSet::new();
 
     // Skip the root "id" if it matches common names to avoid self-dependency
     // but the recursive resolution logic will handle this anyway.
@@ -122,10 +122,10 @@ pub fn find_workflow_dependencies(workflow: &Value) -> Vec<Dependency> {
 /// Recursively search for dependency-like keys in a JSON value
 fn recursive_find_deps(
     value: &Value,
-    agents: &mut HashSet<String>,
-    skills: &mut HashSet<String>,
-    tools: &mut HashSet<String>,
-    workflows: &mut HashSet<String>,
+    agents: &mut BTreeSet<String>,
+    skills: &mut BTreeSet<String>,
+    tools: &mut BTreeSet<String>,
+    workflows: &mut BTreeSet<String>,
 ) {
     match value {
         Value::Object(map) => {

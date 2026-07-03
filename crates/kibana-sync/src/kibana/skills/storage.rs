@@ -109,7 +109,12 @@ impl SkillDirectory {
 
 pub fn skill_directory_name(skill: &Value) -> Result<String> {
     let id = required_str(skill, "id")?;
-    Ok(sanitize_path_component(id))
+    let sanitized = sanitize_path_component(id);
+    if sanitized == id {
+        Ok(sanitized)
+    } else {
+        Ok(format!("{sanitized}--{:016x}", stable_hash(id)))
+    }
 }
 
 pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
@@ -195,6 +200,15 @@ pub fn sanitize_path_component(value: &str) -> String {
     } else {
         sanitized
     }
+}
+
+fn stable_hash(value: &str) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001b3;
+
+    value.as_bytes().iter().fold(FNV_OFFSET, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 fn skill_value_to_directory(skill: &Value) -> Result<SkillDirectory> {
@@ -645,9 +659,28 @@ mod tests {
 
         let dir = skill_to_directory(temp.path(), &skill).unwrap();
 
-        assert_eq!(dir, temp.path().join("unnamed"));
+        assert!(dir.starts_with(temp.path()));
+        assert!(
+            dir.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("unnamed--")
+        );
         assert!(dir.join(SKILL_FILE).exists());
         assert!(!temp.path().join(SKILL_FILE).exists());
+    }
+
+    #[test]
+    fn sanitized_skill_directory_names_are_collision_resistant() {
+        let first = json!({"id": "skill:prod"});
+        let second = json!({"id": "skill?prod"});
+
+        let first_name = skill_directory_name(&first).unwrap();
+        let second_name = skill_directory_name(&second).unwrap();
+
+        assert!(first_name.starts_with("skill_prod--"));
+        assert!(second_name.starts_with("skill_prod--"));
+        assert_ne!(first_name, second_name);
     }
 
     #[test]
