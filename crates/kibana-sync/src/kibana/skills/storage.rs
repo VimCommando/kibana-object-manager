@@ -214,10 +214,15 @@ fn write_skill_file(path: &Path, document: &SkillDirectory) -> Result<()> {
 }
 
 fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
-    let rest = markdown
-        .strip_prefix("---\n")
-        .ok_or_else(|| Error::message("skill file is missing YAML frontmatter"))?;
-    let Some((yaml, body)) = rest.split_once("\n---\n") else {
+    let (rest, delimiter) = if let Some(rest) = markdown.strip_prefix("---\n") {
+        (rest, "\n---\n")
+    } else if let Some(rest) = markdown.strip_prefix("---\r\n") {
+        (rest, "\r\n---\r\n")
+    } else {
+        return Err(Error::message("skill file is missing YAML frontmatter"));
+    };
+
+    let Some((yaml, body)) = rest.split_once(delimiter) else {
         return Err(Error::message(
             "skill file has unterminated YAML frontmatter",
         ));
@@ -609,6 +614,17 @@ mod tests {
         assert!(projected.get("id").is_none());
         assert_eq!(projected["tool_ids"], json!([]));
         assert_eq!(projected["referenced_content"], json!([]));
+    }
+
+    #[test]
+    fn parses_crlf_frontmatter_without_changing_body() {
+        let markdown = "---\r\nid: crlf-skill\r\nname: CRLF Skill\r\n---\r\nBody\r\n";
+
+        let (frontmatter, body) = parse_skill_markdown(markdown).unwrap();
+
+        assert_eq!(frontmatter.id, "crlf-skill");
+        assert_eq!(frontmatter.name.as_deref(), Some("CRLF Skill"));
+        assert_eq!(body, "Body\r\n");
     }
 
     #[test]
