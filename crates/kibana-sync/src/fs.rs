@@ -298,7 +298,7 @@ impl KibanaFsBundle {
             if let Some(manifest) = manifest
                 && let Some(entry) = manifest.skills.first()
             {
-                return Err(missing_manifest_resource("skill", &entry.id, &root));
+                return Err(missing_skill_manifest_resource(&entry.id, &root));
             }
             return Ok(Vec::new());
         }
@@ -336,7 +336,7 @@ impl KibanaFsBundle {
                     .iter()
                     .find(|value| value.get("id").and_then(|id| id.as_str()) == Some(&entry.id))
                     .cloned()
-                    .ok_or_else(|| missing_manifest_resource("skill", &entry.id, &root))
+                    .ok_or_else(|| missing_skill_manifest_resource(&entry.id, &root))
             })
             .collect()
     }
@@ -519,6 +519,13 @@ fn missing_manifest_resource(
 ) -> Error {
     Error::message(format!(
         "{resource} '{id}' is listed in the manifest but no matching JSON resource was found under {}",
+        directory.display()
+    ))
+}
+
+fn missing_skill_manifest_resource(id: impl std::fmt::Display, directory: &Path) -> Error {
+    Error::message(format!(
+        "skill '{id}' is listed in the manifest but no matching skills/<skill-directory>/SKILL.md resource was found under {}",
         directory.display()
     ))
 }
@@ -1035,6 +1042,7 @@ mod tests {
 
         assert!(err.to_string().contains("missing-skill"));
         assert!(err.to_string().contains("listed in the manifest"));
+        assert!(err.to_string().contains("SKILL.md"));
     }
 
     #[test]
@@ -1054,6 +1062,7 @@ mod tests {
 
         assert!(err.to_string().contains("missing-skill"));
         assert!(err.to_string().contains("listed in the manifest"));
+        assert!(err.to_string().contains("SKILL.md"));
     }
 
     #[test]

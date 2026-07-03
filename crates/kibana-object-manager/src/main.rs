@@ -621,12 +621,15 @@ async fn main() -> Result<()> {
                 }
                 "skills" | "skill" => {
                     // Skills support: --query exact ID, --include, --exclude, or --file
-                    let singular_id_shortcut =
-                        api == "skill" && query.is_none() && file.is_none() && output_dir != ".";
+                    let singular_id_shortcut = api == "skill"
+                        && query.is_none()
+                        && file.is_none()
+                        && output_dir != "."
+                        && !Path::new(&output_dir).exists();
                     if api == "skill" && query.is_none() && file.is_none() && !singular_id_shortcut
                     {
                         return Err(eyre::eyre!(
-                            "kibob add skill requires a skill id, or use: kibob add skill <project_dir> --query <skill-id>"
+                            "kibob add skill requires a skill id. For an existing project directory, use: kibob add skill <project_dir> --query <skill-id>. If the skill id matches a local path, use: kibob add skill . --query <skill-id>"
                         ));
                     }
                     let effective_output_dir;
