@@ -114,6 +114,29 @@ pub fn skill_directory_name(skill: &Value) -> Result<String> {
 
 pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
     let directory = root.join(skill_directory_name(skill)?);
+    if directory.exists() {
+        let metadata = std::fs::symlink_metadata(&directory).with_context(|| {
+            format!(
+                "Failed to inspect existing skill directory: {}",
+                directory.display()
+            )
+        })?;
+        if metadata.is_dir() {
+            std::fs::remove_dir_all(&directory).with_context(|| {
+                format!(
+                    "Failed to remove existing skill directory: {}",
+                    directory.display()
+                )
+            })?;
+        } else {
+            std::fs::remove_file(&directory).with_context(|| {
+                format!(
+                    "Failed to remove existing skill path: {}",
+                    directory.display()
+                )
+            })?;
+        }
+    }
     std::fs::create_dir_all(&directory)
         .with_context(|| format!("Failed to create skill directory: {}", directory.display()))?;
 
@@ -616,6 +639,38 @@ mod tests {
             "./examples:prod"
         );
         assert_eq!(projected["referenced_content"][0]["content"], "from logs\n");
+    }
+
+    #[test]
+    fn rewrites_skill_directory_without_stale_referenced_content() {
+        let temp = TempDir::new().unwrap();
+        let first = json!({
+            "id": "rewrite-skill",
+            "name": "Rewrite Skill",
+            "content": "Body\n",
+            "referenced_content": [
+                {"name": "old", "relativePath": "", "content": "old\n"}
+            ]
+        });
+        let second = json!({
+            "id": "rewrite-skill",
+            "name": "Rewrite Skill",
+            "content": "Body\n",
+            "referenced_content": [
+                {"name": "new", "relativePath": "", "content": "new\n"}
+            ]
+        });
+
+        let dir = skill_to_directory(temp.path(), &first).unwrap();
+        assert!(dir.join("old.md").exists());
+
+        let dir = skill_to_directory(temp.path(), &second).unwrap();
+        let projected = skill_to_value(&dir, true).unwrap();
+
+        assert!(!dir.join("old.md").exists());
+        assert!(dir.join("new.md").exists());
+        assert_eq!(projected["referenced_content"].as_array().unwrap().len(), 1);
+        assert_eq!(projected["referenced_content"][0]["name"], "new");
     }
 
     #[test]

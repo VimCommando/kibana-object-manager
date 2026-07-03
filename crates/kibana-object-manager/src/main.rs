@@ -59,7 +59,7 @@ impl AnsiPassthroughVisitor<'_> {
 
         self.result = (|| {
             if !self.is_empty {
-                self.writer.write_char(' ')?;
+                write!(self.writer, " ")?;
             }
 
             if field.name() != "message" {
