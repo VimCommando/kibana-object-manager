@@ -75,9 +75,14 @@ async fn upsert_skill(client: KibanaClient, skill: Value) -> Result<bool> {
         return Ok(false);
     }
 
-    let exists = skill_exists(&client, skill_id).await?;
+    let existing = existing_skill(&client, skill_id).await?;
 
-    if exists {
+    if let Some(existing) = existing {
+        if is_readonly(&existing) {
+            tracing::debug!("Skipping server-side readonly skill: {}", skill_id);
+            return Ok(false);
+        }
+
         let body = sanitized_skill_body(&skill, false);
         let path = format!("api/agent_builder/skills/{skill_id}");
         let response = client.put_json_value(&path, &body).await?;
@@ -103,12 +108,12 @@ async fn upsert_skill(client: KibanaClient, skill: Value) -> Result<bool> {
     Ok(true)
 }
 
-async fn skill_exists(client: &KibanaClient, skill_id: &str) -> Result<bool> {
+async fn existing_skill(client: &KibanaClient, skill_id: &str) -> Result<Option<Value>> {
     let path = format!("api/agent_builder/skills/{skill_id}");
     let response = client.get(&path).await?;
     match response.status().as_u16() {
-        200 => Ok(true),
-        404 => Ok(false),
+        200 => Ok(Some(response.json().await?)),
+        404 => Ok(None),
         _ => {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -277,6 +282,31 @@ mod tests {
         assert!(body.get("readonly").is_none());
         assert_eq!(body["tool_ids"], json!([]));
         assert_eq!(body["referenced_content"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn skips_existing_server_side_readonly_skill() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/s/esdiag/api/agent_builder/skills/system-skill",
+            status: 200,
+            body: json!({"id": "system-skill", "readonly": true}),
+        }]);
+        let client = server.client().unwrap().space("esdiag").unwrap();
+        let loader = SkillsLoader::new(client);
+
+        let count = loader
+            .load(vec![json!({
+                "id": "system-skill",
+                "name": "System Skill"
+            })])
+            .await
+            .unwrap();
+
+        assert_eq!(count, 0);
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
     }
 
     #[tokio::test]

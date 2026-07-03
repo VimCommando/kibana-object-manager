@@ -2832,11 +2832,13 @@ pub async fn add_skills_to_manifest(
         }
 
         skill_to_directory(&skills_dir, skill)?;
-        manifest.add_skill(skill_entry(skill)?);
-        added_count += 1;
+        let added = manifest.add_skill(skill_entry(skill)?);
+        if added {
+            added_count += 1;
 
-        if !exclude_dependencies {
-            all_deps.extend(find_skill_dependencies(skill));
+            if !exclude_dependencies {
+                all_deps.extend(find_skill_dependencies(skill));
+            }
         }
     }
     manifest.write(&manifest_path)?;
