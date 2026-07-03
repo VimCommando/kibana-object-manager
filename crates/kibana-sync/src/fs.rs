@@ -307,7 +307,14 @@ impl KibanaFsBundle {
         for entry in std::fs::read_dir(&root)? {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() && path.join("SKILL.md").exists() {
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::message(format!(
+                    "skill directory cannot be a symlink: {}",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() && path.join("SKILL.md").exists() {
                 directories.push(path);
             }
         }
@@ -1050,10 +1057,46 @@ mod tests {
     }
 
     #[test]
+    fn symlinked_skill_directory_is_an_error() {
+        let temp = TempDir::new().unwrap();
+        let bundle_path = temp.path().join("bundle");
+        let skills_path = bundle_path.join("default/skills");
+        let outside_path = temp.path().join("outside-skill");
+        std::fs::create_dir_all(&skills_path).unwrap();
+        std::fs::create_dir(&outside_path).unwrap();
+        std::fs::write(
+            outside_path.join("SKILL.md"),
+            "---\nid: outside-skill\n---\nBody\n",
+        )
+        .unwrap();
+        symlink_dir(&outside_path, &skills_path.join("linked")).unwrap();
+
+        let err = KibanaFsBundle::open(&bundle_path)
+            .unwrap()
+            .read_all()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("skill directory cannot be a symlink")
+        );
+    }
+
+    #[test]
     fn missing_root_is_an_error_for_open() {
         let temp = TempDir::new().unwrap();
         let result = KibanaFsBundle::open(temp.path().join("missing"));
 
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    fn symlink_dir(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(source, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_dir(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(source, link)
     }
 }

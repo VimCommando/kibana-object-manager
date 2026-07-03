@@ -3757,7 +3757,11 @@ fn read_skill_values_from_dir(skills_dir: &Path, manifest_path: &Path) -> Result
     for entry in std::fs::read_dir(skills_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() && path.join("SKILL.md").exists() {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            eyre::bail!("skill directory cannot be a symlink: {}", path.display());
+        }
+        if metadata.is_dir() && path.join("SKILL.md").exists() {
             skill_dirs.push(path);
         }
     }
