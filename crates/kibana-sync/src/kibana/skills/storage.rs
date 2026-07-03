@@ -245,7 +245,8 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
         let file_name = format!("{sanitized_name}.md");
         let relative_file = relative_dir.join(file_name);
         let metadata_path = metadata_path_for(&relative_file)?;
-        if !seen_paths.insert(metadata_path.clone()) {
+        let comparable_metadata_path = metadata_path.to_lowercase();
+        if !seen_paths.insert(comparable_metadata_path) {
             return Err(Error::message(format!(
                 "duplicate referenced content path after sanitization: {metadata_path}"
             )));
@@ -691,6 +692,27 @@ mod tests {
         assert!(dir.join("new.md").exists());
         assert_eq!(projected["referenced_content"].as_array().unwrap().len(), 1);
         assert_eq!(projected["referenced_content"][0]["name"], "new");
+    }
+
+    #[test]
+    fn rejects_case_insensitive_referenced_content_path_collisions() {
+        let temp = TempDir::new().unwrap();
+        let skill = json!({
+            "id": "case-skill",
+            "name": "Case Skill",
+            "content": "Body\n",
+            "referenced_content": [
+                {"name": "Query", "relativePath": "", "content": "upper\n"},
+                {"name": "query", "relativePath": "", "content": "lower\n"}
+            ]
+        });
+
+        let err = skill_to_directory(temp.path(), &skill).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("duplicate referenced content path")
+        );
     }
 
     #[test]

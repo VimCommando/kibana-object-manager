@@ -199,7 +199,6 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 }
 
 fn write_response(stream: &mut TcpStream, status: u16, body: &Value) {
-    let body = serde_json::to_string(body).expect("serialize response body");
     let reason = match status {
         200 => "OK",
         201 => "Created",
@@ -208,6 +207,14 @@ fn write_response(stream: &mut TcpStream, status: u16, body: &Value) {
         409 => "Conflict",
         _ => "Error",
     };
+    if status == 204 {
+        let response =
+            format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
+
+    let body = serde_json::to_string(body).expect("serialize response body");
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()

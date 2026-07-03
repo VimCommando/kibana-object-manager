@@ -621,11 +621,8 @@ async fn main() -> Result<()> {
                 }
                 "skills" | "skill" => {
                     // Skills support: --query exact ID, --include, --exclude, or --file
-                    let singular_id_shortcut = api == "skill"
-                        && query.is_none()
-                        && file.is_none()
-                        && output_dir != "."
-                        && !Path::new(&output_dir).exists();
+                    let singular_id_shortcut =
+                        api == "skill" && query.is_none() && file.is_none() && output_dir != ".";
                     if api == "skill" && query.is_none() && file.is_none() && !singular_id_shortcut
                     {
                         return Err(eyre::eyre!(
