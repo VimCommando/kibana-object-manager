@@ -24,6 +24,20 @@ pub struct SkillFrontmatter {
     pub experimental: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawSkillFrontmatter {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    tool_ids: Vec<String>,
+    #[serde(default)]
+    experimental: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ReferencedContent {
     pub name: String,
@@ -250,11 +264,19 @@ fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
             "skill file has unterminated YAML frontmatter",
         ));
     };
-    let frontmatter: SkillFrontmatter =
+    let raw_frontmatter: RawSkillFrontmatter =
         yaml_serde::from_str(yaml).context("Failed to parse skill frontmatter")?;
-    if frontmatter.id.is_empty() {
-        return Err(Error::MissingResourceId { resource: "skill" });
-    }
+    let id = raw_frontmatter
+        .id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(Error::MissingResourceId { resource: "skill" })?;
+    let frontmatter = SkillFrontmatter {
+        id,
+        name: raw_frontmatter.name,
+        description: raw_frontmatter.description,
+        tool_ids: raw_frontmatter.tool_ids,
+        experimental: raw_frontmatter.experimental,
+    };
     Ok((frontmatter, body))
 }
 
@@ -712,6 +734,30 @@ mod tests {
         assert_eq!(frontmatter.id, "crlf-skill");
         assert_eq!(frontmatter.name.as_deref(), Some("CRLF Skill"));
         assert_eq!(body, "Body\r\n");
+    }
+
+    #[test]
+    fn missing_frontmatter_id_is_missing_resource_id() {
+        let markdown = "---\nname: Missing ID\n---\nBody\n";
+
+        let err = parse_skill_markdown(markdown).unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::Error::MissingResourceId { resource: "skill" }
+        ));
+    }
+
+    #[test]
+    fn whitespace_frontmatter_id_is_missing_resource_id() {
+        let markdown = "---\nid: \"  \"\nname: Blank ID\n---\nBody\n";
+
+        let err = parse_skill_markdown(markdown).unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::Error::MissingResourceId { resource: "skill" }
+        ));
     }
 
     #[test]
