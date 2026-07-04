@@ -40,10 +40,16 @@ pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
         }
     }
     let mut skills = BTreeSet::new();
-    let mut agents = BTreeSet::new();
+    let mut ignored_agents = BTreeSet::new();
     let mut tools = BTreeSet::new();
-    let mut workflows = BTreeSet::new();
-    recursive_find_deps(agent, &mut agents, &mut skills, &mut tools, &mut workflows);
+    let mut ignored_workflows = BTreeSet::new();
+    recursive_find_deps(
+        agent,
+        &mut ignored_agents,
+        &mut skills,
+        &mut tools,
+        &mut ignored_workflows,
+    );
     agent_tools.extend(tools);
 
     let mut deps = Vec::new();
