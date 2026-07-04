@@ -86,8 +86,8 @@ impl SkillsExtractor {
         while let Some(result) = set.join_next().await {
             match result {
                 Ok(Ok(skill)) => skills.push(skill),
-                Ok(Err(err)) => tracing::warn!("{}", err),
-                Err(err) => tracing::error!("Task panicked: {}", err),
+                Ok(Err(err)) => return Err(err),
+                Err(err) => return Err(Error::message(format!("Task panicked: {err}"))),
             }
         }
 

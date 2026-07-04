@@ -276,8 +276,8 @@ pub async fn pull_sync(
                             fetched_skills.push((index, skill));
                         }
                         Ok(Ok(_)) => {}
-                        Ok(Err(err)) => tracing::warn!("{}", err),
-                        Err(err) => tracing::error!("Task panicked: {}", err),
+                        Ok(Err(err)) => return Err(err),
+                        Err(err) => return Err(Error::message(format!("Task panicked: {err}"))),
                     }
                 }
             }

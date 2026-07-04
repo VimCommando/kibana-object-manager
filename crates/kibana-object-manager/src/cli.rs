@@ -2773,7 +2773,7 @@ pub async fn add_skills_to_manifest(
                 };
                 skill_ids.push((index, skill_id.to_string()));
             }
-            fetch_skills_in_order(space_client, skill_ids).await
+            fetch_skills_in_order(space_client, skill_ids).await?
         }
     };
 
@@ -2911,7 +2911,7 @@ fn skill_filter_field(skill: &Value) -> &str {
 async fn fetch_skills_in_order(
     client: KibanaClient,
     skill_ids: Vec<(usize, String)>,
-) -> Vec<Value> {
+) -> Result<Vec<Value>> {
     let mut fetched_skills = Vec::new();
 
     for chunk in skill_ids.chunks(SKILL_FETCH_BATCH_SIZE) {
@@ -2935,18 +2935,18 @@ async fn fetch_skills_in_order(
                 }
                 Ok(Ok((_index, _skill_id, _skill))) => {}
                 Ok(Err((skill_id, err))) => {
-                    log::warn!("Failed to fetch skill {}: {}", skill_id, err)
+                    eyre::bail!("Failed to fetch skill {}: {}", skill_id, err)
                 }
-                Err(err) => log::error!("Task panicked: {}", err),
+                Err(err) => eyre::bail!("Task panicked: {}", err),
             }
         }
     }
 
     fetched_skills.sort_by_key(|(index, _)| *index);
-    fetched_skills
+    Ok(fetched_skills
         .into_iter()
         .map(|(_index, skill)| skill)
-        .collect()
+        .collect())
 }
 
 fn filter_skills(
@@ -3347,7 +3347,7 @@ async fn pull_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<
         .enumerate()
         .map(|(index, entry)| (index, entry.id.clone()))
         .collect::<Vec<_>>();
-    let skills = fetch_skills_in_order(client.clone(), skill_ids).await;
+    let skills = fetch_skills_in_order(client.clone(), skill_ids).await?;
 
     let mut count = 0;
     for full_skill in skills {
