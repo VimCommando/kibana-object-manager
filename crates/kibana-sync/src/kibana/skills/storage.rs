@@ -123,13 +123,12 @@ impl SkillDirectory {
 
 pub fn skill_directory_name(skill: &Value) -> Result<String> {
     let id = required_str(skill, "id")?;
-    Ok(sanitize_path_component(id))
+    validate_skill_id(id)?;
+    Ok(id.to_string())
 }
 
 pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
-    let skill_id = required_str(skill, "id")?;
     let directory = root.join(skill_directory_name(skill)?);
-    ensure_skill_directory_does_not_replace_other_skill(root, &directory, skill_id)?;
     if directory.exists() {
         let metadata = std::fs::symlink_metadata(&directory).with_context(|| {
             format!(
@@ -161,47 +160,6 @@ pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
     write_referenced_content(&directory, &document.referenced_content)?;
 
     Ok(directory)
-}
-
-fn ensure_skill_directory_does_not_replace_other_skill(
-    root: &Path,
-    directory: &Path,
-    skill_id: &str,
-) -> Result<()> {
-    if !root.exists() {
-        return Ok(());
-    }
-
-    let Some(target_name) = directory.file_name().and_then(|name| name.to_str()) else {
-        return Ok(());
-    };
-
-    for entry in std::fs::read_dir(root)
-        .with_context(|| format!("Failed to read skill directory root: {}", root.display()))?
-    {
-        let entry = entry?;
-        let entry_name = entry.file_name();
-        let entry_name = entry_name.to_string_lossy();
-        if !entry_name.eq_ignore_ascii_case(target_name) {
-            continue;
-        }
-
-        let entry_path = entry.path();
-        let skill_file = entry_path.join(SKILL_FILE);
-        if !skill_file.exists() {
-            continue;
-        }
-
-        let existing = read_skill_directory(&entry_path)?;
-        if existing.frontmatter.id != skill_id {
-            return Err(Error::message(format!(
-                "skill directory name collision: '{}' and '{}' both map to '{}'",
-                existing.frontmatter.id, skill_id, target_name
-            )));
-        }
-    }
-
-    Ok(())
 }
 
 pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
@@ -254,6 +212,41 @@ pub fn sanitize_path_component(value: &str) -> String {
     }
 }
 
+fn validate_skill_id(id: &str) -> Result<()> {
+    let mut chars = id.chars();
+    let Some(first) = chars.next() else {
+        return Err(invalid_skill_id());
+    };
+
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return Err(invalid_skill_id());
+    }
+
+    let mut last = first;
+    for character in chars {
+        if !character.is_ascii_lowercase()
+            && !character.is_ascii_digit()
+            && character != '-'
+            && character != '_'
+        {
+            return Err(invalid_skill_id());
+        }
+        last = character;
+    }
+
+    if !last.is_ascii_lowercase() && !last.is_ascii_digit() {
+        return Err(invalid_skill_id());
+    }
+
+    Ok(())
+}
+
+fn invalid_skill_id() -> Error {
+    Error::message(
+        "ID must start and end with a letter or number, and contain only lowercase letters, numbers, hyphens, and underscores",
+    )
+}
+
 fn skill_value_to_directory(skill: &Value) -> Result<SkillDirectory> {
     let id = required_str(skill, "id")?.to_string();
     let frontmatter = SkillFrontmatter {
@@ -303,6 +296,7 @@ fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
         .id
         .filter(|id| !id.trim().is_empty())
         .ok_or(Error::MissingResourceId { resource: "skill" })?;
+    validate_skill_id(&id)?;
     let frontmatter = SkillFrontmatter {
         id,
         name: raw_frontmatter.name,
@@ -711,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_dot_path_skill_ids() {
+    fn rejects_invalid_skill_ids() {
         let temp = TempDir::new().unwrap();
         let skill = json!({
             "id": "..",
@@ -719,48 +713,28 @@ mod tests {
             "content": "Body\n"
         });
 
-        let dir = skill_to_directory(temp.path(), &skill).unwrap();
+        let err = skill_to_directory(temp.path(), &skill).unwrap_err();
 
-        assert!(dir.starts_with(temp.path()));
-        assert_eq!(dir.file_name().unwrap().to_string_lossy(), "unnamed");
-        assert!(dir.join(SKILL_FILE).exists());
+        assert!(err.to_string().contains("ID must start and end"));
         assert!(!temp.path().join(SKILL_FILE).exists());
     }
 
     #[test]
-    fn sanitized_skill_directory_names_do_not_include_hashes() {
-        let first = json!({"id": "skill:prod"});
-        let second = json!({"id": "skill?prod"});
+    fn skill_directory_name_uses_valid_skill_id_directly() {
+        let skill = json!({"id": "skill_prod-1"});
 
-        let first_name = skill_directory_name(&first).unwrap();
-        let second_name = skill_directory_name(&second).unwrap();
+        let name = skill_directory_name(&skill).unwrap();
 
-        assert_eq!(first_name, "skill_prod");
-        assert_eq!(second_name, "skill_prod");
+        assert_eq!(name, "skill_prod-1");
     }
 
     #[test]
-    fn skill_directory_write_rejects_sanitized_id_collisions() {
-        let temp = TempDir::new().unwrap();
-        let first = json!({"id": "skill:prod"});
-        let second = json!({"id": "skill?prod"});
+    fn rejects_uppercase_skill_ids() {
+        let skill = json!({"id": "Skill-A"});
 
-        skill_to_directory(temp.path(), &first).unwrap();
-        let err = skill_to_directory(temp.path(), &second).unwrap_err();
+        let err = skill_directory_name(&skill).unwrap_err();
 
-        assert!(err.to_string().contains("skill directory name collision"));
-    }
-
-    #[test]
-    fn skill_directory_write_rejects_case_insensitive_collisions() {
-        let temp = TempDir::new().unwrap();
-        let first = json!({"id": "Skill-A"});
-        let second = json!({"id": "skill-a"});
-
-        skill_to_directory(temp.path(), &first).unwrap();
-        let err = skill_to_directory(temp.path(), &second).unwrap_err();
-
-        assert!(err.to_string().contains("skill directory name collision"));
+        assert!(err.to_string().contains("only lowercase letters"));
     }
 
     #[test]
