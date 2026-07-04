@@ -117,7 +117,9 @@ pub fn parse_skills_response(value: Value) -> Result<Vec<Value>> {
         return Ok(results.clone());
     }
 
-    Ok(Vec::new())
+    Err(Error::message(
+        "Unexpected skills response shape: expected a top-level array or an object with a results array",
+    ))
 }
 
 #[cfg(test)]
@@ -150,6 +152,13 @@ mod tests {
 
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[1]["id"], "skill-b");
+    }
+
+    #[test]
+    fn unexpected_response_shape_is_an_error() {
+        let err = parse_skills_response(json!({"unexpected": []})).unwrap_err();
+
+        assert!(err.to_string().contains("Unexpected skills response shape"));
     }
 
     #[tokio::test]

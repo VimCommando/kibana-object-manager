@@ -149,12 +149,12 @@ fn sanitized_skill_body(skill: &Value, include_id: bool) -> Value {
         object.remove(field);
     }
 
-    object
-        .entry("tool_ids".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    object
-        .entry("referenced_content".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
+    if !matches!(object.get("tool_ids"), Some(Value::Array(_))) {
+        object.insert("tool_ids".to_string(), Value::Array(Vec::new()));
+    }
+    if !matches!(object.get("referenced_content"), Some(Value::Array(_))) {
+        object.insert("referenced_content".to_string(), Value::Array(Vec::new()));
+    }
 
     body
 }
@@ -197,6 +197,22 @@ mod tests {
         );
 
         assert_eq!(body["id"], "skill-a");
+        assert_eq!(body["tool_ids"], json!([]));
+        assert_eq!(body["referenced_content"], json!([]));
+    }
+
+    #[test]
+    fn body_replaces_non_array_fields_with_empty_arrays() {
+        let body = sanitized_skill_body(
+            &json!({
+                "id": "skill-a",
+                "name": "Skill A",
+                "tool_ids": null,
+                "referenced_content": null
+            }),
+            true,
+        );
+
         assert_eq!(body["tool_ids"], json!([]));
         assert_eq!(body["referenced_content"], json!([]));
     }

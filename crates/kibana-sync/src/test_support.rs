@@ -63,6 +63,7 @@ impl TestServer {
                         Err(_) => return,
                     }
                 };
+                let _ = stream.set_nonblocking(false);
                 handle_connection(stream, expected, &thread_requests);
             }
         });
