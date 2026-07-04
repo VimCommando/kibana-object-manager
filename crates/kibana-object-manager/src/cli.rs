@@ -34,6 +34,8 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 use url::Url;
 
+const SKILL_FETCH_BATCH_SIZE: usize = 16;
+
 /// Load Kibana client from environment variables
 ///
 /// Expected environment variables:
@@ -2746,7 +2748,7 @@ pub async fn add_skills_to_manifest(
             .clone()
             .unwrap_or(load_kibana_client(project_dir)?);
         let space_client = client.space(space_id)?;
-        let extractor = SkillsExtractor::new(space_client, None);
+        let extractor = SkillsExtractor::new(space_client.clone(), None);
 
         if let Some(skill_id) = query.as_deref() {
             log::info!(
@@ -2760,8 +2762,8 @@ pub async fn add_skills_to_manifest(
             let listed = extractor.search_skills(false).await?;
             log::info!("Found {} skill(s) before filtering", listed.len());
             let listed = filter_skills(listed, &include, &exclude)?;
-            let mut skills = Vec::new();
-            for skill in listed {
+            let mut skill_ids = Vec::new();
+            for (index, skill) in listed.into_iter().enumerate() {
                 if is_readonly(&skill) {
                     continue;
                 }
@@ -2769,13 +2771,9 @@ pub async fn add_skills_to_manifest(
                     log::warn!("Skipping skill list entry without id");
                     continue;
                 };
-                match extractor.fetch_skill(skill_id).await {
-                    Ok(skill) if !is_readonly(&skill) => skills.push(skill),
-                    Ok(_) => {}
-                    Err(err) => log::warn!("Failed to fetch skill {}: {}", skill_id, err),
-                }
+                skill_ids.push((index, skill_id.to_string()));
             }
-            skills
+            fetch_skills_in_order(space_client, skill_ids).await
         }
     };
 
@@ -2908,6 +2906,47 @@ fn skill_filter_field(skill: &Value) -> &str {
         .or_else(|| skill.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
+}
+
+async fn fetch_skills_in_order(
+    client: KibanaClient,
+    skill_ids: Vec<(usize, String)>,
+) -> Vec<Value> {
+    let mut fetched_skills = Vec::new();
+
+    for chunk in skill_ids.chunks(SKILL_FETCH_BATCH_SIZE) {
+        let mut set = JoinSet::new();
+        for (index, skill_id) in chunk {
+            let extractor = SkillsExtractor::new(client.clone(), None);
+            let index = *index;
+            let skill_id = skill_id.clone();
+            set.spawn(async move {
+                match extractor.fetch_skill(&skill_id).await {
+                    Ok(skill) => Ok((index, skill_id, skill)),
+                    Err(err) => Err((skill_id, err.to_string())),
+                }
+            });
+        }
+
+        while let Some(result) = set.join_next().await {
+            match result {
+                Ok(Ok((index, _skill_id, skill))) if !is_readonly(&skill) => {
+                    fetched_skills.push((index, skill));
+                }
+                Ok(Ok((_index, _skill_id, _skill))) => {}
+                Ok(Err((skill_id, err))) => {
+                    log::warn!("Failed to fetch skill {}: {}", skill_id, err)
+                }
+                Err(err) => log::error!("Task panicked: {}", err),
+            }
+        }
+    }
+
+    fetched_skills.sort_by_key(|(index, _)| *index);
+    fetched_skills
+        .into_iter()
+        .map(|(_index, skill)| skill)
+        .collect()
 }
 
 fn filter_skills(
@@ -3299,20 +3338,21 @@ async fn pull_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<
     let manifest = SkillsManifest::read(&manifest_path)?;
     log::debug!("Loaded {} skill(s) from manifest", manifest.count());
 
-    let extractor = SkillsExtractor::new(client.clone(), None);
     let skills_dir = get_space_skills_dir(project_dir, space_id);
     std::fs::create_dir_all(&skills_dir)?;
 
+    let skill_ids = manifest
+        .skills
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (index, entry.id.clone()))
+        .collect::<Vec<_>>();
+    let skills = fetch_skills_in_order(client.clone(), skill_ids).await;
+
     let mut count = 0;
-    for entry in manifest.skills {
-        match extractor.fetch_skill(&entry.id).await {
-            Ok(full_skill) if !is_readonly(&full_skill) => {
-                skill_to_directory(&skills_dir, &full_skill)?;
-                count += 1;
-            }
-            Ok(_) => {}
-            Err(err) => log::warn!("Failed to fetch skill {}: {}", entry.id, err),
-        }
+    for full_skill in skills {
+        skill_to_directory(&skills_dir, &full_skill)?;
+        count += 1;
     }
 
     log::info!("✓ Pulled {} skill(s) for space {}", count, space_id.cyan());
