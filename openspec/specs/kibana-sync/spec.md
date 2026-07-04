@@ -42,7 +42,7 @@ The `kibana-sync` crate SHALL construct clients from explicit configuration valu
 - **THEN** all cloned root and space-bound clients share that request limit
 
 ### Requirement: Reusable Kibana API Modules
-The `kibana-sync` crate SHALL expose reusable API modules for saved objects, spaces, agents, tools, and workflows.
+The `kibana-sync` crate SHALL expose reusable API modules for saved objects, spaces, agents, tools, skills, and workflows.
 
 #### Scenario: Saved object import and export
 - **WHEN** a consumer exports saved objects
@@ -78,6 +78,17 @@ The `kibana-sync` crate SHALL expose reusable API modules for saved objects, spa
 - **THEN** the library sends `POST /api/agent_builder/tools` for create operations
 - **AND** sends `PUT /api/agent_builder/tools/{id}` for update operations
 
+#### Scenario: Skill management
+- **WHEN** a consumer lists skills
+- **THEN** the library sends `GET /api/agent_builder/skills`
+- **WHEN** a consumer fetches a skill
+- **THEN** the library sends `GET /api/agent_builder/skills/{id}`
+- **WHEN** a consumer creates or updates a skill
+- **THEN** the library sends `POST /api/agent_builder/skills` for create operations
+- **AND** sends `PUT /api/agent_builder/skills/{id}` for update operations
+- **WHEN** a consumer deletes a skill
+- **THEN** the library sends `DELETE /api/agent_builder/skills/{id}`
+
 #### Scenario: Workflow management uses internal-origin header
 - **WHEN** a consumer searches workflows
 - **THEN** the library sends `POST /api/workflows/search`
@@ -108,19 +119,38 @@ The `kibana-sync` crate SHALL support syncing all supported API families without
 
 #### Scenario: Pull sync returns bundle
 - **WHEN** a consumer requests a pull sync for selected spaces and API families
-- **THEN** the library returns a bundle containing the fetched spaces, saved objects, workflows, agents, and tools grouped by space where applicable
+- **THEN** the library returns a bundle containing the fetched spaces, saved objects, workflows, agents, tools, and skills grouped by space where applicable
 - **AND** it does not write local files
 
 #### Scenario: Push sync accepts bundle
-- **WHEN** a consumer requests a push sync with a bundle of spaces, saved objects, workflows, agents, and tools
+- **WHEN** a consumer requests a push sync with a bundle of spaces, saved objects, workflows, agents, tools, and skills
 - **THEN** the library applies the resources to Kibana using the appropriate API module for each resource family
 - **AND** it returns a summary of attempted and applied resources
 
 #### Scenario: Dependency expansion is resource based
-- **WHEN** a consumer enables dependency expansion for agents, tools, or workflows
-- **THEN** the library discovers dependent agents, tools, and workflows from JSON resource definitions
+- **WHEN** a consumer enables dependency expansion for agents, tools, skills, or workflows
+- **THEN** the library discovers dependent agents, tools, skills, and workflows from JSON resource definitions
 - **AND** fetches missing dependencies through Kibana APIs
 - **AND** returns the expanded resources in the sync bundle rather than writing them to files
+
+### Requirement: Storage-Neutral Skills Sync Support
+The `kibana-sync` crate SHALL support Skills in storage-neutral sync bundles.
+
+#### Scenario: Pull sync returns skills
+- **WHEN** a consumer requests pull sync with Skills enabled
+- **THEN** the returned space bundle includes the fetched Skill definitions for each selected space
+- **AND** it can write those Skill definitions as skill directories through filesystem sync
+
+#### Scenario: Push sync applies skills
+- **WHEN** a consumer requests push sync with Skills in a space bundle
+- **THEN** the library projects Skill directories or bundle records to Kibana JSON
+- **AND** applies the projected Skill definitions through the Skills loader
+- **AND** the returned summary includes attempted and applied Skill counts
+
+#### Scenario: Dependency expansion can fetch skills
+- **WHEN** dependency expansion discovers a missing Skill reference and Skills are enabled
+- **THEN** the library fetches the Skill through `GET /api/agent_builder/skills/{skillId}`
+- **AND** inserts it into the space bundle Skills collection
 
 ### Requirement: Explicit Filesystem Manifest and Bundle Sync
 
@@ -128,7 +158,7 @@ The `kibana-sync` crate SHALL support reusable filesystem-backed sync for Kibana
 
 #### Scenario: Read filesystem bundle from explicit path
 - **WHEN** a consumer asks the library to read a Kibana asset bundle from a provided path
-- **THEN** the library reads supported manifest files and file-backed saved objects, workflows, agents, and tools from that path
+- **THEN** the library reads supported manifest files and file-backed saved objects, workflows, agents, tools, and skills from that path
 - **AND** returns a `SyncBundle` or equivalent resource collection that can be pushed to Kibana
 - **AND** it does not infer the path from environment variables, process working directory, or CLI command state
 
@@ -155,7 +185,23 @@ The `kibana-sync` crate SHALL expose Kibana version detection and API capability
 - **WHEN** a consumer checks supported capabilities for a detected version
 - **THEN** `spaces` and `saved_objects` require Kibana `8.0.0` or newer
 - **AND** `agents` and `tools` require Kibana `9.2.0` or newer
+- **AND** `skills` requires Kibana `9.4.0` or newer
 - **AND** `workflows` requires Kibana `9.3.0` or newer
+
+### Requirement: Skills API Capability Gate
+The `kibana-sync` crate SHALL expose Skills as a version-gated API capability.
+
+#### Scenario: Capability matrix includes skills
+- **WHEN** a consumer checks supported capabilities for a detected Kibana version
+- **THEN** `skills` is evaluated independently from `agents`, `tools`, and `workflows`
+- **AND** `skills` requires Kibana `9.4.0` or newer
+- **AND** `skills` is labeled experimental as of Kibana `9.4`
+- **AND** unsupported Skills requests produce the same skip, warning, or force behavior as other version-gated API families
+
+#### Scenario: Sync planning includes skills
+- **WHEN** a consumer plans pull or push sync for Skills
+- **THEN** the returned capability plan includes Skills in either supported or unsupported capabilities
+- **AND** the unsupported message names the `skills` API and Kibana `9.4.0` as the minimum required version
 
 ### Requirement: Public Error Model
 The `kibana-sync` crate SHALL expose a dedicated public error enum and crate-local `Result<T>` alias instead of exposing `eyre::Report` in public APIs.

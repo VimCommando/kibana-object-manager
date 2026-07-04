@@ -13,6 +13,20 @@ When adding an object to a manifest via the `add` command, `kibob` MUST automati
 - **And** `tool-a` and `tool-b` are added to `tools.yml`.
 - **And** the JSON files for the agent and both tools are written to the filesystem.
 
+#### Scenario: Adding an Agent with Skills
+- **Given** an agent that references two skills: `skill-a` and `skill-b`.
+- **When** the user runs `kibob add agent my-agent`.
+- **Then** `my-agent` is added to `agents.yml`.
+- **And** `skill-a` and `skill-b` are written as Skill directories.
+- **And** the JSON file for the agent and the skill directories for both skills are written to the filesystem.
+
+#### Scenario: Adding a Skill with Tools
+- **Given** a skill that references two tools through `tool_ids`: `tool-a` and `tool-b`.
+- **When** the user runs `kibob add skill my-skill`.
+- **Then** `my-skill` is written as a Skill directory.
+- **And** `tool-a` and `tool-b` are added to `tools.yml`.
+- **And** the skill directory and JSON files for both tools are written to the filesystem.
+
 #### Scenario: Adding a Tool with a Workflow
 - **Given** a tool that references workflow `wf-1`.
 - **When** the user runs `kibob add tools my-tool`.
@@ -20,23 +34,24 @@ When adding an object to a manifest via the `add` command, `kibob` MUST automati
 - **And** `wf-1` is added to `workflows.yml`.
 
 #### Scenario: Adding a Workflow with mixed dependencies
-- **Given** a workflow that references agent `agent-1` and another workflow `wf-2`.
+- **Given** a workflow that references agent `agent-1`, skill `skill-1`, and another workflow `wf-2`.
 - **When** the user runs `kibob add workflows my-wf`.
 - **Then** `my-wf` is added to `workflows.yml`.
 - **And** `agent-1` is added to `agents.yml`.
+- **And** `skill-1` is written as a Skill directory.
 - **And** `wf-2` is added to `workflows.yml`.
 
 #### Scenario: Opting out with --exclude-dependencies
-- **Given** an agent that references tools.
+- **Given** an agent that references tools and skills.
 - **When** the user runs `kibob add agent my-agent --exclude-dependencies`.
 - **Then** only `my-agent` is added to the manifest.
 
 ### Requirement: Transitive Dependencies
-Dependency inclusion MUST be transitive. If a workflow is added as a dependency of a tool, any agents referenced by that workflow MUST also be added.
+Dependency inclusion MUST be transitive. If a workflow is added as a dependency of a tool, any agents, skills, tools, or workflows referenced by that workflow MUST also be added.
 
 #### Scenario: Multi-level dependencies
-- **Given** agent `A` depends on tool `T`.
+- **Given** agent `A` depends on skill `S`.
+- `And` skill `S` depends on tool `T`.
 - `And` tool `T` depends on workflow `W`.
 - **When** the user runs `kibob add agent A`.
-- **Then** `A`, `T`, and `W` are all added to their respective manifests.
-
+- **Then** `A`, `S`, `T`, and `W` are all added to their respective manifests.
