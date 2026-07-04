@@ -363,6 +363,14 @@ fn resolve_env_path(env: &str) -> PathBuf {
     PathBuf::from(format!(".env.{}", env))
 }
 
+fn is_skill_id_shortcut_arg(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -630,6 +638,7 @@ async fn main() -> Result<()> {
                         && query.is_none()
                         && file.is_none()
                         && output_dir != "."
+                        && is_skill_id_shortcut_arg(&output_dir)
                         && !Path::new(&output_dir).exists();
                     if api == "skill" && query.is_none() && file.is_none() && !singular_id_shortcut
                     {

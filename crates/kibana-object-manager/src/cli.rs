@@ -3288,37 +3288,32 @@ async fn pull_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<u
 /// Pull user-created skills for a specific space.
 async fn pull_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
     let space_id = client.space_id();
+    let manifest_path = get_space_skills_manifest(project_dir, space_id);
+
+    if !manifest_path.exists() {
+        log::debug!("No skills manifest for space {}, skipping", space_id.cyan());
+        return Ok(0);
+    }
 
     log::info!("Pulling skills for space {}", space_id.cyan());
+    let manifest = SkillsManifest::read(&manifest_path)?;
+    log::debug!("Loaded {} skill(s) from manifest", manifest.count());
+
     let extractor = SkillsExtractor::new(client.clone(), None);
-    let listed = extractor.search_skills(false).await?;
     let skills_dir = get_space_skills_dir(project_dir, space_id);
     std::fs::create_dir_all(&skills_dir)?;
-    let manifest_path = get_space_skills_manifest(project_dir, space_id);
-    let mut manifest = SkillsManifest::new();
 
     let mut count = 0;
-    for skill in listed {
-        if is_readonly(&skill) {
-            continue;
-        }
-
-        let Some(skill_id) = skill.get("id").and_then(|v| v.as_str()) else {
-            log::warn!("Skipping skill list entry without id");
-            continue;
-        };
-
-        match extractor.fetch_skill(skill_id).await {
+    for entry in manifest.skills {
+        match extractor.fetch_skill(&entry.id).await {
             Ok(full_skill) if !is_readonly(&full_skill) => {
                 skill_to_directory(&skills_dir, &full_skill)?;
-                manifest.add_skill(skill_entry(&full_skill)?);
                 count += 1;
             }
             Ok(_) => {}
-            Err(err) => log::warn!("Failed to fetch skill {}: {}", skill_id, err),
+            Err(err) => log::warn!("Failed to fetch skill {}: {}", entry.id, err),
         }
     }
-    manifest.write(&manifest_path)?;
 
     log::info!("✓ Pulled {} skill(s) for space {}", count, space_id.cyan());
     Ok(count)
