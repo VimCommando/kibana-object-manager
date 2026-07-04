@@ -17,6 +17,8 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::task::JoinSet;
 
+const SKILL_FETCH_BATCH_SIZE: usize = 16;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnsupportedApiPolicy {
     Skip,
@@ -243,33 +245,43 @@ pub async fn pull_sync(
         if include_skills {
             let extractor = SkillsExtractor::new(space_client.clone(), None);
             let skills = extractor.search_skills(false).await?;
-            let mut set = JoinSet::new();
-            for (index, skill) in skills
+            let skill_ids = skills
                 .iter()
                 .filter(|skill| !is_readonly(skill))
                 .enumerate()
-            {
-                if let Some(skill_id) = skill.get("id").and_then(|id| id.as_str()) {
+                .filter_map(|(index, skill)| {
+                    skill
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|skill_id| (index, skill_id.to_string()))
+                })
+                .collect::<Vec<_>>();
+
+            let mut fetched_skills = Vec::new();
+            for chunk in skill_ids.chunks(SKILL_FETCH_BATCH_SIZE) {
+                let mut set = JoinSet::new();
+                for (index, skill_id) in chunk {
                     let extractor = SkillsExtractor::new(space_client.clone(), None);
-                    let skill_id = skill_id.to_string();
+                    let index = *index;
+                    let skill_id = skill_id.clone();
                     set.spawn(async move {
                         let skill = extractor.fetch_skill(&skill_id).await?;
                         Ok::<_, Error>((index, skill))
                     });
                 }
-            }
 
-            let mut fetched_skills = Vec::new();
-            while let Some(result) = set.join_next().await {
-                match result {
-                    Ok(Ok((index, skill))) if !is_readonly(&skill) => {
-                        fetched_skills.push((index, skill));
+                while let Some(result) = set.join_next().await {
+                    match result {
+                        Ok(Ok((index, skill))) if !is_readonly(&skill) => {
+                            fetched_skills.push((index, skill));
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => tracing::warn!("{}", err),
+                        Err(err) => tracing::error!("Task panicked: {}", err),
                     }
-                    Ok(Ok(_)) => {}
-                    Ok(Err(err)) => tracing::warn!("{}", err),
-                    Err(err) => tracing::error!("Task panicked: {}", err),
                 }
             }
+
             fetched_skills.sort_by_key(|(index, _)| *index);
             space_bundle
                 .skills

@@ -247,10 +247,10 @@ fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
     }
 }
 
-/// Pull saved objects from Kibana to local directory
+/// Pull selected Kibana API resources to local directory.
 ///
-/// Pipeline: SavedObjectsExtractor → FieldDropper → FieldUnescaper → DirectoryWriter
-/// Also pulls spaces if spaces.yml exists
+/// Returns the total number of resources pulled across the selected API families, including
+/// saved objects, workflows, agents, tools, skills, and spaces when selected.
 ///
 /// # Arguments
 /// * `project_dir` - Project directory path

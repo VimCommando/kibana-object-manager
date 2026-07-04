@@ -9,6 +9,7 @@ use kibana_object_manager::{
 };
 use owo_colors::OwoColorize;
 use std::fmt;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::{
@@ -18,11 +19,15 @@ use tracing_subscriber::{
 
 fn init_logging(filter: &str) {
     let _ = tracing_log::LogTracer::init();
+    let use_ansi = std::env::var_os("NO_COLOR").is_none()
+        && (std::io::stderr().is_terminal()
+            || std::env::var_os("FORCE_COLOR").is_some()
+            || std::env::var_os("CLICOLOR_FORCE").is_some());
     let _ = tracing_subscriber::fmt()
         .fmt_fields(AnsiPassthroughFields)
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
         .with_target(false)
-        .with_ansi(true)
+        .with_ansi(use_ansi)
         .try_init();
 }
 
