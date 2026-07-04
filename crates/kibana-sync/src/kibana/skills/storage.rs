@@ -123,12 +123,13 @@ impl SkillDirectory {
 
 pub fn skill_directory_name(skill: &Value) -> Result<String> {
     let id = required_str(skill, "id")?;
-    let sanitized = sanitize_path_component(id);
-    Ok(format!("{sanitized}--{:016x}", stable_hash(id)))
+    Ok(sanitize_path_component(id))
 }
 
 pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
+    let skill_id = required_str(skill, "id")?;
     let directory = root.join(skill_directory_name(skill)?);
+    ensure_skill_directory_does_not_replace_other_skill(root, &directory, skill_id)?;
     if directory.exists() {
         let metadata = std::fs::symlink_metadata(&directory).with_context(|| {
             format!(
@@ -160,6 +161,47 @@ pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
     write_referenced_content(&directory, &document.referenced_content)?;
 
     Ok(directory)
+}
+
+fn ensure_skill_directory_does_not_replace_other_skill(
+    root: &Path,
+    directory: &Path,
+    skill_id: &str,
+) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let Some(target_name) = directory.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+
+    for entry in std::fs::read_dir(root)
+        .with_context(|| format!("Failed to read skill directory root: {}", root.display()))?
+    {
+        let entry = entry?;
+        let entry_name = entry.file_name();
+        let entry_name = entry_name.to_string_lossy();
+        if !entry_name.eq_ignore_ascii_case(target_name) {
+            continue;
+        }
+
+        let entry_path = entry.path();
+        let skill_file = entry_path.join(SKILL_FILE);
+        if !skill_file.exists() {
+            continue;
+        }
+
+        let existing = read_skill_directory(&entry_path)?;
+        if existing.frontmatter.id != skill_id {
+            return Err(Error::message(format!(
+                "skill directory name collision: '{}' and '{}' both map to '{}'",
+                existing.frontmatter.id, skill_id, target_name
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
@@ -210,15 +252,6 @@ pub fn sanitize_path_component(value: &str) -> String {
     } else {
         sanitized
     }
-}
-
-fn stable_hash(value: &str) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x00000100000001b3;
-
-    value.as_bytes().iter().fold(FNV_OFFSET, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
-    })
 }
 
 fn skill_value_to_directory(skill: &Value) -> Result<SkillDirectory> {
@@ -689,40 +722,45 @@ mod tests {
         let dir = skill_to_directory(temp.path(), &skill).unwrap();
 
         assert!(dir.starts_with(temp.path()));
-        assert!(
-            dir.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("unnamed--")
-        );
+        assert_eq!(dir.file_name().unwrap().to_string_lossy(), "unnamed");
         assert!(dir.join(SKILL_FILE).exists());
         assert!(!temp.path().join(SKILL_FILE).exists());
     }
 
     #[test]
-    fn sanitized_skill_directory_names_are_collision_resistant() {
+    fn sanitized_skill_directory_names_do_not_include_hashes() {
         let first = json!({"id": "skill:prod"});
         let second = json!({"id": "skill?prod"});
 
         let first_name = skill_directory_name(&first).unwrap();
         let second_name = skill_directory_name(&second).unwrap();
 
-        assert!(first_name.starts_with("skill_prod--"));
-        assert!(second_name.starts_with("skill_prod--"));
-        assert_ne!(first_name, second_name);
+        assert_eq!(first_name, "skill_prod");
+        assert_eq!(second_name, "skill_prod");
     }
 
     #[test]
-    fn skill_directory_names_are_case_collision_resistant() {
+    fn skill_directory_write_rejects_sanitized_id_collisions() {
+        let temp = TempDir::new().unwrap();
+        let first = json!({"id": "skill:prod"});
+        let second = json!({"id": "skill?prod"});
+
+        skill_to_directory(temp.path(), &first).unwrap();
+        let err = skill_to_directory(temp.path(), &second).unwrap_err();
+
+        assert!(err.to_string().contains("skill directory name collision"));
+    }
+
+    #[test]
+    fn skill_directory_write_rejects_case_insensitive_collisions() {
+        let temp = TempDir::new().unwrap();
         let first = json!({"id": "Skill-A"});
         let second = json!({"id": "skill-a"});
 
-        let first_name = skill_directory_name(&first).unwrap();
-        let second_name = skill_directory_name(&second).unwrap();
+        skill_to_directory(temp.path(), &first).unwrap();
+        let err = skill_to_directory(temp.path(), &second).unwrap_err();
 
-        assert!(first_name.starts_with("Skill-A--"));
-        assert!(second_name.starts_with("skill-a--"));
-        assert_ne!(first_name.to_lowercase(), second_name.to_lowercase());
+        assert!(err.to_string().contains("skill directory name collision"));
     }
 
     #[test]

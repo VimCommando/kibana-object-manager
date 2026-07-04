@@ -12,8 +12,8 @@ The system SHALL represent user-created Kibana Skills at rest as per-skill direc
 - **AND** writes Skill `content` as the markdown body of `SKILL.md`
 - **AND** writes `id`, `name`, `description`, `tool_ids`, and `experimental` in the YAML frontmatter of `SKILL.md`
 - **AND** writes each `referenced_content` entry as a markdown file under the Skill directory
-- **AND** uses `{sanitized_id}--{stable_hash}` as the default skill directory name
-- **AND** includes the stable hash suffix to avoid sanitized-name and case-insensitive filesystem collisions
+- **AND** uses a sanitized form of the Skill `id` as the default skill directory name
+- **AND** returns an error instead of replacing a different Skill when sanitized-name or case-insensitive filesystem collisions occur
 - **AND** treats the `id` value in `SKILL.md` frontmatter as authoritative when it differs from the directory name
 
 #### Scenario: Read skill directory from a filesystem bundle

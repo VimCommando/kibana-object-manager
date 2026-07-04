@@ -1,7 +1,7 @@
 ## 1. Skills API Module
 
 - [x] 1.1 Add `crates/kibana-sync/src/kibana/skills/` with module, directory storage/projection, extractor, and loader code.
-- [x] 1.2 Implement Skill directory read/write support for `SKILL.md` YAML frontmatter, markdown body content, referenced markdown files, sanitized and hash-suffixed directory naming, authoritative frontmatter `id`, and round-trip unit tests.
+- [x] 1.2 Implement Skill directory read/write support for `SKILL.md` YAML frontmatter, markdown body content, referenced markdown files, sanitized-id directory naming, authoritative frontmatter `id`, and round-trip unit tests.
 - [x] 1.3 Implement `SkillsExtractor` for list, optional `include_plugins=true`, and selected-id `GET /api/agent_builder/skills/{skillId}` fetches.
 - [x] 1.4 Implement tolerant Skills list response parsing with tests for `results` arrays and top-level arrays.
 - [x] 1.5 Implement `SkillsLoader` create/update upsert flow using `POST /api/agent_builder/skills` and `PUT /api/agent_builder/skills/{skillId}`.
