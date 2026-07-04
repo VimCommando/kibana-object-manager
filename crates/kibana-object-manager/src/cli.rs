@@ -2934,7 +2934,7 @@ async fn fetch_skills_in_order(
                     fetched_skills.push((index, skill));
                 }
                 Ok(Ok((_index, skill_id, _skill))) => {
-                    eyre::bail!("Fetched skill {} is readonly", skill_id)
+                    log::warn!("Skipping readonly skill {}", skill_id);
                 }
                 Ok(Err((skill_id, err))) => {
                     eyre::bail!("Failed to fetch skill {}: {}", skill_id, err)
