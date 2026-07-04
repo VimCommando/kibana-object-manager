@@ -102,8 +102,7 @@ impl Extractor for SkillsExtractor {
         if let Some(skill_ids) = &self.skill_ids {
             self.fetch_selected_skills(skill_ids).await
         } else {
-            tracing::warn!("No skill IDs provided - use search_skills to discover skills");
-            Ok(Vec::new())
+            self.search_skills(false).await
         }
     }
 }
@@ -214,5 +213,21 @@ mod tests {
         let skill = extractor.fetch_skill("skill-a").await.unwrap();
 
         assert_eq!(skill, json!({"id": "skill-a", "content": "Body"}));
+    }
+
+    #[tokio::test]
+    async fn extract_without_skill_ids_lists_skills() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/s/esdiag/api/agent_builder/skills",
+            status: 200,
+            body: json!({"results": [{"id": "skill-a"}]}),
+        }]);
+        let client = server.client().unwrap().space("esdiag").unwrap();
+        let extractor = SkillsExtractor::new(client, None);
+
+        let skills = extractor.extract().await.unwrap();
+
+        assert_eq!(skills, vec![json!({"id": "skill-a"})]);
     }
 }

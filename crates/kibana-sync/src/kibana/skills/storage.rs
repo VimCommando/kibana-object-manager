@@ -110,11 +110,7 @@ impl SkillDirectory {
 pub fn skill_directory_name(skill: &Value) -> Result<String> {
     let id = required_str(skill, "id")?;
     let sanitized = sanitize_path_component(id);
-    if sanitized == id {
-        Ok(sanitized)
-    } else {
-        Ok(format!("{sanitized}--{:016x}", stable_hash(id)))
-    }
+    Ok(format!("{sanitized}--{:016x}", stable_hash(id)))
 }
 
 pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
@@ -618,7 +614,7 @@ mod tests {
 
         assert_eq!(
             dir.file_name().and_then(|name| name.to_str()),
-            Some("threat-hunting-copy")
+            Some(skill_directory_name(&skill).unwrap().as_str())
         );
         assert!(dir.join("SKILL.md").exists());
         assert!(dir.join("overview.md").exists());
@@ -692,6 +688,19 @@ mod tests {
         assert!(first_name.starts_with("skill_prod--"));
         assert!(second_name.starts_with("skill_prod--"));
         assert_ne!(first_name, second_name);
+    }
+
+    #[test]
+    fn skill_directory_names_are_case_collision_resistant() {
+        let first = json!({"id": "Skill-A"});
+        let second = json!({"id": "skill-a"});
+
+        let first_name = skill_directory_name(&first).unwrap();
+        let second_name = skill_directory_name(&second).unwrap();
+
+        assert!(first_name.starts_with("Skill-A--"));
+        assert!(second_name.starts_with("skill-a--"));
+        assert_ne!(first_name.to_lowercase(), second_name.to_lowercase());
     }
 
     #[test]

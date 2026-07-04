@@ -16,6 +16,9 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use crate::kibana::skills::skill_directory_name;
+
 /// Path-explicit reader and writer for version-controlled Kibana asset bundles.
 ///
 /// The stable layout is:
@@ -744,10 +747,19 @@ mod tests {
                 .exists()
         );
         assert!(bundle_path.join("default/manifest/skills.yml").exists());
-        assert!(bundle_path.join("default/skills/skill-1/SKILL.md").exists());
+        let skill_dir = skill_directory_name(&bundle.by_space["default"].skills[0]).unwrap();
         assert!(
             bundle_path
-                .join("default/skills/skill-1/examples/query.md")
+                .join("default/skills")
+                .join(&skill_dir)
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            bundle_path
+                .join("default/skills")
+                .join(&skill_dir)
+                .join("examples/query.md")
                 .exists()
         );
 
@@ -803,9 +815,12 @@ mod tests {
             .write(&bundle)
             .unwrap();
 
+        let skill_dir = skill_directory_name(&bundle.by_space["default"].skills[0]).unwrap();
         assert!(
             bundle_path
-                .join("default/skills/skill-only/SKILL.md")
+                .join("default/skills")
+                .join(&skill_dir)
+                .join("SKILL.md")
                 .exists()
         );
         assert!(bundle_path.join("default/manifest/skills.yml").exists());
