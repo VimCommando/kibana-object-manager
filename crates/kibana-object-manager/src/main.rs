@@ -79,7 +79,39 @@ impl AnsiPassthroughVisitor<'_> {
 }
 
 impl Visit for AnsiPassthroughVisitor<'_> {
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
     fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
+        self.record_value(field, |writer| write!(writer, "{value:?}"));
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
         self.record_value(field, |writer| write!(writer, "{value}"));
     }
 
