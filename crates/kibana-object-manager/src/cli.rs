@@ -7,9 +7,14 @@ use crate::{
     etl::{Extractor, Loader, Transformer},
     kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
     kibana::dependencies::{
-        Dependency, find_agent_dependencies, find_tool_dependencies, find_workflow_dependencies,
+        Dependency, find_agent_dependencies, find_skill_dependencies, find_tool_dependencies,
+        find_workflow_dependencies,
     },
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
+    kibana::skills::{
+        SkillEntry, SkillsExtractor, SkillsLoader, SkillsManifest, skill_to_directory,
+        skill_to_value,
+    },
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
     kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
@@ -28,6 +33,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use url::Url;
+
+const SKILL_FETCH_BATCH_SIZE: usize = 16;
 
 /// Load Kibana client from environment variables
 ///
@@ -132,6 +139,7 @@ fn parse_capability(api: &str) -> Option<ApiCapability> {
         "workflows" | "workflow" => Some(ApiCapability::Workflows),
         "agents" | "agent" => Some(ApiCapability::Agents),
         "tools" | "tool" => Some(ApiCapability::Tools),
+        "skills" | "skill" => Some(ApiCapability::Skills),
         "spaces" | "space" => Some(ApiCapability::Spaces),
         _ => None,
     }
@@ -233,6 +241,7 @@ fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
                 "workflows" => api == "workflows" || api == "workflow",
                 "agents" => api == "agents" || api == "agent",
                 "tools" => api == "tools" || api == "tool",
+                "skills" => api == "skills" || api == "skill",
                 "spaces" => api == "spaces" || api == "space",
                 _ => false,
             }
@@ -240,10 +249,10 @@ fn should_process_api(api_name: &str, filter: Option<&[String]>) -> bool {
     }
 }
 
-/// Pull saved objects from Kibana to local directory
+/// Pull selected Kibana API resources to local directory.
 ///
-/// Pipeline: SavedObjectsExtractor → FieldDropper → FieldUnescaper → DirectoryWriter
-/// Also pulls spaces if spaces.yml exists
+/// Returns the total number of resources pulled across the selected API families, including
+/// saved objects, workflows, agents, tools, skills, and spaces when selected.
 ///
 /// # Arguments
 /// * `project_dir` - Project directory path
@@ -267,6 +276,7 @@ pub async fn pull_saved_objects(
     for capability in [
         ApiCapability::Agents,
         ApiCapability::Tools,
+        ApiCapability::Skills,
         ApiCapability::Workflows,
     ] {
         if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
@@ -312,7 +322,11 @@ pub async fn pull_saved_objects(
     // Determine which spaces to operate on
     let target_space_ids = get_target_space_ids(&client, space_filter);
 
-    let mut total_count = 0;
+    let mut total_saved_objects = 0;
+    let mut total_workflows = 0;
+    let mut total_agents = 0;
+    let mut total_tools = 0;
+    let mut total_skills = 0;
     let mut set = JoinSet::new();
 
     // Pull each managed space concurrently
@@ -324,7 +338,11 @@ pub async fn pull_saved_objects(
 
         set.spawn(async move {
             log::info!("Processing space: {}", space_id.cyan());
-            let mut space_total = 0;
+            let mut s_so = 0;
+            let mut s_wf = 0;
+            let mut s_ag = 0;
+            let mut s_tl = 0;
+            let mut s_sk = 0;
 
             // Get space client for this space
             let space_client = client.space(&space_id)?;
@@ -335,12 +353,14 @@ pub async fn pull_saved_objects(
                 || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
             let can_pull_tools =
                 force || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
+            let can_pull_skills = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Skills);
 
             // Pull saved objects for this space
             if should_process_api("saved_objects", api_filter_slice)
                 && let Ok(count) = pull_space_saved_objects(&project_dir, &space_client).await
             {
-                space_total += count;
+                s_so = count;
             }
 
             // Pull workflows for this space
@@ -348,6 +368,7 @@ pub async fn pull_saved_objects(
                 && should_process_api("workflows", api_filter_slice)
                 && let Ok(count) = pull_space_workflows(&project_dir, &space_client).await
             {
+                s_wf = count;
                 log::debug!("Pulled {} workflow(s) for space {}", count, space_id.cyan());
             }
 
@@ -356,6 +377,7 @@ pub async fn pull_saved_objects(
                 && should_process_api("agents", api_filter_slice)
                 && let Ok(count) = pull_space_agents(&project_dir, &space_client).await
             {
+                s_ag = count;
                 log::debug!("Pulled {} agent(s) for space {}", count, space_id.cyan());
             }
 
@@ -364,24 +386,44 @@ pub async fn pull_saved_objects(
                 && should_process_api("tools", api_filter_slice)
                 && let Ok(count) = pull_space_tools(&project_dir, &space_client).await
             {
+                s_tl = count;
                 log::debug!("Pulled {} tool(s) for space {}", count, space_id.cyan());
             }
 
-            Ok::<usize, eyre::Report>(space_total)
+            // Pull skills for this space
+            if can_pull_skills
+                && should_process_api("skills", api_filter_slice)
+                && let Ok(count) = pull_space_skills(&project_dir, &space_client).await
+            {
+                s_sk = count;
+                log::debug!("Pulled {} skill(s) for space {}", count, space_id.cyan());
+            }
+
+            Ok::<(usize, usize, usize, usize, usize), eyre::Report>((s_so, s_wf, s_ag, s_tl, s_sk))
         });
     }
 
     while let Some(res) = set.join_next().await {
         match res {
-            Ok(Ok(count)) => total_count += count,
+            Ok(Ok((so, wf, ag, tl, sk))) => {
+                total_saved_objects += so;
+                total_workflows += wf;
+                total_agents += ag;
+                total_tools += tl;
+                total_skills += sk;
+            }
             Ok(Err(e)) => log::error!("Space processing failed: {}", e),
             Err(e) => log::error!("Task panicked: {}", e),
         }
     }
 
     log::info!(
-        "✓ Pull complete: {} total saved object(s) across all spaces",
-        total_count
+        "✓ Pull complete: {} saved object(s), {} workflow(s), {} agent(s), {} tool(s), {} skill(s)",
+        total_saved_objects,
+        total_workflows,
+        total_agents,
+        total_tools,
+        total_skills
     );
 
     // Record the source cluster version after successful pull execution.
@@ -396,7 +438,7 @@ pub async fn pull_saved_objects(
         ));
     }
 
-    Ok(total_count)
+    Ok(total_saved_objects + total_workflows + total_agents + total_tools + total_skills)
 }
 
 /// Push saved objects from local directory to Kibana
@@ -428,6 +470,7 @@ pub async fn push_saved_objects(
     for capability in [
         ApiCapability::Agents,
         ApiCapability::Tools,
+        ApiCapability::Skills,
         ApiCapability::Workflows,
     ] {
         if capability_requested(capability, api_filter.as_deref().map(|f| f.as_slice()))
@@ -472,6 +515,7 @@ pub async fn push_saved_objects(
     let mut total_workflows = 0;
     let mut total_agents = 0;
     let mut total_tools = 0;
+    let mut total_skills = 0;
 
     let mut set = JoinSet::new();
 
@@ -488,6 +532,7 @@ pub async fn push_saved_objects(
             let mut s_wf = 0;
             let mut s_ag = 0;
             let mut s_tl = 0;
+            let mut s_sk = 0;
 
             // Get space client for this space
             let space_client = client.space(&space_id)?;
@@ -498,6 +543,8 @@ pub async fn push_saved_objects(
                 || KibanaClient::supports_capability(&detected_version, ApiCapability::Agents);
             let can_push_tools =
                 force || KibanaClient::supports_capability(&detected_version, ApiCapability::Tools);
+            let can_push_skills = force
+                || KibanaClient::supports_capability(&detected_version, ApiCapability::Skills);
 
             // Push saved objects for this space
             if should_process_api("saved_objects", api_filter_slice) {
@@ -543,6 +590,18 @@ pub async fn push_saved_objects(
                 }
             }
 
+            // Push skills for this space
+            if can_push_skills && should_process_api("skills", api_filter_slice) {
+                match push_space_skills(&project_dir, &space_client).await {
+                    Ok(count) => {
+                        s_sk = count;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to push skills for space {}: {}", space_id.cyan(), e);
+                    }
+                }
+            }
+
             // Push agents for this space
             if can_push_agents && should_process_api("agents", api_filter_slice) {
                 match push_space_agents(&project_dir, &space_client).await {
@@ -555,17 +614,18 @@ pub async fn push_saved_objects(
                 }
             }
 
-            Ok::<(usize, usize, usize, usize), eyre::Report>((s_so, s_wf, s_ag, s_tl))
+            Ok::<(usize, usize, usize, usize, usize), eyre::Report>((s_so, s_wf, s_ag, s_tl, s_sk))
         });
     }
 
     while let Some(res) = set.join_next().await {
         match res {
-            Ok(Ok((so, wf, ag, tl))) => {
+            Ok(Ok((so, wf, ag, tl, sk))) => {
                 total_saved_objects += so;
                 total_workflows += wf;
                 total_agents += ag;
                 total_tools += tl;
+                total_skills += sk;
             }
             Ok(Err(e)) => log::error!("Space processing failed: {}", e),
             Err(e) => log::error!("Task panicked: {}", e),
@@ -573,11 +633,12 @@ pub async fn push_saved_objects(
     }
 
     log::info!(
-        "✓ Push complete: {} saved object(s), {} workflow(s), {} agent(s), {} tool(s)",
+        "✓ Push complete: {} saved object(s), {} workflow(s), {} agent(s), {} tool(s), {} skill(s)",
         total_saved_objects,
         total_workflows,
         total_agents,
-        total_tools
+        total_tools,
+        total_skills
     );
 
     if warning_exit {
@@ -586,7 +647,7 @@ pub async fn push_saved_objects(
         ));
     }
 
-    Ok(total_saved_objects + total_workflows + total_agents + total_tools)
+    Ok(total_saved_objects + total_workflows + total_agents + total_tools + total_skills)
 }
 
 /// Bundle saved objects to NDJSON file for distribution
@@ -612,7 +673,11 @@ pub async fn bundle_to_ndjson(
     // Determine which spaces to operate on (reads from spaces.yml directly)
     let target_space_ids = get_target_space_ids_from_manifest(project_dir, space_filter);
 
-    let mut total_count = 0;
+    let mut total_saved_objects = 0;
+    let mut total_workflows = 0;
+    let mut total_agents = 0;
+    let mut total_tools = 0;
+    let mut total_skills = 0;
 
     let can_bundle_workflows = recorded_version
         .as_ref()
@@ -625,6 +690,10 @@ pub async fn bundle_to_ndjson(
     let can_bundle_tools = recorded_version
         .as_ref()
         .map(|v| KibanaClient::supports_capability(v, ApiCapability::Tools))
+        .unwrap_or(true);
+    let can_bundle_skills = recorded_version
+        .as_ref()
+        .map(|v| KibanaClient::supports_capability(v, ApiCapability::Skills))
         .unwrap_or(true);
 
     if let Some(version) = recorded_version.as_ref() {
@@ -646,6 +715,12 @@ pub async fn bundle_to_ndjson(
                 KibanaClient::unsupported_capability_reason(version, ApiCapability::Tools)
             );
         }
+        if capability_requested(ApiCapability::Skills, api_filter) && !can_bundle_skills {
+            log::warn!(
+                "{}",
+                KibanaClient::unsupported_capability_reason(version, ApiCapability::Skills)
+            );
+        }
     }
 
     // Bundle each managed space
@@ -656,7 +731,7 @@ pub async fn bundle_to_ndjson(
         if should_process_api("saved_objects", api_filter)
             && let Ok(count) = bundle_space_saved_objects(project_dir, space_id, managed).await
         {
-            total_count += count;
+            total_saved_objects += count;
         }
 
         // Bundle workflows for this space
@@ -664,6 +739,7 @@ pub async fn bundle_to_ndjson(
             && should_process_api("workflows", api_filter)
             && let Ok(count) = bundle_space_workflows(project_dir, space_id).await
         {
+            total_workflows += count;
             log::debug!(
                 "Bundled {} workflow(s) for space {}",
                 count,
@@ -676,7 +752,17 @@ pub async fn bundle_to_ndjson(
             && should_process_api("tools", api_filter)
             && let Ok(count) = bundle_space_tools(project_dir, space_id).await
         {
+            total_tools += count;
             log::debug!("Bundled {} tool(s) for space {}", count, space_id.cyan());
+        }
+
+        // Bundle skills for this space
+        if can_bundle_skills
+            && should_process_api("skills", api_filter)
+            && let Ok(count) = bundle_space_skills(project_dir, space_id).await
+        {
+            total_skills += count;
+            log::debug!("Bundled {} skill(s) for space {}", count, space_id.cyan());
         }
 
         // Bundle agents for this space
@@ -684,6 +770,7 @@ pub async fn bundle_to_ndjson(
             && should_process_api("agents", api_filter)
             && let Ok(count) = bundle_space_agents(project_dir, space_id).await
         {
+            total_agents += count;
             log::debug!("Bundled {} agent(s) for space {}", count, space_id.cyan());
         }
     }
@@ -706,10 +793,14 @@ pub async fn bundle_to_ndjson(
     }
 
     log::info!(
-        "✓ Bundle complete: {} total saved object(s) across all spaces",
-        total_count
+        "✓ Bundle complete: {} saved object(s), {} workflow(s), {} agent(s), {} tool(s), {} skill(s)",
+        total_saved_objects,
+        total_workflows,
+        total_agents,
+        total_tools,
+        total_skills
     );
-    Ok(total_count)
+    Ok(total_saved_objects + total_workflows + total_agents + total_tools + total_skills)
 }
 
 /// Initialize a new manifest from an export.ndjson file
@@ -2596,6 +2687,300 @@ pub async fn add_tools_to_manifest(
     Ok(added_count + dep_summary.total())
 }
 
+/// Add skills to a space-specific skill directory.
+///
+/// Skills are stored as `skills/<skill-id>/SKILL.md` plus referenced markdown
+/// files. JSON is only used when reading API responses or bundle NDJSON.
+#[allow(clippy::too_many_arguments)]
+pub async fn add_skills_to_manifest(
+    project_dir: impl AsRef<Path>,
+    space_id: &str,
+    query: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    file_path: Option<String>,
+    exclude_dependencies: bool,
+    force: bool,
+) -> Result<usize> {
+    let project_dir = project_dir.as_ref();
+
+    let spaces_manifest_path = project_dir.join("spaces.yml");
+    if spaces_manifest_path.exists() {
+        let manifest = SpacesManifest::read(&spaces_manifest_path)?;
+        if !manifest.spaces.iter().any(|s| s.id == space_id) {
+            eyre::bail!(
+                "Space {} is not managed. Add it first with: kibob add spaces . --include '^{}$'",
+                space_id.cyan(),
+                space_id
+            );
+        }
+    }
+
+    let requires_kibana_calls = file_path.is_none() || !exclude_dependencies;
+    let mut preflight_client: Option<KibanaClient> = None;
+    let mut detected_version: Option<KibanaVersion> = None;
+    if requires_kibana_calls {
+        let client = load_kibana_client(project_dir)?;
+        let preflight = run_version_preflight(project_dir, &client, "add", force).await?;
+        detected_version = Some(preflight.detected.parsed);
+        preflight_client = Some(client);
+    }
+
+    if let Some(version) = detected_version
+        && !KibanaClient::supports_capability(&version, ApiCapability::Skills)
+    {
+        let reason = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Skills);
+        if force {
+            log::warn!("{}", reason);
+            log::warn!("--force enabled: attempting skills API calls anyway");
+        } else if file_path.is_none() {
+            return Err(version_warning(reason));
+        } else {
+            log::warn!("{}", reason);
+        }
+    }
+
+    let filters_applied_before_fetch = file_path.is_none() && query.is_none();
+    let new_skills: Vec<Value> = if let Some(file) = file_path {
+        read_agent_builder_values_from_file(&file, "skill")?
+    } else {
+        let client = preflight_client
+            .clone()
+            .unwrap_or(load_kibana_client(project_dir)?);
+        let space_client = client.space(space_id)?;
+        let extractor = SkillsExtractor::new(space_client.clone(), None);
+
+        if let Some(skill_id) = query.as_deref() {
+            log::info!(
+                "Fetching skill {} in space {}...",
+                skill_id,
+                space_id.cyan()
+            );
+            vec![extractor.fetch_skill(skill_id).await?]
+        } else {
+            log::info!("Searching skills via API in space {}...", space_id.cyan());
+            let listed = extractor.search_skills(false).await?;
+            log::info!("Found {} skill(s) before filtering", listed.len());
+            let listed = filter_skills(listed, &include, &exclude)?;
+            let mut skill_ids = Vec::new();
+            for (index, skill) in listed.into_iter().enumerate() {
+                if is_readonly(&skill) {
+                    continue;
+                }
+                let Some(skill_id) = skill.get("id").and_then(|v| v.as_str()) else {
+                    log::warn!("Skipping skill list entry without id");
+                    continue;
+                };
+                skill_ids.push((index, skill_id.to_string()));
+            }
+            fetch_skills_in_order(space_client, skill_ids).await?
+        }
+    };
+
+    let filtered_skills = if filters_applied_before_fetch {
+        new_skills
+    } else {
+        log::info!("Found {} skill(s) before filtering", new_skills.len());
+        filter_skills(new_skills, &include, &exclude)?
+    };
+
+    log::info!("Adding {} skill(s) after filtering", filtered_skills.len());
+
+    let skills_dir = get_space_skills_dir(project_dir, space_id);
+    std::fs::create_dir_all(&skills_dir)?;
+    let manifest_path = get_space_skills_manifest(project_dir, space_id);
+    let mut manifest = if manifest_path.exists() {
+        SkillsManifest::read(&manifest_path)?
+    } else {
+        SkillsManifest::new()
+    };
+
+    let mut added_count = 0;
+    let mut all_deps = Vec::new();
+    for skill in &filtered_skills {
+        if is_readonly(skill) {
+            log::debug!(
+                "Skipping readonly skill {}",
+                skill
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>")
+            );
+            continue;
+        }
+
+        skill_to_directory(&skills_dir, skill)?;
+        let added = manifest.add_skill(skill_entry(skill)?);
+        if added {
+            added_count += 1;
+
+            if !exclude_dependencies {
+                all_deps.extend(find_skill_dependencies(skill));
+            }
+        }
+    }
+    manifest.write(&manifest_path)?;
+
+    let mut dep_summary = DependencySummary::new();
+    if !all_deps.is_empty() {
+        let client = preflight_client.unwrap_or(load_kibana_client(project_dir)?);
+        let version = client.server_version().await?;
+        dep_summary =
+            resolve_and_add_dependencies(project_dir, space_id, &client, all_deps, version, force)
+                .await?;
+    }
+
+    if !dep_summary.is_empty() {
+        log::info!(
+            "✓ Added {} skill(s) (plus dependencies: {})",
+            added_count,
+            dep_summary.format_summary()
+        );
+    } else {
+        log::info!("✓ Added {} skill(s)", added_count);
+    }
+
+    Ok(added_count + dep_summary.total())
+}
+
+fn read_agent_builder_values_from_file(file: &str, label: &str) -> Result<Vec<Value>> {
+    log::info!("Reading {}s from {}", label, file);
+    let file_path = std::path::Path::new(file);
+
+    if !file_path.exists() {
+        eyre::bail!("File not found: {}", file_path.display());
+    }
+
+    let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    match extension {
+        "ndjson" => {
+            use std::io::{BufRead, BufReader};
+            let file = std::fs::File::open(file_path)?;
+            let reader = BufReader::new(file);
+
+            let mut values = Vec::new();
+            for line in reader.lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                values.push(serde_json::from_str(&line)?);
+            }
+            log::info!("Read {} {}(s) from NDJSON file", values.len(), label);
+            Ok(values)
+        }
+        "json" => {
+            let content = std::fs::read_to_string(file_path)?;
+            let parsed: Value = serde_json::from_str(&content)?;
+
+            if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
+                log::info!("Read {} {}(s) from JSON API response", results.len(), label);
+                Ok(results.to_vec())
+            } else if let Some(arr) = parsed.as_array() {
+                log::info!("Read {} {}(s) from JSON array", arr.len(), label);
+                Ok(arr.to_vec())
+            } else {
+                log::info!("Read 1 {} from JSON file", label);
+                Ok(vec![parsed])
+            }
+        }
+        _ => {
+            eyre::bail!(
+                "Unsupported file format: {}. Expected .json or .ndjson",
+                extension
+            );
+        }
+    }
+}
+
+fn is_readonly(value: &Value) -> bool {
+    value
+        .get("readonly")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn skill_filter_field(skill: &Value) -> &str {
+    skill
+        .get("name")
+        .or_else(|| skill.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+async fn fetch_skills_in_order(
+    client: KibanaClient,
+    skill_ids: Vec<(usize, String)>,
+) -> Result<Vec<Value>> {
+    let mut fetched_skills = Vec::new();
+
+    for chunk in skill_ids.chunks(SKILL_FETCH_BATCH_SIZE) {
+        let mut set = JoinSet::new();
+        for (index, skill_id) in chunk {
+            let extractor = SkillsExtractor::new(client.clone(), None);
+            let index = *index;
+            let skill_id = skill_id.clone();
+            set.spawn(async move {
+                match extractor.fetch_skill(&skill_id).await {
+                    Ok(skill) => Ok((index, skill_id, skill)),
+                    Err(err) => Err((skill_id, err.to_string())),
+                }
+            });
+        }
+
+        while let Some(result) = set.join_next().await {
+            match result {
+                Ok(Ok((index, _skill_id, skill))) if !is_readonly(&skill) => {
+                    fetched_skills.push((index, skill));
+                }
+                Ok(Ok((_index, skill_id, _skill))) => {
+                    log::warn!("Skipping readonly skill {}", skill_id);
+                }
+                Ok(Err((skill_id, err))) => {
+                    eyre::bail!("Failed to fetch skill {}: {}", skill_id, err)
+                }
+                Err(err) => eyre::bail!("Task panicked: {}", err),
+            }
+        }
+    }
+
+    fetched_skills.sort_by_key(|(index, _)| *index);
+    Ok(fetched_skills
+        .into_iter()
+        .map(|(_index, skill)| skill)
+        .collect())
+}
+
+fn filter_skills(
+    mut skills: Vec<Value>,
+    include: &Option<String>,
+    exclude: &Option<String>,
+) -> Result<Vec<Value>> {
+    if let Some(include_pattern) = include {
+        let regex = regex::Regex::new(include_pattern)
+            .with_context(|| format!("Invalid include regex pattern: {}", include_pattern))?;
+        skills.retain(|skill| regex.is_match(skill_filter_field(skill)));
+        log::info!(
+            "After include filter '{}': {} skill(s)",
+            include_pattern,
+            skills.len()
+        );
+    }
+
+    if let Some(exclude_pattern) = exclude {
+        let regex = regex::Regex::new(exclude_pattern)
+            .with_context(|| format!("Invalid exclude regex pattern: {}", exclude_pattern))?;
+        skills.retain(|skill| !regex.is_match(skill_filter_field(skill)));
+        log::info!(
+            "After exclude filter '{}': {} skill(s)",
+            exclude_pattern,
+            skills.len()
+        );
+    }
+
+    Ok(skills)
+}
+
 /// Pull tools from Kibana to local directory
 ///
 /// Pipeline: ToolsExtractor → Write to tools/<name or id>.json files
@@ -2941,6 +3326,41 @@ async fn pull_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<u
     Ok(count)
 }
 
+/// Pull user-created skills for a specific space.
+async fn pull_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
+    let manifest_path = get_space_skills_manifest(project_dir, space_id);
+
+    if !manifest_path.exists() {
+        log::debug!("No skills manifest for space {}, skipping", space_id.cyan());
+        return Ok(0);
+    }
+
+    log::info!("Pulling skills for space {}", space_id.cyan());
+    let manifest = SkillsManifest::read(&manifest_path)?;
+    log::debug!("Loaded {} skill(s) from manifest", manifest.count());
+
+    let skills_dir = get_space_skills_dir(project_dir, space_id);
+    std::fs::create_dir_all(&skills_dir)?;
+
+    let skill_ids = manifest
+        .skills
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (index, entry.id.clone()))
+        .collect::<Vec<_>>();
+    let skills = fetch_skills_in_order(client.clone(), skill_ids).await?;
+
+    let mut count = 0;
+    for full_skill in skills {
+        skill_to_directory(&skills_dir, &full_skill)?;
+        count += 1;
+    }
+
+    log::info!("✓ Pulled {} skill(s) for space {}", count, space_id.cyan());
+    Ok(count)
+}
+
 //
 // Push helper functions for multi-space support
 //
@@ -3087,6 +3507,36 @@ async fn push_space_tools(project_dir: &Path, client: &KibanaClient) -> Result<u
     let count = loader.load(tools).await?;
 
     log::info!("✓ Pushed {} tool(s) for space {}", count, space_id.cyan());
+    Ok(count)
+}
+
+/// Push skills for a specific space.
+async fn push_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<usize> {
+    let space_id = client.space_id();
+    let skills_dir = get_space_skills_dir(project_dir, space_id);
+
+    let skills = read_skill_values_from_dir(
+        &skills_dir,
+        &get_space_skills_manifest(project_dir, space_id),
+    )?;
+    if skills.is_empty() {
+        if skills_dir.exists() {
+            log::debug!("No skills selected for space {}, skipping", space_id.cyan());
+        } else {
+            log::debug!(
+                "No skills directory for space {}, skipping",
+                space_id.cyan()
+            );
+        }
+        return Ok(0);
+    }
+
+    log::info!("Pushing skills for space {}", space_id.cyan());
+
+    let loader = SkillsLoader::new(client.clone());
+    let count = loader.load(skills).await?;
+
+    log::info!("✓ Pushed {} skill(s) for space {}", count, space_id.cyan());
     Ok(count)
 }
 
@@ -3285,6 +3735,124 @@ async fn bundle_space_tools(project_dir: &Path, space_id: &str) -> Result<usize>
     Ok(tools.len())
 }
 
+/// Bundle skills for a specific space.
+async fn bundle_space_skills(project_dir: &Path, space_id: &str) -> Result<usize> {
+    let skills_dir = get_space_skills_dir(project_dir, space_id);
+
+    let skills = read_skill_values_from_dir(
+        &skills_dir,
+        &get_space_skills_manifest(project_dir, space_id),
+    )?;
+    if skills.is_empty() {
+        if skills_dir.exists() {
+            log::debug!("No skills selected for space {}, skipping", space_id.cyan());
+        } else {
+            log::debug!(
+                "No skills directory for space {}, skipping",
+                space_id.cyan()
+            );
+        }
+        return Ok(0);
+    }
+
+    log::info!("Bundling skills for space {}", space_id.cyan());
+
+    let bundle_dir = get_space_bundle_dir(project_dir, space_id);
+    std::fs::create_dir_all(&bundle_dir)?;
+    let output_file = bundle_dir.join("skills.ndjson");
+
+    use std::io::Write;
+    let mut file = std::fs::File::create(&output_file)?;
+    for skill in &skills {
+        let json_line = serde_json::to_string(skill)?;
+        writeln!(file, "{}", json_line)?;
+    }
+
+    log::info!(
+        "✓ Bundled {} skill(s) for space {} to {}",
+        skills.len(),
+        space_id.cyan(),
+        output_file.display()
+    );
+    Ok(skills.len())
+}
+
+fn read_skill_values_from_dir(skills_dir: &Path, manifest_path: &Path) -> Result<Vec<Value>> {
+    let manifest = if manifest_path.exists() {
+        Some(SkillsManifest::read(manifest_path)?)
+    } else {
+        None
+    };
+
+    if !skills_dir.exists() {
+        if let Some(manifest) = manifest
+            && let Some(entry) = manifest.skills.first()
+        {
+            eyre::bail!(
+                "skill '{}' listed in {} was not found under {}",
+                entry.id,
+                manifest_path.display(),
+                skills_dir.display()
+            );
+        }
+        return Ok(Vec::new());
+    }
+
+    let mut skill_dirs = Vec::new();
+    for entry in std::fs::read_dir(skills_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            eyre::bail!("skill directory cannot be a symlink: {}", path.display());
+        }
+        if metadata.is_dir() && path.join("SKILL.md").exists() {
+            skill_dirs.push(path);
+        }
+    }
+    skill_dirs.sort();
+
+    let mut skills = Vec::new();
+    for dir in skill_dirs {
+        skills.push(skill_to_value(&dir, true)?);
+    }
+
+    let Some(manifest) = manifest else {
+        return Ok(skills);
+    };
+
+    manifest
+        .skills
+        .iter()
+        .map(|entry| {
+            skills
+                .iter()
+                .find(|skill| skill.get("id").and_then(|id| id.as_str()) == Some(&entry.id))
+                .cloned()
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "skill '{}' listed in {} was not found under {}",
+                        entry.id,
+                        manifest_path.display(),
+                        skills_dir.display()
+                    )
+                })
+        })
+        .collect()
+}
+
+fn skill_entry(skill: &Value) -> Result<SkillEntry> {
+    let id = skill
+        .get("id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| eyre::eyre!("Skill missing 'id' field"))?;
+    let name = skill
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or(id);
+    Ok(SkillEntry::new(id, name))
+}
+
 //
 // Path resolution helpers for multi-space support
 //
@@ -3331,6 +3899,20 @@ fn get_space_agents_dir(project_dir: &Path, space_id: &str) -> std::path::PathBu
 /// Returns the tools directory for a specific space (e.g., `{project_dir}/default/tools/`)
 fn get_space_tools_dir(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
     get_space_dir(project_dir, space_id).join("tools")
+}
+
+/// Get skills directory for a space
+///
+/// Returns the skills directory for a specific space (e.g., `{project_dir}/default/skills/`)
+fn get_space_skills_dir(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
+    get_space_dir(project_dir, space_id).join("skills")
+}
+
+/// Get skills manifest path for a space
+///
+/// Returns the skills manifest path for a specific space (e.g., `{project_dir}/default/manifest/skills.yml`)
+fn get_space_skills_manifest(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
+    get_space_manifest_dir(project_dir, space_id).join("skills.yml")
 }
 
 /// Get saved_objects manifest path for a space
@@ -3380,6 +3962,7 @@ fn get_space_file(project_dir: &Path, space_id: &str) -> std::path::PathBuf {
 pub struct DependencySummary {
     pub agents: usize,
     pub tools: usize,
+    pub skills: usize,
     pub workflows: usize,
 }
 
@@ -3389,11 +3972,11 @@ impl DependencySummary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.agents == 0 && self.tools == 0 && self.workflows == 0
+        self.agents == 0 && self.tools == 0 && self.skills == 0 && self.workflows == 0
     }
 
     pub fn total(&self) -> usize {
-        self.agents + self.tools + self.workflows
+        self.agents + self.tools + self.skills + self.workflows
     }
 
     pub fn format_summary(&self) -> String {
@@ -3403,6 +3986,9 @@ impl DependencySummary {
         }
         if self.tools > 0 {
             parts.push(format!("{} tool(s)", self.tools));
+        }
+        if self.skills > 0 {
+            parts.push(format!("{} skill(s)", self.skills));
         }
         if self.workflows > 0 {
             parts.push(format!("{} workflow(s)", self.workflows));
@@ -3534,6 +4120,59 @@ async fn resolve_and_add_dependencies(
                     summary.tools += 1;
                     pending_deps.extend(find_tool_dependencies(&tool));
                 }
+            }
+            Dependency::Skill(id) => {
+                if !force
+                    && !KibanaClient::supports_capability(&detected_version, ApiCapability::Skills)
+                {
+                    log::warn!(
+                        "{}",
+                        KibanaClient::unsupported_capability_reason(
+                            &detected_version,
+                            ApiCapability::Skills
+                        )
+                    );
+                    continue;
+                }
+                if !processed_ids.insert(format!("skill:{}", id)) {
+                    continue;
+                }
+
+                log::info!("Automatically adding dependent skill: {}", id.cyan());
+                let path = format!("api/agent_builder/skills/{}", id);
+                let response = client.get(&path).await?;
+                if !response.status().is_success() {
+                    log::warn!(
+                        "Failed to fetch dependent skill {}: {}",
+                        id,
+                        response.status()
+                    );
+                    continue;
+                }
+                let skill: Value = response.json().await?;
+                if is_readonly(&skill) {
+                    log::debug!("Skipping readonly dependent skill {}", id);
+                    continue;
+                }
+
+                let manifest_path = get_space_skills_manifest(project_dir, space_id);
+                let mut manifest = if manifest_path.exists() {
+                    SkillsManifest::read(&manifest_path)?
+                } else {
+                    SkillsManifest::new()
+                };
+                if manifest.contains_id(&id) {
+                    continue;
+                }
+
+                let skills_dir = get_space_skills_dir(project_dir, space_id);
+                std::fs::create_dir_all(&skills_dir)?;
+                skill_to_directory(&skills_dir, &skill)?;
+                manifest.add_skill(skill_entry(&skill)?);
+                manifest.write(&manifest_path)?;
+
+                summary.skills += 1;
+                pending_deps.extend(find_skill_dependencies(&skill));
             }
             Dependency::Workflow(id) => {
                 if !force
@@ -3746,12 +4385,56 @@ mod tests {
         assert_eq!(summary.format_summary(), "1 agent(s), 2 tool(s)");
         assert_eq!(summary.total(), 3);
 
+        summary.skills = 3;
+        assert_eq!(
+            summary.format_summary(),
+            "1 agent(s), 2 tool(s), 3 skill(s)"
+        );
+        assert_eq!(summary.total(), 6);
+
         summary.workflows = 3;
         assert_eq!(
             summary.format_summary(),
-            "1 agent(s), 2 tool(s), 3 workflow(s)"
+            "1 agent(s), 2 tool(s), 3 skill(s), 3 workflow(s)"
         );
-        assert_eq!(summary.total(), 6);
+        assert_eq!(summary.total(), 9);
+    }
+
+    #[test]
+    fn test_parse_capability_accepts_skills_aliases() {
+        assert_eq!(parse_capability("skills"), Some(ApiCapability::Skills));
+        assert_eq!(parse_capability("skill"), Some(ApiCapability::Skills));
+    }
+
+    #[test]
+    fn test_should_process_api_supports_skills_filters() {
+        let skills = vec!["skills".to_string()];
+        assert!(should_process_api("skills", Some(&skills)));
+        assert!(!should_process_api("tools", Some(&skills)));
+
+        let singular = vec!["skill".to_string()];
+        assert!(should_process_api("skills", Some(&singular)));
+
+        let mixed = vec![
+            "agents".to_string(),
+            "skill".to_string(),
+            "workflows".to_string(),
+        ];
+        assert!(should_process_api("agents", Some(&mixed)));
+        assert!(should_process_api("skills", Some(&mixed)));
+        assert!(should_process_api("workflows", Some(&mixed)));
+        assert!(!should_process_api("tools", Some(&mixed)));
+    }
+
+    #[test]
+    fn test_skills_unsupported_warning_names_version_and_maturity() {
+        let version = parse_kibana_version("9.3.0").unwrap();
+        let warning = KibanaClient::unsupported_capability_reason(&version, ApiCapability::Skills);
+
+        assert!(warning.contains("API 'skills'"));
+        assert!(warning.contains("9.4.0+"));
+        assert!(warning.contains("detected 9.3.0"));
+        assert!(warning.contains("Experimental as of 9.4"));
     }
 
     #[test]

@@ -16,6 +16,9 @@ use kibana_object_manager::{
         saved_objects::{
             SavedObject, SavedObjectsExtractor, SavedObjectsLoader, SavedObjectsManifest,
         },
+        skills::{
+            SkillsExtractor, SkillsLoader, skill_directory_name, skill_to_directory, skill_to_value,
+        },
         spaces::SpacesExtractor,
         tools::ToolsExtractor,
         workflows::WorkflowsExtractor,
@@ -23,6 +26,7 @@ use kibana_object_manager::{
 };
 use serde_json::json;
 use serial_test::serial;
+use tempfile::TempDir;
 
 #[tokio::test]
 #[ignore]
@@ -130,6 +134,19 @@ async fn live_supported_api_smoke_tests() -> Result<()> {
             }
         }
 
+        if KibanaClient::supports_capability(&version, ApiCapability::Skills) {
+            match SkillsExtractor::new(space_client.clone(), None)
+                .search_skills(false)
+                .await
+            {
+                Ok(skills) => assert!(skills.iter().all(|skill| skill.is_object())),
+                Err(e) if optional_api_unavailable(&e) => {
+                    eprintln!("Skipping live skills smoke: {e}");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
         if KibanaClient::supports_capability(&version, ApiCapability::Workflows) {
             match WorkflowsExtractor::new(space_client, None)
                 .search_workflows(None, Some(10))
@@ -151,6 +168,108 @@ async fn live_supported_api_smoke_tests() -> Result<()> {
     result?;
     cleanup?;
     Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+#[serial(live_kibana)]
+async fn live_skills_threat_hunting_referenced_content_roundtrip() -> Result<()> {
+    let space_id = "esdiag".to_string();
+    let live = LiveKibana::new(std::slice::from_ref(&space_id)).await?;
+
+    let version = live.client.server_version().await?;
+    if !KibanaClient::supports_capability(&version, ApiCapability::Skills) {
+        eprintln!("Skipping live skills roundtrip: Skills require Kibana 9.4.0+");
+        return Ok(());
+    }
+
+    let space_client = live.client.space(&space_id)?;
+    let extractor = SkillsExtractor::new(space_client.clone(), None);
+    let loader = SkillsLoader::new(space_client.clone());
+    let source_skill_id =
+        std::env::var("KIBANA_TEST_SOURCE_SKILL_ID").unwrap_or_else(|_| "threat-hunting".into());
+    let test_skill_id = format!("kibob-live-{}-{}-copy", live.run_id, source_skill_id);
+    let test_skill_name = format!("Kibob Live {} {} Copy", live.run_id, source_skill_id);
+    let mut created = false;
+
+    let result = async {
+        let source = extractor.fetch_skill(&source_skill_id).await?;
+        let expected_referenced_content = normalized_referenced_content(&source);
+        assert!(
+            !expected_referenced_content.is_empty(),
+            "{source_skill_id} should include referenced_content"
+        );
+
+        let temp = TempDir::new().map_err(kibana_sync::Error::from)?;
+        let mut copy = source.clone();
+        let object = copy.as_object_mut().ok_or_else(|| {
+            kibana_sync::Error::message("source Skill response was not a JSON object")
+        })?;
+        object.insert("id".to_string(), json!(test_skill_id));
+        object.insert("name".to_string(), json!(test_skill_name));
+
+        skill_to_directory(temp.path(), &copy)?;
+        let skill_dir = temp.path().join(skill_directory_name(&copy)?);
+        let mut projected = skill_to_value(&skill_dir, true)?;
+        if let Some(object) = projected.as_object_mut() {
+            object.remove("experimental");
+        }
+        assert!(projected.get("readonly").is_none());
+
+        let response = space_client
+            .post_json_value("api/agent_builder/skills", &projected)
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(kibana_sync::Error::api_response(status, body));
+        }
+        created = true;
+
+        let fetched = extractor.fetch_skill(&test_skill_id).await?;
+        assert_eq!(fetched["id"], test_skill_id);
+        assert_eq!(
+            normalized_referenced_content(&fetched),
+            expected_referenced_content
+        );
+
+        Ok::<(), kibana_sync::Error>(())
+    }
+    .await;
+
+    if created {
+        if let Err(err) = loader.delete_skill(&test_skill_id, true).await {
+            eprintln!("Best-effort cleanup failed for skill {test_skill_id}: {err}");
+        }
+    }
+
+    result?;
+    Ok(())
+}
+
+fn normalized_referenced_content(skill: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut referenced = skill
+        .get("referenced_content")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "name": item.get("name").cloned().unwrap_or(serde_json::Value::Null),
+                        "relativePath": item
+                            .get("relativePath")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        "content": item.get("content").cloned().unwrap_or(serde_json::Value::Null)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    referenced.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    referenced
 }
 
 fn optional_api_unavailable(error: &kibana_sync::Error) -> bool {

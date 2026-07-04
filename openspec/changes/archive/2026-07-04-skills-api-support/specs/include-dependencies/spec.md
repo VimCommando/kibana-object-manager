@@ -1,8 +1,5 @@
-# include-dependencies Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change include-dependencies. Update Purpose after archive.
-## Requirements
 ### Requirement: Automatic Dependency Inclusion
 When adding an object to a manifest via the `add` command, `kibob` MUST automatically identify and add all referenced dependencies to their respective manifests, unless the `--exclude-dependencies` flag is provided.
 

@@ -13,6 +13,9 @@ pub mod fs;
 pub mod kibana;
 pub mod sync;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use client::{
     ApiCapability, Auth, KibanaClient, KibanaClientBuilder, KibanaVersion, KibanaVersionInfo,
     SpaceRegistry, parse_kibana_version,

@@ -55,6 +55,7 @@ pub enum ApiCapability {
     SavedObjects,
     Agents,
     Tools,
+    Skills,
     Workflows,
 }
 
@@ -65,6 +66,7 @@ impl ApiCapability {
             Self::SavedObjects => "saved_objects",
             Self::Agents => "agents",
             Self::Tools => "tools",
+            Self::Skills => "skills",
             Self::Workflows => "workflows",
         }
     }
@@ -73,6 +75,7 @@ impl ApiCapability {
         match self {
             Self::Spaces | Self::SavedObjects => KibanaVersion::new(8, 0, 0),
             Self::Agents | Self::Tools => KibanaVersion::new(9, 2, 0),
+            Self::Skills => KibanaVersion::new(9, 4, 0),
             Self::Workflows => KibanaVersion::new(9, 3, 0),
         }
     }
@@ -80,6 +83,7 @@ impl ApiCapability {
     pub fn maturity_note(self) -> Option<&'static str> {
         match self {
             Self::Agents | Self::Tools => Some("Tech preview in 9.2, GA in 9.3"),
+            Self::Skills => Some("Experimental as of 9.4"),
             Self::Workflows => Some("Tech preview in 9.3"),
             _ => None,
         }
@@ -739,6 +743,16 @@ mod tests {
         assert!(!KibanaClient::supports_capability(
             &v92,
             ApiCapability::Workflows
+        ));
+
+        let v94 = parse_kibana_version("9.4.0").unwrap();
+        assert!(KibanaClient::supports_capability(
+            &v94,
+            ApiCapability::Skills
+        ));
+        assert!(!KibanaClient::supports_capability(
+            &v93,
+            ApiCapability::Skills
         ));
     }
 }

@@ -2,17 +2,22 @@ use crate::client::{ApiCapability, KibanaClient, KibanaVersion};
 use crate::etl::{Extractor, Loader};
 use crate::kibana::agents::{AgentsExtractor, AgentsLoader};
 use crate::kibana::dependencies::{
-    Dependency, find_agent_dependencies, find_tool_dependencies, find_workflow_dependencies,
+    Dependency, find_agent_dependencies, find_skill_dependencies, find_tool_dependencies,
+    find_workflow_dependencies,
 };
 use crate::kibana::saved_objects::{
     SavedObjectsExtractor, SavedObjectsLoader, SavedObjectsManifest,
 };
+use crate::kibana::skills::{SkillsExtractor, SkillsLoader};
 use crate::kibana::spaces::{SpacesExtractor, SpacesLoader};
 use crate::kibana::tools::{ToolsExtractor, ToolsLoader};
 use crate::kibana::workflows::{WorkflowsExtractor, WorkflowsLoader};
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use tokio::task::JoinSet;
+
+const SKILL_FETCH_BATCH_SIZE: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnsupportedApiPolicy {
@@ -29,6 +34,7 @@ pub struct SyncSelection {
     pub include_workflows: bool,
     pub include_agents: bool,
     pub include_tools: bool,
+    pub include_skills: bool,
 }
 
 impl Default for SyncSelection {
@@ -40,6 +46,7 @@ impl Default for SyncSelection {
             include_workflows: false,
             include_agents: false,
             include_tools: false,
+            include_skills: false,
         }
     }
 }
@@ -67,6 +74,7 @@ pub struct SpaceBundle {
     pub workflows: Vec<Value>,
     pub agents: Vec<Value>,
     pub tools: Vec<Value>,
+    pub skills: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -87,6 +95,8 @@ pub struct SyncSummary {
     pub agents_applied: usize,
     pub tools_attempted: usize,
     pub tools_applied: usize,
+    pub skills_attempted: usize,
+    pub skills_applied: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +114,7 @@ pub struct ApiCapabilityWarning {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DependencyExpansionCapabilities {
     pub agents: bool,
+    pub skills: bool,
     pub tools: bool,
     pub workflows: bool,
 }
@@ -112,6 +123,7 @@ impl DependencyExpansionCapabilities {
     pub fn all() -> Self {
         Self {
             agents: true,
+            skills: true,
             tools: true,
             workflows: true,
         }
@@ -189,6 +201,13 @@ pub async fn pull_sync(
             &options.unsupported_api_policy,
         )
         .await?;
+    let include_skills = selection.include_skills
+        && capability_allowed(
+            client,
+            ApiCapability::Skills,
+            &options.unsupported_api_policy,
+        )
+        .await?;
 
     if include_spaces {
         bundle.spaces = SpacesExtractor::all(client.clone()).extract().await?;
@@ -218,18 +237,67 @@ pub async fn pull_sync(
         }
 
         if include_tools {
-            space_bundle.tools = ToolsExtractor::new(space_client, None)
+            space_bundle.tools = ToolsExtractor::new(space_client.clone(), None)
                 .search_tools(None)
                 .await?;
         }
 
-        if options.expand_dependencies && (include_agents || include_tools || include_workflows) {
+        if include_skills {
+            let extractor = SkillsExtractor::new(space_client.clone(), None);
+            let skills = extractor.search_skills(false).await?;
+            let skill_ids = skills
+                .iter()
+                .filter(|skill| !is_readonly(skill))
+                .enumerate()
+                .filter_map(|(index, skill)| {
+                    skill
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|skill_id| (index, skill_id.to_string()))
+                })
+                .collect::<Vec<_>>();
+
+            let mut fetched_skills = Vec::new();
+            for chunk in skill_ids.chunks(SKILL_FETCH_BATCH_SIZE) {
+                let mut set = JoinSet::new();
+                for (index, skill_id) in chunk {
+                    let extractor = SkillsExtractor::new(space_client.clone(), None);
+                    let index = *index;
+                    let skill_id = skill_id.clone();
+                    set.spawn(async move {
+                        let skill = extractor.fetch_skill(&skill_id).await?;
+                        Ok::<_, Error>((index, skill))
+                    });
+                }
+
+                while let Some(result) = set.join_next().await {
+                    match result {
+                        Ok(Ok((index, skill))) if !is_readonly(&skill) => {
+                            fetched_skills.push((index, skill));
+                        }
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => return Err(err),
+                        Err(err) => return Err(Error::message(format!("Task panicked: {err}"))),
+                    }
+                }
+            }
+
+            fetched_skills.sort_by_key(|(index, _)| *index);
+            space_bundle
+                .skills
+                .extend(fetched_skills.into_iter().map(|(_, skill)| skill));
+        }
+
+        if options.expand_dependencies
+            && (include_agents || include_skills || include_tools || include_workflows)
+        {
             expand_dependencies(
                 client,
                 space_id,
                 &mut space_bundle,
                 DependencyExpansionCapabilities {
                     agents: include_agents,
+                    skills: include_skills,
                     tools: include_tools,
                     workflows: include_workflows,
                 },
@@ -296,6 +364,16 @@ pub async fn push_sync(
             &options.unsupported_api_policy,
         )
         .await?;
+    let include_skills = bundle
+        .by_space
+        .values()
+        .any(|space_bundle| !space_bundle.skills.is_empty())
+        && capability_allowed(
+            client,
+            ApiCapability::Skills,
+            &options.unsupported_api_policy,
+        )
+        .await?;
 
     if include_spaces {
         summary.spaces_attempted = bundle.spaces.len();
@@ -320,6 +398,13 @@ pub async fn push_sync(
             summary.tools_attempted += space_bundle.tools.len();
             summary.tools_applied += ToolsLoader::new(space_client.clone())
                 .load(space_bundle.tools.clone())
+                .await?;
+        }
+
+        if include_skills {
+            summary.skills_attempted += space_bundle.skills.len();
+            summary.skills_applied += SkillsLoader::new(space_client.clone())
+                .load(space_bundle.skills.clone())
                 .await?;
         }
 
@@ -373,6 +458,7 @@ pub async fn expand_dependencies(
 ) -> Result<()> {
     let space_client = client.space(space_id)?;
     let mut existing_agents = ids(&bundle.agents);
+    let mut existing_skills = ids(&bundle.skills);
     let mut existing_tools = ids(&bundle.tools);
     let mut existing_workflows = ids(&bundle.workflows);
     let mut processed = HashSet::new();
@@ -380,6 +466,9 @@ pub async fn expand_dependencies(
 
     for agent in &bundle.agents {
         pending.extend(find_agent_dependencies(agent));
+    }
+    for skill in &bundle.skills {
+        pending.extend(find_skill_dependencies(skill));
     }
     for tool in &bundle.tools {
         pending.extend(find_tool_dependencies(tool));
@@ -408,6 +497,16 @@ pub async fn expand_dependencies(
                 pending.extend(find_tool_dependencies(&fetched));
                 bundle.tools.push(fetched);
             }
+            Dependency::Skill(id) if !existing_skills.contains(&id) && capabilities.skills => {
+                let fetched =
+                    fetch_dependency(&space_client, "api/agent_builder/skills", &id).await?;
+                existing_skills.insert(id);
+                if is_readonly(&fetched) {
+                    continue;
+                }
+                pending.extend(find_skill_dependencies(&fetched));
+                bundle.skills.push(fetched);
+            }
             Dependency::Workflow(id)
                 if !existing_workflows.contains(&id) && capabilities.workflows =>
             {
@@ -429,6 +528,9 @@ pub async fn expand_dependencies(
             Dependency::Tool(id) if !capabilities.tools => {
                 tracing::debug!("skipping dependent tool {id}; tool API is not enabled")
             }
+            Dependency::Skill(id) if !capabilities.skills => {
+                tracing::debug!("skipping dependent skill {id}; skill API is not enabled")
+            }
             Dependency::Workflow(id) if !capabilities.workflows => {
                 tracing::debug!("skipping dependent workflow {id}; workflow API is not enabled")
             }
@@ -437,6 +539,10 @@ pub async fn expand_dependencies(
     }
 
     Ok(())
+}
+
+fn is_readonly(value: &Value) -> bool {
+    value.get("readonly").and_then(|value| value.as_bool()) == Some(true)
 }
 
 fn ids(values: &[Value]) -> HashSet<String> {
@@ -462,6 +568,7 @@ async fn fetch_dependency(client: &KibanaClient, prefix: &str, id: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{MockResponse, TestServer};
     use serde_json::json;
 
     #[test]
@@ -486,12 +593,165 @@ mod tests {
             [
                 ApiCapability::Agents,
                 ApiCapability::Tools,
+                ApiCapability::Skills,
                 ApiCapability::Workflows,
             ],
         );
 
         assert!(plan.supported.contains(&ApiCapability::Agents));
         assert!(plan.supported.contains(&ApiCapability::Tools));
-        assert_eq!(plan.unsupported[0].capability, ApiCapability::Workflows);
+        assert!(
+            plan.unsupported
+                .iter()
+                .any(|warning| warning.capability == ApiCapability::Skills)
+        );
+        assert!(
+            plan.unsupported
+                .iter()
+                .any(|warning| warning.capability == ApiCapability::Workflows)
+        );
+    }
+
+    #[test]
+    fn capability_plan_supports_skills_at_94() {
+        let version = crate::parse_kibana_version("9.4.0").unwrap();
+        let plan = plan_capabilities(&version, [ApiCapability::Skills]);
+
+        assert_eq!(plan.supported, vec![ApiCapability::Skills]);
+        assert!(plan.unsupported.is_empty());
+    }
+
+    #[tokio::test]
+    async fn expands_agent_skill_tool_workflow_dependencies_transitively() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/skills/skill-s",
+                status: 200,
+                body: json!({
+                    "id": "skill-s",
+                    "name": "Skill S",
+                    "tool_ids": ["tool-t"]
+                }),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-t",
+                status: 200,
+                body: json!({
+                    "id": "tool-t",
+                    "name": "Tool T",
+                    "configuration": {
+                        "workflow_id": "workflow-w"
+                    }
+                }),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows/workflow-w",
+                status: 200,
+                body: json!({
+                    "id": "workflow-w",
+                    "name": "Workflow W"
+                }),
+            },
+        ]);
+        let client = server.client().unwrap();
+        let mut bundle = SpaceBundle {
+            agents: vec![json!({
+                "id": "agent-a",
+                "name": "Agent A",
+                "configuration": {
+                    "skill_id": "skill-s"
+                }
+            })],
+            ..SpaceBundle::default()
+        };
+
+        expand_dependencies(
+            &client,
+            "default",
+            &mut bundle,
+            DependencyExpansionCapabilities {
+                agents: true,
+                skills: true,
+                tools: true,
+                workflows: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bundle.agents.len(), 1);
+        assert_eq!(bundle.skills.len(), 1);
+        assert_eq!(bundle.skills[0]["id"], "skill-s");
+        assert_eq!(bundle.tools.len(), 1);
+        assert_eq!(bundle.tools[0]["id"], "tool-t");
+        assert_eq!(bundle.workflows.len(), 1);
+        assert_eq!(bundle.workflows[0]["id"], "workflow-w");
+
+        let paths = server
+            .requests()
+            .into_iter()
+            .map(|request| request.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "/api/agent_builder/skills/skill-s",
+                "/api/agent_builder/tools/tool-t",
+                "/api/workflows/workflow-w"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_readonly_skill_dependencies() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/api/agent_builder/skills/system-skill",
+            status: 200,
+            body: json!({
+                "id": "system-skill",
+                "name": "System Skill",
+                "readonly": true,
+                "tool_ids": ["tool-t"]
+            }),
+        }]);
+        let client = server.client().unwrap();
+        let mut bundle = SpaceBundle {
+            agents: vec![json!({
+                "id": "agent-a",
+                "name": "Agent A",
+                "configuration": {
+                    "skill_id": "system-skill"
+                }
+            })],
+            ..SpaceBundle::default()
+        };
+
+        expand_dependencies(
+            &client,
+            "default",
+            &mut bundle,
+            DependencyExpansionCapabilities {
+                agents: true,
+                skills: true,
+                tools: true,
+                workflows: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(bundle.skills.is_empty());
+        assert!(bundle.tools.is_empty());
+
+        let paths = server
+            .requests()
+            .into_iter()
+            .map(|request| request.path)
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec!["/api/agent_builder/skills/system-skill"]);
     }
 }

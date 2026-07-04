@@ -8,7 +8,117 @@ use kibana_object_manager::{
     migration::{MigrationResult, migrate_to_multispace_unified},
 };
 use owo_colors::OwoColorize;
+use std::fmt;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::{
+    field::RecordFields,
+    fmt::{FormatFields, format::Writer},
+};
+
+fn init_logging(filter: &str) {
+    let _ = tracing_log::LogTracer::init();
+    let use_ansi = std::env::var_os("NO_COLOR").is_none()
+        && (std::io::stderr().is_terminal()
+            || std::env::var_os("FORCE_COLOR").is_some()
+            || std::env::var_os("CLICOLOR_FORCE").is_some());
+    let _ = tracing_subscriber::fmt()
+        .fmt_fields(AnsiPassthroughFields)
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_target(false)
+        .with_ansi(use_ansi)
+        .try_init();
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AnsiPassthroughFields;
+
+impl<'writer> FormatFields<'writer> for AnsiPassthroughFields {
+    fn format_fields<R: RecordFields>(&self, writer: Writer<'writer>, fields: R) -> fmt::Result {
+        let mut visitor = AnsiPassthroughVisitor {
+            writer,
+            is_empty: true,
+            result: Ok(()),
+        };
+        fields.record(&mut visitor);
+        visitor.result
+    }
+}
+
+struct AnsiPassthroughVisitor<'writer> {
+    writer: Writer<'writer>,
+    is_empty: bool,
+    result: fmt::Result,
+}
+
+impl AnsiPassthroughVisitor<'_> {
+    fn record_value(&mut self, field: &Field, value: impl FnOnce(&mut Writer<'_>) -> fmt::Result) {
+        if field.name().starts_with("log.") {
+            return;
+        }
+
+        if self.result.is_err() {
+            return;
+        }
+
+        self.result = (|| {
+            if !self.is_empty {
+                write!(self.writer, " ")?;
+            }
+
+            if field.name() != "message" {
+                write!(self.writer, "{}=", field.name())?;
+            }
+
+            value(&mut self.writer)?;
+            self.is_empty = false;
+            Ok(())
+        })();
+    }
+}
+
+impl Visit for AnsiPassthroughVisitor<'_> {
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
+        self.record_value(field, |writer| write!(writer, "{value:?}"));
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.record_value(field, |writer| write!(writer, "{value}"));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.record_value(field, |writer| write!(writer, "{value:?}"));
+    }
+}
 
 // CLI Styling
 const STYLES: styling::Styles = styling::Styles::styled()
@@ -98,7 +208,7 @@ enum Commands {
         space: Option<Vec<String>>,
 
         /// Comma-separated APIs to pull with min versions:
-        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
+        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview), skills (9.4+ experimental)
         #[arg(long, value_delimiter = ',')]
         api: Option<Vec<String>>,
 
@@ -132,7 +242,7 @@ enum Commands {
         space: Option<Vec<String>>,
 
         /// Comma-separated APIs to push with min versions:
-        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
+        /// saved_objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview), skills (9.4+ experimental)
         #[arg(long, value_delimiter = ',')]
         api: Option<Vec<String>>,
 
@@ -144,7 +254,12 @@ enum Commands {
     /// Add items to an existing manifest
     ///
     /// Discovers and adds items via search API or reads from a file.
-    /// Supports: objects, workflows, spaces, agents, tools
+    /// Supports: objects, workflows, spaces, agents, tools, skills
+    /// Skills are experimental as of Kibana 9.4 and are stored as
+    /// skills/{skill-directory}/SKILL.md with YAML frontmatter fields:
+    /// id, name, description, tool_ids, and experimental.
+    /// Referenced content is projected from sibling markdown files.
+    /// Local experimental metadata is omitted from API create/update bodies.
     ///
     /// Examples:
     ///   kibob add workflows .                          # Search all workflows in default space
@@ -160,11 +275,14 @@ enum Commands {
     ///   kibob add agents . --include "^support"        # Include agents matching pattern
     ///   kibob add tools .                              # Fetch all tools
     ///   kibob add tools . --include "^search"          # Include tools matching pattern
+    ///   kibob add skill threat-hunting                 # Fetch a skill by ID into the current directory
+    ///   kibob add skills . --query "threat-hunting"    # Fetch a skill by ID
+    ///   kibob add skills . --include "^triage"         # Include skills matching pattern
     ///   kibob add objects . --objects "dashboard=abc"  # Legacy: add specific objects by ID
     ///   kibob add workflows . --force                  # Bypass version checks (warning)
     Add {
         /// API to add to:
-        /// objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview)
+        /// objects (8.0+), spaces (8.0+), agents (9.2+ tech preview), tools (9.2+ tech preview), workflows (9.3+ tech preview), skills (9.4+ experimental)
         api: String,
 
         /// Project directory with existing manifest
@@ -195,7 +313,7 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         space: Option<Vec<String>>,
 
-        /// Exclude dependencies of added items (agents, tools, workflows)
+        /// Exclude dependencies of added items (agents, tools, workflows, skills)
         #[arg(long)]
         exclude_dependencies: bool,
 
@@ -211,7 +329,11 @@ enum Commands {
     /// - bundle/{space_id}/workflows.ndjson - Workflows per space
     /// - bundle/{space_id}/agents.ndjson - Agents per space
     /// - bundle/{space_id}/tools.ndjson - Tools per space
+    /// - bundle/{space_id}/skills.ndjson - Skills per space
     /// - bundle/spaces.ndjson - Spaces (if manifest/spaces.yml exists)
+    ///
+    /// Skill JSON is generated from skills/{skill-directory}/SKILL.md and
+    /// referenced markdown files only when bundling.
     ///
     /// The bundle directory can be easily zipped for distribution.
     ///
@@ -232,7 +354,7 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         space: Option<Vec<String>>,
 
-        /// Comma-separated list of APIs to bundle (e.g., "saved_objects,workflows,agents,tools,spaces")
+        /// Comma-separated list of APIs to bundle (e.g., "saved_objects,workflows,agents,tools,skills,spaces")
         #[arg(long, value_delimiter = ',')]
         api: Option<Vec<String>>,
     },
@@ -273,6 +395,14 @@ fn resolve_env_path(env: &str) -> PathBuf {
     PathBuf::from(format!(".env.{}", env))
 }
 
+fn is_skill_id_shortcut_arg(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -290,11 +420,7 @@ async fn main() -> Result<()> {
         false => "info",
     };
     let filter = std::env::var("LOG_LEVEL").unwrap_or_else(|_| log_level.to_string());
-    let _ = tracing_log::LogTracer::init();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
-        .with_target(false)
-        .init();
+    init_logging(&filter);
 
     match cli.command {
         Commands::Init { export, manifest } => {
@@ -538,10 +664,53 @@ async fn main() -> Result<()> {
                     )
                     .await
                 }
+                "skills" | "skill" => {
+                    // Skills support: --query exact ID, --include, --exclude, or --file
+                    let singular_id_shortcut = api == "skill"
+                        && query.is_none()
+                        && file.is_none()
+                        && output_dir != "."
+                        && is_skill_id_shortcut_arg(&output_dir)
+                        && !Path::new(&output_dir).exists();
+                    if api == "skill" && query.is_none() && file.is_none() && !singular_id_shortcut
+                    {
+                        return Err(eyre::eyre!(
+                            "kibob add skill requires a skill id. For an existing project directory, use: kibob add skill <project_dir> --query <skill-id>. If the skill id matches a local path, use: kibob add skill . --query <skill-id>"
+                        ));
+                    }
+                    let effective_output_dir;
+                    let effective_query;
+                    let (project_dir, query) = if singular_id_shortcut {
+                        effective_output_dir = ".".to_string();
+                        effective_query = Some(output_dir.clone());
+                        (effective_output_dir.as_str(), effective_query)
+                    } else {
+                        (output_dir.as_str(), query)
+                    };
+
+                    let target_space = space
+                        .as_ref()
+                        .and_then(|s| s.first())
+                        .map(|s| s.as_str())
+                        .unwrap_or("default");
+                    log::info!("Using space: {}", target_space.cyan());
+                    use kibana_object_manager::cli::add_skills_to_manifest;
+                    add_skills_to_manifest(
+                        project_dir,
+                        target_space,
+                        query,
+                        include,
+                        exclude,
+                        file,
+                        exclude_dependencies,
+                        force,
+                    )
+                    .await
+                }
                 _ => {
                     log::error!("Unknown API: {}", api);
                     return Err(eyre::eyre!(
-                        "Unknown API '{}'. Supported: objects, workflows, spaces, agents, tools",
+                        "Unknown API '{}'. Supported: objects, workflows, spaces, agents, tools, skills",
                         api
                     ));
                 }

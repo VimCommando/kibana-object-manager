@@ -10,9 +10,9 @@ A Git-inspired CLI tool for managing Kibana saved objects in version control. Bu
 
 - **Git-like workflow** - `pull`, `push`, and version control your Kibana assets
 - **Spaces management** - Version control and deploy Kibana spaces alongside assets
-- **Workflows, agents, and tools** - Manage newer Kibana APIs alongside saved objects
+- **Workflows, agents, tools, and skills** - Manage newer Kibana APIs alongside saved objects
 - **Environment management** - Easy deployment across dev, staging, and production
-- **Manifest-based tracking** - Explicitly define which objects, spaces, workflows, agents, and tools to manage
+- **Manifest-based tracking** - Explicitly define which objects, spaces, workflows, agents, tools, and skills to manage
 - **Managed vs. unmanaged** - Control whether saved objects can be edited in the Kibana UI
 - **Flexible filtering** - Target specific spaces and APIs with `--space` and `--api`
 - **Modern architecture** - Built with Rust and a composable ETL pipeline
@@ -76,7 +76,7 @@ let version = esdiag.server_version().await?;
 # }
 ```
 
-`kibana-sync` exposes saved objects, spaces, agents, tools, workflows,
+`kibana-sync` exposes saved objects, spaces, agents, tools, skills, workflows,
 capability gates, dependency discovery, tracing instrumentation, and
 storage-neutral sync models. It does not read `spaces.yml`; `kibob` reads that
 file in the CLI crate and passes the resulting registry into the library.
@@ -140,7 +140,7 @@ spaces:
 
 Now `pull`, `push`, and `togo` can also manage spaces. Each space definition is stored at `{space_id}/space.json`.
 
-**Optional: Add workflows, agents, and tools**
+**Optional: Add workflows, agents, tools, and skills**
 
 Create per-space manifests like these:
 
@@ -166,7 +166,30 @@ tools:
     name: search-tool
 ```
 
+```yml
+skills:
+  - id: threat-hunting-copy
+    name: threat-hunting-copy
+```
+
 Now `pull`, `push`, and `togo` will also manage those APIs for each configured space.
+
+Skills are stored as directories instead of JSON files:
+
+```text
+default/
+  manifest/
+    skills.yml
+  skills/
+    my-skill/
+      SKILL.md
+      examples/
+        query.md
+```
+
+`manifest/skills.yml` lists the tracked Skills for the space by `id` and `name`. Skill directory names use the Kibana Skill `id` directly; Kibana requires IDs to start and end with a lowercase letter or number and contain only lowercase letters, numbers, hyphens, and underscores. The frontmatter `id` remains authoritative. When the manifest exists, `push` and `togo` include only the listed Skills in manifest order; when it is absent, all `skills/*/SKILL.md` directories are discovered.
+
+`SKILL.md` contains YAML frontmatter with `id`, `name`, `description`, `tool_ids`, and `experimental`; the markdown body is the API `content` field. Additional `.md` files under the skill directory become `referenced_content` entries when bundling or pushing: the filename without `.md` becomes `name`, the parent directory becomes `relativePath` (`examples/query.md` is projected as `./examples`), and the file contents become `content`. The `experimental` field is preserved locally but omitted from create/update API requests because Kibana 9.4 rejects it in request bodies.
 
 ### 4. Version control with Git
 
@@ -180,7 +203,7 @@ git commit -m "Initial dashboard import"
 
 ```sh
 kibob pull
-kibob pull --space default,marketing --api saved_objects,workflows,agents,tools
+kibob pull --space default,marketing --api saved_objects,workflows,agents,tools,skills
 git diff
 git add . && git commit -m "Update from Kibana"
 ```
@@ -259,6 +282,7 @@ Supported API filters:
 - `workflows`
 - `agents`
 - `tools`
+- `skills`
 - `spaces`
 
 Examples:
@@ -266,7 +290,7 @@ Examples:
 ```sh
 kibob pull
 kibob pull --space default,marketing
-kibob pull --api saved_objects,workflows,agents,tools
+kibob pull --api saved_objects,workflows,agents,tools,skills
 kibob --env dev pull --space default --api spaces
 ```
 
@@ -277,6 +301,8 @@ Notes:
   - `{space_id}/manifest/workflows.yml`
   - `{space_id}/manifest/agents.yml`
   - `{space_id}/manifest/tools.yml`
+- Per-space skills are pulled from the Skills API and written under `{space_id}/skills/`.
+- Skills require Kibana 9.4.0 or newer and are experimental as of Kibana 9.4.
 
 ## `kibob push [dir] [--managed true|false] [--space <space1,space2,...>] [--api <api1,api2,...>]`
 
@@ -294,6 +320,7 @@ Supported API filters:
 - `workflows`
 - `agents`
 - `tools`
+- `skills`
 - `spaces`
 
 Examples:
@@ -301,7 +328,7 @@ Examples:
 ```sh
 kibob push --managed true
 kibob push --managed false --space default,marketing
-kibob push --api tools,agents
+kibob push --api tools,agents,skills
 kibob --env prod push --space production --api saved_objects,workflows --managed true
 ```
 
@@ -310,6 +337,7 @@ Options:
 - `--managed false` - saved objects remain editable in Kibana UI
 - `--space <...>` - comma-separated list of target space IDs
 - `--api <...>` - comma-separated list of APIs to push
+- Skills are tracked in `{space_id}/manifest/skills.yml` and projected from `{space_id}/skills/*/SKILL.md` directories to Kibana JSON only when pushing.
 
 ## `kibob add <api> [dir] [options]`
 
@@ -321,6 +349,7 @@ Supported APIs:
 - `spaces`
 - `agents`
 - `tools`
+- `skills`
 
 Common options:
 - `--query <TEXT>` - search query for API-backed discovery
@@ -328,7 +357,7 @@ Common options:
 - `--exclude <REGEX>` - exclude items whose name matches the regex after include filtering
 - `--file <FILE>` - load items from `.json` or `.ndjson`
 - `--space <space1,space2,...>` - space selection/filtering
-- `--exclude-dependencies` - do not automatically add discovered dependencies for workflows, agents, or tools
+- `--exclude-dependencies` - do not automatically add discovered dependencies for workflows, agents, tools, or skills
 
 Regex notes:
 - `--include` and `--exclude` use Rust regex syntax
@@ -367,6 +396,19 @@ kibob add tools --file tools.ndjson
 kibob add tools --exclude-dependencies
 ```
 
+### Add skills
+
+```sh
+kibob add skill threat-hunting
+kibob add skills --space default
+kibob add skills --query my-skill-id
+kibob add skills --include "^triage"
+kibob add skills --file skills.ndjson
+kibob add skills --exclude-dependencies
+```
+
+The singular shortcut `kibob add skill <skill-id>` fetches that exact Skill ID, tracks it in `{space_id}/manifest/skills.yml`, and writes it as `{space_id}/skills/{skill-directory}/SKILL.md` with referenced markdown files. Skills referenced by agents are written as skill directories, and a skill's `tool_ids` are added as tool dependencies unless `--exclude-dependencies` is used.
+
 ### Add spaces
 
 ```sh
@@ -403,6 +445,7 @@ Supported API filters:
 - `workflows`
 - `agents`
 - `tools`
+- `skills`
 - `spaces`
 
 Generated outputs can include:
@@ -410,6 +453,7 @@ Generated outputs can include:
 - `bundle/{space_id}/workflows.ndjson`
 - `bundle/{space_id}/agents.ndjson`
 - `bundle/{space_id}/tools.ndjson`
+- `bundle/{space_id}/skills.ndjson`
 - `bundle/spaces.ndjson`
 
 Examples:
@@ -417,13 +461,14 @@ Examples:
 ```sh
 kibob togo
 kibob togo --space default,marketing
-kibob togo --api saved_objects,workflows,agents,tools
+kibob togo --api saved_objects,workflows,agents,tools,skills
 zip -r dashboards.zip bundle/
 ```
 
 Notes:
 - `bundle/spaces.ndjson` is generated when top-level `spaces.yml` exists.
 - `--api` lets you create partial bundles for specific APIs only.
+- `skills.ndjson` is generated from skill directories; JSON is not the at-rest representation.
 
 ## `kibob migrate [dir] [--backup true|false]`
 

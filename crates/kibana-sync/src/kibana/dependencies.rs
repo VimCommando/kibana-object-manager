@@ -4,12 +4,13 @@
 //! (Agents, Tools, and Workflows) based on their JSON definitions.
 
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 /// Represents a dependency on another Kibana object
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum Dependency {
     Agent(String),
+    Skill(String),
     Tool(String),
     Workflow(String),
 }
@@ -18,7 +19,7 @@ pub enum Dependency {
 ///
 /// Agents usually depend on Tools listed in `configuration.tools`.
 pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
-    let mut deps = Vec::new();
+    let mut agent_tools = BTreeSet::new();
     if let Some(tools) = agent
         .get("configuration")
         .and_then(|c| c.get("tools"))
@@ -27,14 +28,45 @@ pub fn find_agent_dependencies(agent: &Value) -> Vec<Dependency> {
         for tool in tools {
             if let Some(tool_id) = tool.as_str() {
                 // Legacy or simple format: array of strings
-                deps.push(Dependency::Tool(tool_id.to_string()));
+                agent_tools.insert(tool_id.to_string());
             } else if let Some(tool_ids) = tool.get("tool_ids").and_then(|ids| ids.as_array()) {
                 // New format: array of objects with tool_ids array
                 for id in tool_ids {
                     if let Some(id_str) = id.as_str() {
-                        deps.push(Dependency::Tool(id_str.to_string()));
+                        agent_tools.insert(id_str.to_string());
                     }
                 }
+            }
+        }
+    }
+    let mut skills = BTreeSet::new();
+    let mut ignored_agents = BTreeSet::new();
+    let mut tools = BTreeSet::new();
+    let mut ignored_workflows = BTreeSet::new();
+    recursive_find_deps(
+        agent,
+        &mut ignored_agents,
+        &mut skills,
+        &mut tools,
+        &mut ignored_workflows,
+    );
+    agent_tools.extend(tools);
+
+    let mut deps = Vec::new();
+    deps.extend(agent_tools.into_iter().map(Dependency::Tool));
+    deps.extend(skills.into_iter().map(Dependency::Skill));
+    deps
+}
+
+/// Find dependencies for a Skill
+///
+/// Skills can depend on Tools listed in `tool_ids`.
+pub fn find_skill_dependencies(skill: &Value) -> Vec<Dependency> {
+    let mut deps = Vec::new();
+    if let Some(tool_ids) = skill.get("tool_ids").and_then(|ids| ids.as_array()) {
+        for id in tool_ids {
+            if let Some(id_str) = id.as_str() {
+                deps.push(Dependency::Tool(id_str.to_string()));
             }
         }
     }
@@ -61,14 +93,21 @@ pub fn find_tool_dependencies(tool: &Value) -> Vec<Dependency> {
 /// Workflows are complex and can contain references to Agents, Tools,
 /// and other Workflows anywhere in their definition.
 pub fn find_workflow_dependencies(workflow: &Value) -> Vec<Dependency> {
-    let mut agents = HashSet::new();
-    let mut tools = HashSet::new();
-    let mut workflows = HashSet::new();
+    let mut agents = BTreeSet::new();
+    let mut skills = BTreeSet::new();
+    let mut tools = BTreeSet::new();
+    let mut workflows = BTreeSet::new();
 
     // Skip the root "id" if it matches common names to avoid self-dependency
     // but the recursive resolution logic will handle this anyway.
 
-    recursive_find_deps(workflow, &mut agents, &mut tools, &mut workflows);
+    recursive_find_deps(
+        workflow,
+        &mut agents,
+        &mut skills,
+        &mut tools,
+        &mut workflows,
+    );
 
     let mut deps = Vec::new();
     for id in agents {
@@ -76,6 +115,9 @@ pub fn find_workflow_dependencies(workflow: &Value) -> Vec<Dependency> {
     }
     for id in tools {
         deps.push(Dependency::Tool(id));
+    }
+    for id in skills {
+        deps.push(Dependency::Skill(id));
     }
     for id in workflows {
         deps.push(Dependency::Workflow(id));
@@ -86,9 +128,10 @@ pub fn find_workflow_dependencies(workflow: &Value) -> Vec<Dependency> {
 /// Recursively search for dependency-like keys in a JSON value
 fn recursive_find_deps(
     value: &Value,
-    agents: &mut HashSet<String>,
-    tools: &mut HashSet<String>,
-    workflows: &mut HashSet<String>,
+    agents: &mut BTreeSet<String>,
+    skills: &mut BTreeSet<String>,
+    tools: &mut BTreeSet<String>,
+    workflows: &mut BTreeSet<String>,
 ) {
     match value {
         Value::Object(map) => {
@@ -97,6 +140,17 @@ fn recursive_find_deps(
                     "agent_id" | "agentId" => {
                         if let Some(id) = v.as_str() {
                             agents.insert(id.to_string());
+                        }
+                    }
+                    "skill_id" | "skillId" | "skill_ids" | "skillIds" => {
+                        if let Some(id) = v.as_str() {
+                            skills.insert(id.to_string());
+                        } else if let Some(arr) = v.as_array() {
+                            for item in arr {
+                                if let Some(id) = item.as_str() {
+                                    skills.insert(id.to_string());
+                                }
+                            }
                         }
                     }
                     "tool_id" | "toolId" | "tool_ids" | "toolIds" => {
@@ -115,13 +169,13 @@ fn recursive_find_deps(
                             workflows.insert(id.to_string());
                         }
                     }
-                    _ => recursive_find_deps(v, agents, tools, workflows),
+                    _ => recursive_find_deps(v, agents, skills, tools, workflows),
                 }
             }
         }
         Value::Array(arr) => {
             for v in arr {
-                recursive_find_deps(v, agents, tools, workflows);
+                recursive_find_deps(v, agents, skills, tools, workflows);
             }
         }
         _ => {}
@@ -162,6 +216,44 @@ mod tests {
         assert_eq!(deps.len(), 2);
         assert!(deps.contains(&Dependency::Tool("tool-c".to_string())));
         assert!(deps.contains(&Dependency::Tool("tool-d".to_string())));
+
+        let agent_with_skills = json!({
+            "id": "agent-3",
+            "configuration": {
+                "skill_ids": ["skill-a", "skill-b"]
+            }
+        });
+        let deps = find_agent_dependencies(&agent_with_skills);
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&Dependency::Skill("skill-a".to_string())));
+        assert!(deps.contains(&Dependency::Skill("skill-b".to_string())));
+
+        let agent_with_generic_tool_keys = json!({
+            "id": "agent-4",
+            "configuration": {
+                "toolId": "tool-e",
+                "nested": {
+                    "tool_ids": ["tool-f", "tool-g"]
+                }
+            }
+        });
+        let deps = find_agent_dependencies(&agent_with_generic_tool_keys);
+        assert_eq!(deps.len(), 3);
+        assert!(deps.contains(&Dependency::Tool("tool-e".to_string())));
+        assert!(deps.contains(&Dependency::Tool("tool-f".to_string())));
+        assert!(deps.contains(&Dependency::Tool("tool-g".to_string())));
+    }
+
+    #[test]
+    fn test_find_skill_deps() {
+        let skill = json!({
+            "id": "skill-1",
+            "tool_ids": ["tool-a", "tool-b"]
+        });
+        let deps = find_skill_dependencies(&skill);
+        assert_eq!(deps.len(), 2);
+        assert!(deps.contains(&Dependency::Tool("tool-a".to_string())));
+        assert!(deps.contains(&Dependency::Tool("tool-b".to_string())));
     }
 
     #[test]
@@ -184,6 +276,7 @@ mod tests {
             "definition": {
                 "nodes": [
                     { "agent_id": "agent-1" },
+                    { "skillId": "skill-a" },
                     { "toolId": "tool-x" },
                     { "tool_ids": ["tool-y", "tool-z"] },
                     { "sub_workflow": { "workflowId": "wf-2" } }
@@ -191,8 +284,9 @@ mod tests {
             }
         });
         let deps = find_workflow_dependencies(&workflow);
-        assert_eq!(deps.len(), 5);
+        assert_eq!(deps.len(), 6);
         assert!(deps.contains(&Dependency::Agent("agent-1".to_string())));
+        assert!(deps.contains(&Dependency::Skill("skill-a".to_string())));
         assert!(deps.contains(&Dependency::Tool("tool-x".to_string())));
         assert!(deps.contains(&Dependency::Tool("tool-y".to_string())));
         assert!(deps.contains(&Dependency::Tool("tool-z".to_string())));
