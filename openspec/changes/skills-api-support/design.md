@@ -52,7 +52,7 @@ Use a markdown-first per-space layout:
   manifest/
     skills.yml
   skills/
-    <skill-id-or-slug>/
+    <sanitized-id>--<stable-hash>/
       SKILL.md
       <relativePath>/
         <referenced-file>.md
@@ -71,7 +71,7 @@ Referenced content is derived from the directory structure:
 
 The generated `referenced_content` objects contain only those three fields.
 
-Use a sanitized form of the Skill `id` as the default skill directory name, but treat `SKILL.md` frontmatter `id` as authoritative. For markdown files directly under the skill directory, generate `relativePath: ""`. For nested markdown files, write them under plain filesystem subdirectories and project them to Kibana JSON as `./subdirectory`, matching the 9.4 Skills API validator. Generate referenced content in deterministic relative-path order. Preserve markdown bytes as text exactly through export/import, including newline content. Reject referenced files that escape the skill directory, including symlink traversal. When writing from JSON, sanitize filesystem names for safety while preserving original Skill `id` and referenced content `name`; normalize nested `relativePath` values to the Kibana-accepted `./subdirectory` form when projecting to API JSON. If sanitizing referenced-content names or path components would otherwise be lossy, write a hidden `.referenced_content.yml` sidecar mapping the sanitized markdown file path back to the original `name` and normalized `relativePath`; hand-authored directories without that sidecar continue to derive values from the directory structure.
+Use a sanitized form of the Skill `id` plus a stable ID hash as the default skill directory name, but treat `SKILL.md` frontmatter `id` as authoritative. The hash suffix prevents sanitized-name and case-insensitive filesystem collisions while keeping a readable prefix. For markdown files directly under the skill directory, generate `relativePath: ""`. For nested markdown files, write them under plain filesystem subdirectories and project them to Kibana JSON as `./subdirectory`, matching the 9.4 Skills API validator. Generate referenced content in deterministic relative-path order. Preserve markdown bytes as text exactly through export/import, including newline content. Reject referenced files that escape the skill directory, including symlink traversal. When writing from JSON, sanitize filesystem names for safety while preserving original Skill `id` and referenced content `name`; normalize nested `relativePath` values to the Kibana-accepted `./subdirectory` form when projecting to API JSON. If sanitizing referenced-content names or path components would otherwise be lossy, write a hidden `.referenced_content.yml` sidecar mapping the sanitized markdown file path back to the original `name` and normalized `relativePath`; hand-authored directories without that sidecar continue to derive values from the directory structure.
 
 Rationale: Skills are author-facing markdown assets. Keeping them as directories avoids forcing users to edit a JSON blob and mirrors the shape of a standard skill package while still preserving a deterministic JSON projection for Kibana.
 

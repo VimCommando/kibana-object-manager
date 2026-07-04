@@ -181,13 +181,13 @@ default/
   manifest/
     skills.yml
   skills/
-    my-skill/
+    my-skill--0123456789abcdef/
       SKILL.md
       examples/
         query.md
 ```
 
-`manifest/skills.yml` lists the tracked Skills for the space by `id` and `name`. When it exists, `push` and `togo` include only the listed Skills in manifest order; when it is absent, all `skills/*/SKILL.md` directories are discovered.
+`manifest/skills.yml` lists the tracked Skills for the space by `id` and `name`. Skill directory names are generated as `{sanitized_id}--{stable_hash}` to avoid filesystem collisions; the frontmatter `id` remains authoritative. When the manifest exists, `push` and `togo` include only the listed Skills in manifest order; when it is absent, all `skills/*/SKILL.md` directories are discovered.
 
 `SKILL.md` contains YAML frontmatter with `id`, `name`, `description`, `tool_ids`, and `experimental`; the markdown body is the API `content` field. Additional `.md` files under the skill directory become `referenced_content` entries when bundling or pushing: the filename without `.md` becomes `name`, the parent directory becomes `relativePath` (`examples/query.md` is projected as `./examples`), and the file contents become `content`. The `experimental` field is preserved locally but omitted from create/update API requests because Kibana 9.4 rejects it in request bodies.
 
