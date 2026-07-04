@@ -7,7 +7,7 @@ Kibana now exposes Skills as a first-class Agent Builder API alongside Agents, T
 - Add first-class Skills API support for pull, push, add, bundle, and togo flows.
 - Introduce per-skill directories under each space, with `SKILL.md` as the authoritative at-rest representation.
 - Add `SkillsExtractor`, `SkillsLoader`, and skill-directory model/projection types that use `/api/agent_builder/skills` and `/api/agent_builder/skills/{skillId}`.
-- Preserve system skills during pull discovery while only writing user-created skills to project files by default.
+- Skip system skills marked `readonly: true` during pull, dependency expansion, and push so project files track user-created skills by default.
 - Support `GET /api/agent_builder/skills?include_plugins=true` for optional discovery when needed, without attempting to push or delete Skills marked `readonly: true`.
 - Convert skill directories to Kibana JSON only when bundling to NDJSON or sending create/update requests to the Skills API.
 - Create skills with `POST /api/agent_builder/skills` including `id`, and update existing skills with `PUT /api/agent_builder/skills/{skillId}` excluding path-owned or read-only fields.

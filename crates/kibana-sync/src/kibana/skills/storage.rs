@@ -14,13 +14,13 @@ const REFERENCED_CONTENT_METADATA_FILE: &str = ".referenced_content.yml";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillFrontmatter {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default)]
     pub tool_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experimental: Option<bool>,
 }
 
@@ -651,10 +651,12 @@ mod tests {
 
         let dir = skill_to_directory(temp.path(), &skill).unwrap();
         let projected = skill_to_value(&dir, false).unwrap();
+        let markdown = std::fs::read_to_string(dir.join(SKILL_FILE)).unwrap();
 
         assert!(projected.get("id").is_none());
         assert_eq!(projected["tool_ids"], json!([]));
         assert_eq!(projected["referenced_content"], json!([]));
+        assert!(!markdown.contains(": null"));
     }
 
     #[test]
