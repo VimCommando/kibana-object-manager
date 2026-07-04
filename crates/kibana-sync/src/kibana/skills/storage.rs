@@ -407,6 +407,15 @@ fn collect_markdown_files(
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("Failed to inspect path: {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(Error::message(format!(
+                "path uses symlink traversal inside skill directory: {}",
+                path.display()
+            )));
+        }
+
         let canonical = path
             .canonicalize()
             .with_context(|| format!("Failed to resolve path: {}", path.display()))?;
@@ -417,7 +426,7 @@ fn collect_markdown_files(
             )));
         }
 
-        if path.is_dir() {
+        if metadata.is_dir() {
             collect_markdown_files(canonical_root, &path, files)?;
         } else if path.extension().and_then(|extension| extension.to_str()) == Some("md")
             && path.file_name().and_then(|name| name.to_str()) != Some(SKILL_FILE)
@@ -795,6 +804,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_referenced_content_symlink_directory() {
+        let temp = TempDir::new().unwrap();
+        let skill = json!({
+            "id": "symlink-skill",
+            "name": "Symlink Skill",
+            "content": "Body\n"
+        });
+        let dir = skill_to_directory(temp.path(), &skill).unwrap();
+        symlink_dir(&dir, &dir.join("loop")).unwrap();
+
+        let err = skill_to_value(&dir, true).unwrap_err();
+
+        assert!(err.to_string().contains("symlink traversal"));
+    }
+
+    #[test]
     fn rejects_parent_relative_path() {
         let skill = json!({
             "id": "bad-skill",
@@ -817,5 +842,15 @@ mod tests {
     #[cfg(windows)]
     fn symlink_file(source: &Path, link: &Path) -> std::io::Result<()> {
         std::os::windows::fs::symlink_file(source, link)
+    }
+
+    #[cfg(unix)]
+    fn symlink_dir(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(source, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_dir(source: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(source, link)
     }
 }

@@ -3483,10 +3483,14 @@ async fn push_space_skills(project_dir: &Path, client: &KibanaClient) -> Result<
         &get_space_skills_manifest(project_dir, space_id),
     )?;
     if skills.is_empty() {
-        log::debug!(
-            "No skills directory for space {}, skipping",
-            space_id.cyan()
-        );
+        if skills_dir.exists() {
+            log::debug!("No skills selected for space {}, skipping", space_id.cyan());
+        } else {
+            log::debug!(
+                "No skills directory for space {}, skipping",
+                space_id.cyan()
+            );
+        }
         return Ok(0);
     }
 
@@ -3703,10 +3707,14 @@ async fn bundle_space_skills(project_dir: &Path, space_id: &str) -> Result<usize
         &get_space_skills_manifest(project_dir, space_id),
     )?;
     if skills.is_empty() {
-        log::debug!(
-            "No skills directory for space {}, skipping",
-            space_id.cyan()
-        );
+        if skills_dir.exists() {
+            log::debug!("No skills selected for space {}, skipping", space_id.cyan());
+        } else {
+            log::debug!(
+                "No skills directory for space {}, skipping",
+                space_id.cyan()
+            );
+        }
         return Ok(0);
     }
 
