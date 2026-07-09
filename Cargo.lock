@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "kibana-object-manager"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "dotenvy",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "kibana-sync"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "reqwest",
