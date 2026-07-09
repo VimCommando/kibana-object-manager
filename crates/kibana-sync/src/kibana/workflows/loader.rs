@@ -1,9 +1,10 @@
 //! Workflows API loader
 //!
-//! Loads workflow definitions to Kibana via POST /api/workflows/<id>
+//! Loads workflow definitions to Kibana via POST /api/workflows/workflow
 
 use crate::client::KibanaClient;
 use crate::etl::Loader;
+use crate::kibana::workflows::{WORKFLOW_CREATE_PATH, workflow_resource_path};
 
 use crate::{Error, Result};
 use serde_json::Value;
@@ -11,7 +12,7 @@ use tokio::task::JoinSet;
 
 /// Loader for Kibana workflows
 ///
-/// Creates or updates workflows in Kibana using POST /api/workflows/<id>
+/// Creates or updates workflows in Kibana using the Workflows API.
 ///
 /// # Example
 /// ```no_run
@@ -86,7 +87,7 @@ impl Loader for WorkflowsLoader {
                 )?;
 
                 // Check if a workflow exists using HEAD request
-                let path = format!("api/workflows/{}", workflow_id);
+                let path = workflow_resource_path(workflow_id);
                 let exists = match client.head_internal(&path).await?.status().as_u16() {
                     200 => true,
                     404 => false,
@@ -104,7 +105,6 @@ impl Loader for WorkflowsLoader {
 
                 if exists {
                     // Update
-                    let path = format!("api/workflows/{}", workflow_id);
                     let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
                     let response = client.put_json_value_internal(&path, &sanitized).await?;
                     if !response.status().is_success() {
@@ -115,9 +115,10 @@ impl Loader for WorkflowsLoader {
                     tracing::info!("Updated workflow: {} (id: {})", workflow_name, workflow_id);
                 } else {
                     // Create
-                    let path = "api/workflows";
                     let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
-                    let response = client.post_json_value_internal(path, &sanitized).await?;
+                    let response = client
+                        .post_json_value_internal(WORKFLOW_CREATE_PATH, &sanitized)
+                        .await?;
                     if !response.status().is_success() {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
@@ -146,6 +147,7 @@ impl Loader for WorkflowsLoader {
 mod tests {
     use super::*;
     use crate::client::{Auth, KibanaClient};
+    use crate::test_support::{MockResponse, TestServer};
     use serde_json::json;
     use url::Url;
 
@@ -203,5 +205,86 @@ mod tests {
         assert!(!sanitized_obj.contains_key("valid"));
         assert!(!sanitized_obj.contains_key("validationErrors"));
         assert!(!sanitized_obj.contains_key("history"));
+    }
+
+    #[tokio::test]
+    async fn creates_workflow_with_documented_endpoint() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/workflows/workflow/workflow-123",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/workflows/workflow",
+                status: 200,
+                body: json!({"id": "workflow-123"}),
+            },
+        ]);
+        let loader = WorkflowsLoader::new(server.client().unwrap());
+        let workflow = json!({
+            "id": "workflow-123",
+            "name": "test-workflow",
+            "createdAt": "2023-01-01T00:00:00Z",
+            "yaml": "name: test"
+        });
+
+        let count = loader.load(vec![workflow]).await.unwrap();
+
+        assert_eq!(count, 1);
+        let requests = server.requests();
+        assert_eq!(requests[0].method, "HEAD");
+        assert_eq!(requests[0].path, "/api/workflows/workflow/workflow-123");
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].path, "/api/workflows/workflow");
+        assert!(!requests[1].body.contains("createdAt"));
+    }
+
+    #[tokio::test]
+    async fn updates_workflow_with_documented_endpoint() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/workflows/workflow/workflow-123",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "PUT",
+                path: "/api/workflows/workflow/workflow-123",
+                status: 200,
+                body: json!({"id": "workflow-123"}),
+            },
+        ]);
+        let loader = WorkflowsLoader::new(server.client().unwrap());
+        let workflow = json!({
+            "id": "workflow-123",
+            "name": "test-workflow",
+            "yaml": "name: test"
+        });
+
+        let count = loader.load(vec![workflow]).await.unwrap();
+
+        assert_eq!(count, 1);
+        let paths = server
+            .requests()
+            .into_iter()
+            .map(|request| (request.method, request.path))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                (
+                    "HEAD".to_string(),
+                    "/api/workflows/workflow/workflow-123".to_string()
+                ),
+                (
+                    "PUT".to_string(),
+                    "/api/workflows/workflow/workflow-123".to_string()
+                )
+            ]
+        );
     }
 }

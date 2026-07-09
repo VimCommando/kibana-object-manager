@@ -11,7 +11,7 @@ use crate::kibana::saved_objects::{
 use crate::kibana::skills::{SkillsExtractor, SkillsLoader};
 use crate::kibana::spaces::{SpacesExtractor, SpacesLoader};
 use crate::kibana::tools::{ToolsExtractor, ToolsLoader};
-use crate::kibana::workflows::{WorkflowsExtractor, WorkflowsLoader};
+use crate::kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, workflow_resource_path};
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -510,7 +510,7 @@ pub async fn expand_dependencies(
             Dependency::Workflow(id)
                 if !existing_workflows.contains(&id) && capabilities.workflows =>
             {
-                let path = format!("api/workflows/{id}");
+                let path = workflow_resource_path(&id);
                 let response = space_client.get_internal(&path).await?;
                 if !response.status().is_success() {
                     let status = response.status();
@@ -648,7 +648,7 @@ mod tests {
             },
             MockResponse {
                 method: "GET",
-                path: "/api/workflows/workflow-w",
+                path: "/api/workflows/workflow/workflow-w",
                 status: 200,
                 body: json!({
                     "id": "workflow-w",
@@ -700,7 +700,7 @@ mod tests {
             vec![
                 "/api/agent_builder/skills/skill-s",
                 "/api/agent_builder/tools/tool-t",
-                "/api/workflows/workflow-w"
+                "/api/workflows/workflow/workflow-w"
             ]
         );
     }

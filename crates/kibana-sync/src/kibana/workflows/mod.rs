@@ -10,3 +10,9 @@ mod manifest;
 pub use extractor::WorkflowsExtractor;
 pub use loader::WorkflowsLoader;
 pub use manifest::{WorkflowEntry, WorkflowsManifest};
+
+pub const WORKFLOW_CREATE_PATH: &str = "api/workflows/workflow";
+
+pub fn workflow_resource_path(id: &str) -> String {
+    format!("{WORKFLOW_CREATE_PATH}/{id}")
+}

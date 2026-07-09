@@ -1,9 +1,10 @@
 //! Workflows API extractor
 //!
-//! Extracts workflow definitions from Kibana via GET /api/workflows/<id>
+//! Extracts workflow definitions from Kibana via GET /api/workflows/workflow/<id>
 
 use crate::client::KibanaClient;
 use crate::etl::Extractor;
+use crate::kibana::workflows::workflow_resource_path;
 
 use crate::{Error, Result, ResultContext};
 use serde_json::Value;
@@ -120,7 +121,7 @@ impl WorkflowsExtractor {
             let workflow_name = entry.name.clone();
 
             set.spawn(async move {
-                let path = format!("api/workflows/{}", workflow_id);
+                let path = workflow_resource_path(&workflow_id);
                 tracing::debug!(
                     "Fetching workflow '{}' from space '{}'",
                     workflow_id,
@@ -195,6 +196,8 @@ impl Extractor for WorkflowsExtractor {
 mod tests {
     use super::*;
     use crate::client::{Auth, KibanaClient};
+    use crate::test_support::{MockResponse, TestServer};
+    use serde_json::json;
     use url::Url;
 
     #[test]
@@ -203,5 +206,31 @@ mod tests {
         let client = KibanaClient::new(url, Auth::None).unwrap();
         let space_client = client.space("default").unwrap();
         let _extractor = WorkflowsExtractor::new(space_client, None);
+    }
+
+    #[tokio::test]
+    async fn fetches_manifest_workflow_with_documented_endpoint() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/api/workflows/workflow/workflow-123",
+            status: 200,
+            body: json!({
+                "id": "workflow-123",
+                "name": "test-workflow",
+                "yaml": "name: test"
+            }),
+        }]);
+        let manifest = super::super::WorkflowsManifest::with_workflows(vec![
+            super::super::WorkflowEntry::new("workflow-123", "test-workflow"),
+        ]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), Some(manifest));
+
+        let workflows = extractor.extract().await.unwrap();
+
+        assert_eq!(workflows.len(), 1);
+        assert_eq!(workflows[0]["id"], "workflow-123");
+        let requests = server.requests();
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[0].path, "/api/workflows/workflow/workflow-123");
     }
 }

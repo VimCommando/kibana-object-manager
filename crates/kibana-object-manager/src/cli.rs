@@ -17,7 +17,10 @@ use crate::{
     },
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
-    kibana::workflows::{WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest},
+    kibana::workflows::{
+        WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest,
+        workflow_resource_path,
+    },
     storage::{self, DirectoryReader, DirectoryWriter},
     transform::{
         FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, MultilineFieldFormatter,
@@ -4206,7 +4209,7 @@ async fn resolve_and_add_dependencies(
                 }
 
                 log::info!("Automatically adding dependent workflow: {}", id.cyan());
-                let path = format!("api/workflows/{}", id);
+                let path = workflow_resource_path(&id);
                 let response = client.get_internal(&path).await?;
                 if !response.status().is_success() {
                     log::warn!(
