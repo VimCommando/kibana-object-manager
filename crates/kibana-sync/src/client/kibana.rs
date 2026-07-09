@@ -307,9 +307,7 @@ impl KibanaClient {
             .get("version")
             .and_then(|v| v.get("number"))
             .and_then(|v| v.as_str())
-            .ok_or(Error::MissingField {
-                field: "version.number",
-            })?
+            .ok_or(Error::RedactedStatusUnauthenticated)?
             .to_string();
         let parsed = parse_kibana_version(&raw)?;
         let info = KibanaVersionInfo { raw, parsed };
@@ -620,6 +618,8 @@ impl std::fmt::Display for KibanaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{MockResponse, TestServer};
+    use serde_json::json;
 
     #[test]
     fn test_kibana_client_defaults_to_default_space_without_filesystem() {
@@ -754,5 +754,47 @@ mod tests {
             &v93,
             ApiCapability::Skills
         ));
+    }
+
+    #[tokio::test]
+    async fn server_version_info_parses_authenticated_status_response() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/api/status",
+            status: 200,
+            body: json!({
+                "version": {
+                    "number": "9.4.1"
+                }
+            }),
+        }]);
+        let client = server.client().unwrap();
+
+        let info = client.server_version_info().await.unwrap();
+
+        assert_eq!(info.raw, "9.4.1");
+        assert_eq!(info.parsed, KibanaVersion::new(9, 4, 1));
+    }
+
+    #[tokio::test]
+    async fn server_version_info_reports_redacted_status_as_authentication_failure() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/api/status",
+            status: 200,
+            body: json!({
+                "status": {
+                    "overall": {
+                        "level": "available"
+                    }
+                }
+            }),
+        }]);
+        let client = server.client().unwrap();
+
+        let err = client.server_version_info().await.unwrap_err();
+
+        assert!(matches!(err, Error::RedactedStatusUnauthenticated));
+        assert!(err.to_string().contains("Check KIBANA_APIKEY"));
     }
 }

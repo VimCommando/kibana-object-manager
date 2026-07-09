@@ -47,6 +47,7 @@ pub enum Error {
     MissingField {
         field: &'static str,
     },
+    RedactedStatusUnauthenticated,
     ApiResponse {
         status: StatusCode,
         body: String,
@@ -109,6 +110,10 @@ impl fmt::Display for Error {
                 write!(f, "{resource} is missing required 'id' field")
             }
             Self::MissingField { field } => write!(f, "missing required field: {field}"),
+            Self::RedactedStatusUnauthenticated => write!(
+                f,
+                "Kibana /api/status response did not include version.number; this usually means Kibana returned the unauthenticated redacted status response. Check KIBANA_APIKEY or KIBANA_USERNAME/KIBANA_PASSWORD credentials"
+            ),
             Self::ApiResponse { status, body } => {
                 write!(f, "Kibana API returned {status}: {body}")
             }
