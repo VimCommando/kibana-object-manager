@@ -158,6 +158,21 @@ fn capability_requested(capability: ApiCapability, filter: Option<&[String]>) ->
     }
 }
 
+fn workflow_file_stem(name: &str) -> String {
+    let sanitized = storage::sanitize_filename(name);
+    let stem = sanitized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase();
+
+    if stem.is_empty() {
+        "unnamed".to_string()
+    } else {
+        stem
+    }
+}
+
 fn is_older_major_minor(target: &KibanaVersion, recorded: &KibanaVersion) -> bool {
     target.major < recorded.major
         || (target.major == recorded.major && target.minor < recorded.minor)
@@ -1238,7 +1253,8 @@ pub async fn add_workflows_to_manifest(
             );
 
             // Write workflow file
-            let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+            let workflow_file =
+                workflows_dir.join(format!("{}.json", workflow_file_stem(workflow_name)));
             let json = storage::to_string_with_multiline(workflow)?;
             std::fs::write(&workflow_file, json)?;
 
@@ -1876,7 +1892,8 @@ pub async fn pull_workflows(project_dir: impl AsRef<Path>) -> Result<usize> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
 
-        let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+        let workflow_file =
+            workflows_dir.join(format!("{}.json", workflow_file_stem(workflow_name)));
         let json = storage::to_string_with_multiline(workflow)?;
         std::fs::write(&workflow_file, json)?;
 
@@ -3221,7 +3238,8 @@ async fn pull_space_workflows(project_dir: &Path, client: &KibanaClient) -> Resu
             .and_then(|v| v.as_str())
             .ok_or_else(|| eyre::eyre!("Workflow missing 'name' field"))?;
 
-        let workflow_file = workflows_dir.join(format!("{}.json", workflow_name));
+        let workflow_file =
+            workflows_dir.join(format!("{}.json", workflow_file_stem(workflow_name)));
         let json = storage::to_string_with_multiline(workflow)?;
         std::fs::write(&workflow_file, json)?;
         count += 1;
@@ -4226,7 +4244,8 @@ async fn resolve_and_add_dependencies(
                     manifest.write(&manifest_path)?;
                     let workflows_dir = get_space_workflows_dir(project_dir, space_id);
                     std::fs::create_dir_all(&workflows_dir)?;
-                    let workflow_file = workflows_dir.join(format!("{}.json", name));
+                    let workflow_file =
+                        workflows_dir.join(format!("{}.json", workflow_file_stem(name)));
                     let json = storage::to_string_with_multiline(&workflow)?;
                     std::fs::write(&workflow_file, json)?;
 
@@ -4427,6 +4446,16 @@ mod tests {
         assert!(should_process_api("skills", Some(&mixed)));
         assert!(should_process_api("workflows", Some(&mixed)));
         assert!(!should_process_api("tools", Some(&mixed)));
+    }
+
+    #[test]
+    fn test_workflow_file_stem_sanitizes_lowercases_and_replaces_spaces() {
+        assert_eq!(
+            workflow_file_stem("Daily Workflow: Threat Hunting"),
+            "daily_workflow__threat_hunting"
+        );
+        assert_eq!(workflow_file_stem("  Workflow One  "), "workflow_one");
+        assert_eq!(workflow_file_stem(""), "unnamed");
     }
 
     #[test]

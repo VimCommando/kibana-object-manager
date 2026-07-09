@@ -159,7 +159,7 @@ impl KibanaFsBundle {
             write_json_values(
                 &self.workflows_dir(space_id),
                 &bundle.workflows,
-                named_resource_file_name,
+                workflow_resource_file_name,
             )?;
         }
 
@@ -589,6 +589,22 @@ fn named_resource_file_name(value: &Value) -> Result<PathBuf> {
     Ok(PathBuf::from(format!("{stem}.json")))
 }
 
+fn workflow_resource_file_name(value: &Value) -> Result<PathBuf> {
+    let id = required_str(value, "id", "workflow")?;
+    let stem = optional_str(value, "name")
+        .filter(|name| *name != id)
+        .map(|name| {
+            format!(
+                "{}--{}",
+                sanitize_workflow_file_stem(name),
+                sanitize_workflow_file_stem(id)
+            )
+        })
+        .unwrap_or_else(|| sanitize_workflow_file_stem(id));
+
+    Ok(PathBuf::from(format!("{stem}.json")))
+}
+
 fn saved_objects_manifest(values: &[Value]) -> Result<SavedObjectsManifest> {
     let mut manifest = SavedObjectsManifest::new();
     for value in values {
@@ -677,6 +693,21 @@ fn sanitize_path_component(value: &str) -> String {
     }
 }
 
+fn sanitize_workflow_file_stem(value: &str) -> String {
+    let sanitized = sanitize_path_component(value);
+    let stem = sanitized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase();
+
+    if stem.is_empty() {
+        "unnamed".to_string()
+    } else {
+        stem
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,7 +764,7 @@ mod tests {
         );
         assert!(
             bundle_path
-                .join("default/workflows/Daily Workflow--workflow-1.json")
+                .join("default/workflows/daily_workflow--workflow-1.json")
                 .exists()
         );
         assert!(
