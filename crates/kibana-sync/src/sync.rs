@@ -68,7 +68,7 @@ impl Default for SyncOptions {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpaceBundle {
     pub saved_objects: Vec<Value>,
     pub workflows: Vec<Value>,
@@ -77,7 +77,7 @@ pub struct SpaceBundle {
     pub skills: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SyncBundle {
     pub spaces: Vec<Value>,
     pub by_space: HashMap<String, SpaceBundle>,

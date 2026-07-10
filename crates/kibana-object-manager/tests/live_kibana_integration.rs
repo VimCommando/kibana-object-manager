@@ -237,10 +237,8 @@ async fn live_skills_threat_hunting_referenced_content_roundtrip() -> Result<()>
     }
     .await;
 
-    if created {
-        if let Err(err) = loader.delete_skill(&test_skill_id, true).await {
-            eprintln!("Best-effort cleanup failed for skill {test_skill_id}: {err}");
-        }
+    if created && let Err(err) = loader.delete_skill(&test_skill_id, true).await {
+        eprintln!("Best-effort cleanup failed for skill {test_skill_id}: {err}");
     }
 
     result?;
@@ -268,7 +266,7 @@ fn normalized_referenced_content(skill: &serde_json::Value) -> Vec<serde_json::V
         })
         .unwrap_or_default();
 
-    referenced.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    referenced.sort_by_cached_key(|left| left.to_string());
     referenced
 }
 
