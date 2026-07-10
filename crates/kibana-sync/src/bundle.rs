@@ -164,7 +164,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         let selection = SyncSelection {
             spaces,
             saved_objects: Some(SavedObjectsManifest::new()),
-            include_spaces: self.source.is_file(Path::new("spaces.yml")),
+            include_spaces: self.manifest_is_file(Path::new("spaces.yml"))?,
             include_workflows: true,
             include_agents: true,
             include_tools: true,
@@ -212,7 +212,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         let directory = resource_dir(space_id, "objects");
         let values = self.read_json_dir(&directory)?;
         let manifest_path = manifest_path(space_id, "saved_objects.json");
-        let manifest = if self.source.is_file(&manifest_path) {
+        let manifest = if self.manifest_is_file(&manifest_path)? {
             Some(self.read_json_manifest(&manifest_path, "saved objects")?)
         } else if selection_manifest.objects.is_empty() {
             None
@@ -246,7 +246,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         let directory = resource_dir(space_id, "workflows");
         let values = self.read_json_dir(&directory)?;
         let manifest_path = manifest_path(space_id, "workflows.yml");
-        if !self.source.is_file(&manifest_path) {
+        if !self.manifest_is_file(&manifest_path)? {
             return Ok(values);
         }
         let manifest: WorkflowsManifest = self.read_yaml_manifest(&manifest_path, "workflows")?;
@@ -265,7 +265,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         let directory = resource_dir(space_id, "agents");
         let values = self.read_json_dir(&directory)?;
         let manifest_path = manifest_path(space_id, "agents.yml");
-        if !self.source.is_file(&manifest_path) {
+        if !self.manifest_is_file(&manifest_path)? {
             return Ok(values);
         }
         let manifest: AgentsManifest = self.read_yaml_manifest(&manifest_path, "agents")?;
@@ -283,7 +283,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         let directory = resource_dir(space_id, "tools");
         let values = self.read_json_dir(&directory)?;
         let manifest_path = manifest_path(space_id, "tools.yml");
-        if !self.source.is_file(&manifest_path) {
+        if !self.manifest_is_file(&manifest_path)? {
             return Ok(values);
         }
         let manifest: ToolsManifest = self.read_yaml_manifest(&manifest_path, "tools")?;
@@ -300,7 +300,7 @@ impl<S: BundleSource> KibanaBundle<S> {
     fn read_skills(&self, space_id: &str) -> Result<Vec<Value>> {
         let root = resource_dir(space_id, "skills");
         let manifest_path = manifest_path(space_id, "skills.yml");
-        let manifest: Option<SkillsManifest> = if self.source.is_file(&manifest_path) {
+        let manifest: Option<SkillsManifest> = if self.manifest_is_file(&manifest_path)? {
             Some(self.read_yaml_manifest(&manifest_path, "skills")?)
         } else {
             None
@@ -373,7 +373,7 @@ impl<S: BundleSource> KibanaBundle<S> {
 
     fn read_spaces(&self) -> Result<Vec<Value>> {
         let path = Path::new("spaces.yml");
-        if !self.source.is_file(path) {
+        if !self.manifest_is_file(path)? {
             return Ok(Vec::new());
         }
         let manifest: SpacesManifest = self.read_yaml_manifest(path, "spaces")?;
@@ -423,7 +423,7 @@ impl<S: BundleSource> KibanaBundle<S> {
     fn discover_space_ids(&self) -> Result<Vec<String>> {
         let mut ids = BTreeSet::new();
         let spaces_path = Path::new("spaces.yml");
-        if self.source.is_file(spaces_path) {
+        if self.manifest_is_file(spaces_path)? {
             let manifest: SpacesManifest = self.read_yaml_manifest(spaces_path, "spaces")?;
             ids.extend(manifest.spaces.into_iter().map(|space| space.id));
         }
@@ -449,6 +449,19 @@ impl<S: BundleSource> KibanaBundle<S> {
         ]
         .into_iter()
         .any(|name| self.source.is_dir(&resource_dir(space_id, name)))
+    }
+
+    fn manifest_is_file(&self, path: &Path) -> Result<bool> {
+        if self.source.is_file(path) {
+            return Ok(true);
+        }
+        if self.source.is_dir(path) {
+            return Err(Error::message(format!(
+                "bundle manifest must be a file: {}",
+                self.source.display_path(path)
+            )));
+        }
+        Ok(false)
     }
 
     fn read_json_dir(&self, directory: &Path) -> Result<Vec<Value>> {
@@ -1309,6 +1322,24 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid space id '../outside'"));
+    }
+
+    #[test]
+    fn bundle_reader_rejects_manifest_directories() {
+        for entries in [
+            vec![("spaces.yml/marker", b"directory".as_slice())],
+            vec![(
+                "default/manifest/tools.yml/marker",
+                b"directory".as_slice(),
+            )],
+        ] {
+            let error = KibanaBundle::from_entries(entries)
+                .unwrap()
+                .read_all()
+                .unwrap_err();
+
+            assert!(error.to_string().contains("bundle manifest must be a file"));
+        }
     }
 
     #[test]
