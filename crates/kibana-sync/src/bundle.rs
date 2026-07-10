@@ -565,7 +565,15 @@ impl BundleSource for Filesystem {
 
     fn immediate_directories(&self, path: &Path) -> Result<Vec<PathBuf>> {
         let directory = self.root.join(path);
-        if !directory.is_dir() {
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&directory));
+        }
+        if !metadata.is_dir() {
             return Ok(Vec::new());
         }
         let mut directories = Vec::new();
