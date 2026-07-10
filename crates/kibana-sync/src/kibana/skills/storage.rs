@@ -8,8 +8,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-const SKILL_FILE: &str = "SKILL.md";
-const REFERENCED_CONTENT_METADATA_FILE: &str = ".referenced_content.yml";
+pub(crate) const SKILL_FILE: &str = "SKILL.md";
+pub(crate) const REFERENCED_CONTENT_METADATA_FILE: &str = ".referenced_content.yml";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillFrontmatter {
@@ -219,16 +219,25 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
         })
         .collect::<Result<Vec<_>>>()?;
     let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
-    let metadata = if metadata_path.exists() {
-        validate_file_within_directory(&canonical_directory, &metadata_path)?;
-        Some(std::fs::read_to_string(&metadata_path).with_context(|| {
-            format!(
-                "Failed to read referenced content metadata: {}",
-                metadata_path.display()
-            )
-        })?)
-    } else {
-        None
+    let metadata = match std::fs::symlink_metadata(&metadata_path) {
+        Ok(_) => {
+            validate_file_within_directory(&canonical_directory, &metadata_path)?;
+            Some(std::fs::read_to_string(&metadata_path).with_context(|| {
+                format!(
+                    "Failed to read referenced content metadata: {}",
+                    metadata_path.display()
+                )
+            })?)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to inspect referenced content metadata: {}",
+                    metadata_path.display()
+                )
+            });
+        }
     };
 
     skill_files_to_directory(&content, referenced_files, metadata.as_deref())
@@ -957,8 +966,7 @@ mod tests {
         let skill_dir = temp.path().join("skill");
         std::fs::create_dir(&skill_dir).unwrap();
         std::fs::write(skill_dir.join(SKILL_FILE), "---\nid: skill\n---\nBody\n").unwrap();
-        let outside = temp.path().join("metadata.yml");
-        std::fs::write(&outside, "entries: []\n").unwrap();
+        let outside = temp.path().join("missing-metadata.yml");
         symlink_file(&outside, &skill_dir.join(REFERENCED_CONTENT_METADATA_FILE)).unwrap();
 
         let err = read_skill_directory(&skill_dir).unwrap_err();

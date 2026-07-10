@@ -2,7 +2,9 @@
 
 use crate::kibana::agents::AgentsManifest;
 use crate::kibana::saved_objects::SavedObjectsManifest;
-use crate::kibana::skills::{SkillsManifest, skill_files_to_value};
+use crate::kibana::skills::{
+    REFERENCED_CONTENT_METADATA_FILE, SKILL_FILE, SkillsManifest, skill_files_to_value,
+};
 use crate::kibana::spaces::{SpaceEntry, SpacesManifest};
 use crate::kibana::tools::ToolsManifest;
 use crate::kibana::workflows::WorkflowsManifest;
@@ -314,13 +316,13 @@ impl<S: BundleSource> KibanaBundle<S> {
         directories.sort();
         let mut values = Vec::new();
         for directory in directories {
-            let skill_file = directory.join("SKILL.md");
+            let skill_file = directory.join(SKILL_FILE);
             if !self.source.is_file(&skill_file) {
                 continue;
             }
             self.source.validate_skill_directory(&directory)?;
             let skill_markdown = self.read_text(&skill_file, "skill file")?;
-            let metadata_path = directory.join(".referenced_content.yml");
+            let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
             let metadata = self
                 .source
                 .is_file(&metadata_path)
@@ -329,7 +331,7 @@ impl<S: BundleSource> KibanaBundle<S> {
             let mut referenced = Vec::new();
             for file in self.source.files_under(&directory)? {
                 if file.extension().and_then(|value| value.to_str()) != Some("md")
-                    || file.file_name().and_then(|value| value.to_str()) == Some("SKILL.md")
+                    || file.file_name().and_then(|value| value.to_str()) == Some(SKILL_FILE)
                 {
                     continue;
                 }
