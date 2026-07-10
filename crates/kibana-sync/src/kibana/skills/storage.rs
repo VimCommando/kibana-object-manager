@@ -202,6 +202,7 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
         .collect::<Result<Vec<_>>>()?;
     let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
     let metadata = if metadata_path.exists() {
+        validate_file_within_directory(&canonical_directory, &metadata_path)?;
         Some(std::fs::read_to_string(&metadata_path).with_context(|| {
             format!(
                 "Failed to read referenced content metadata: {}",
@@ -213,6 +214,27 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
     };
 
     skill_files_to_directory(&content, referenced_files, metadata.as_deref())
+}
+
+fn validate_file_within_directory(canonical_directory: &Path, path: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("Failed to inspect path: {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(Error::message(format!(
+            "path uses symlink traversal inside skill directory: {}",
+            path.display()
+        )));
+    }
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve path: {}", path.display()))?;
+    if !canonical.starts_with(canonical_directory) {
+        return Err(Error::message(format!(
+            "path escapes skill directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 pub fn skill_to_value(directory: &Path, include_id: bool) -> Result<Value> {
@@ -892,6 +914,21 @@ mod tests {
             err.to_string()
                 .contains("skill file escapes skill directory")
         );
+    }
+
+    #[test]
+    fn rejects_referenced_content_metadata_symlink_escape() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join(SKILL_FILE), "---\nid: skill\n---\nBody\n").unwrap();
+        let outside = temp.path().join("metadata.yml");
+        std::fs::write(&outside, "entries: []\n").unwrap();
+        symlink_file(&outside, &skill_dir.join(REFERENCED_CONTENT_METADATA_FILE)).unwrap();
+
+        let err = read_skill_directory(&skill_dir).unwrap_err();
+
+        assert!(err.to_string().contains("symlink traversal"));
     }
 
     #[test]

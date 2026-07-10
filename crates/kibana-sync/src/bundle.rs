@@ -528,6 +528,7 @@ impl BundleSource for Filesystem {
     fn files_under(&self, path: &Path) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         collect_files(&self.root, &self.root.join(path), &mut files)?;
+        files.sort();
         Ok(files)
     }
 
@@ -606,7 +607,7 @@ impl<B: AsRef<[u8]>> BundleSource for Entries<B> {
     }
 
     fn display_path(&self, path: &Path) -> String {
-        path.display().to_string()
+        path.to_string_lossy().replace('\\', "/")
     }
 }
 
@@ -666,7 +667,6 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Res
             );
         }
     }
-    files.sort();
     Ok(())
 }
 
@@ -1048,5 +1048,23 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_eq!(filesystem.root(), temp.path());
+    }
+
+    #[test]
+    fn filesystem_write_defaults_space_definition_name() {
+        let temp = TempDir::new().unwrap();
+        let filesystem = KibanaBundle::create(temp.path()).unwrap();
+        let bundle = SyncBundle {
+            spaces: vec![json!({"id": "default"})],
+            ..SyncBundle::default()
+        };
+
+        filesystem.write(&bundle).unwrap();
+        let read = KibanaBundle::open(temp.path()).unwrap().read_all().unwrap();
+
+        assert_eq!(
+            read.spaces,
+            vec![json!({"id": "default", "name": "default"})]
+        );
     }
 }

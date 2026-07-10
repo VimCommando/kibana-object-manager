@@ -89,7 +89,15 @@ impl FilesystemWriter {
         SpacesManifest::with_spaces(entries).write(self.root.join("spaces.yml"))?;
         for space in spaces {
             let id = required_str(space, "id", "space")?;
-            write_json_file(&self.root.join(id).join("space.json"), space)?;
+            let mut definition = space.clone();
+            let object = definition
+                .as_object_mut()
+                .ok_or(Error::MissingResourceId { resource: "space" })?;
+            object.insert("id".to_string(), Value::String(id.to_string()));
+            if object.get("name").and_then(Value::as_str).is_none() {
+                object.insert("name".to_string(), Value::String(id.to_string()));
+            }
+            write_json_file(&self.root.join(id).join("space.json"), &definition)?;
         }
         Ok(())
     }

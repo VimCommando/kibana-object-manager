@@ -45,7 +45,7 @@ use kibana_sync::{Entries, KibanaBundle};
 let bundle: KibanaBundle<Entries<&'static [u8]>> = KibanaBundle::from_entries([
     (
         "spaces.yml",
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).as_slice(),
+        b"spaces:\n  - id: default\n    name: Default\n".as_slice(),
     ),
 ])?;
 let resources = bundle.read_all()?;
