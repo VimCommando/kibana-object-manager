@@ -7,7 +7,7 @@ Embedded consumers such as ESDiag cannot use `KibanaFsBundle` without first mate
 - **BREAKING** Replace `KibanaFsBundle` with a generic `KibanaBundle<S>` whose backend determines its available operations.
 - Add a `Filesystem` backend for path-backed bundle reads and writes and an `Entries<B>` backend for embedded `(relative path, bytes)` assets where `B: AsRef<[u8]>`.
 - Share bundle discovery, manifest parsing, resource selection, JSON5 parsing, ordering, and validation across both generic backends.
-- Preserve complete skill-directory loading, including `SKILL.md`, referenced-content subdirectories, and reference metadata, without requiring real directories.
+- Preserve complete skill-directory loading, including `SKILL.md` and referenced-content subdirectories, without requiring real directories. Referenced files use filesystem-safe names and derive their API names and relative paths from their location.
 - Reject unsafe, invalid, or ambiguous entry paths with actionable library errors.
 - Document the generic API, migrate both consumers, and test behavioral parity between filesystem-backed and entry-backed reads.
 
