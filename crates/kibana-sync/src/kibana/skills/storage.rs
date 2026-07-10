@@ -179,18 +179,105 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
 
     let content = std::fs::read_to_string(&skill_file)
         .with_context(|| format!("Failed to read skill file: {}", skill_file.display()))?;
-    let (frontmatter, body) = parse_skill_markdown(&content)?;
-    let referenced_content = read_referenced_content(directory)?;
+    let mut files = Vec::new();
+    collect_markdown_files(&canonical_directory, directory, &mut files)?;
+    files.sort();
+    let referenced_files = files
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(directory)
+                .map_err(|_| {
+                    Error::message(format!(
+                        "referenced content escaped skill directory: {}",
+                        path.display()
+                    ))
+                })?
+                .to_path_buf();
+            let content = std::fs::read_to_string(&path).with_context(|| {
+                format!("Failed to read referenced content: {}", path.display())
+            })?;
+            Ok((relative, content))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
+    let metadata = if metadata_path.exists() {
+        Some(std::fs::read_to_string(&metadata_path).with_context(|| {
+            format!(
+                "Failed to read referenced content metadata: {}",
+                metadata_path.display()
+            )
+        })?)
+    } else {
+        None
+    };
+
+    skill_files_to_directory(&content, referenced_files, metadata.as_deref())
+}
+
+pub fn skill_to_value(directory: &Path, include_id: bool) -> Result<Value> {
+    Ok(read_skill_directory(directory)?.to_value(include_id))
+}
+
+pub(crate) fn skill_files_to_value(
+    skill_markdown: &str,
+    referenced_files: impl IntoIterator<Item = (PathBuf, String)>,
+    metadata_yaml: Option<&str>,
+    include_id: bool,
+) -> Result<Value> {
+    Ok(
+        skill_files_to_directory(skill_markdown, referenced_files, metadata_yaml)?
+            .to_value(include_id),
+    )
+}
+
+fn skill_files_to_directory(
+    skill_markdown: &str,
+    referenced_files: impl IntoIterator<Item = (PathBuf, String)>,
+    metadata_yaml: Option<&str>,
+) -> Result<SkillDirectory> {
+    let (frontmatter, body) = parse_skill_markdown(skill_markdown)?;
+    let metadata = metadata_yaml
+        .map(|content| {
+            yaml_serde::from_str(content).context("Failed to parse referenced content metadata")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let mut referenced_content = referenced_files
+        .into_iter()
+        .map(|(relative, content)| {
+            let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+            let metadata_entry = metadata_entry_for(&metadata, &relative)?;
+            let relative_path = metadata_entry
+                .map(|entry| entry.relative_path.clone())
+                .unwrap_or_else(|| path_to_api_relative_path(parent));
+            let name = if let Some(entry) = metadata_entry {
+                entry.name.clone()
+            } else {
+                relative
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .ok_or_else(|| Error::message("referenced content filename is not UTF-8"))?
+                    .to_string()
+            };
+            Ok(ReferencedContent {
+                name,
+                relative_path,
+                content,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    referenced_content.sort_by(|left, right| {
+        left.relative_path
+            .cmp(&right.relative_path)
+            .then_with(|| left.name.cmp(&right.name))
+    });
 
     Ok(SkillDirectory {
         frontmatter,
         content: body.to_string(),
         referenced_content,
     })
-}
-
-pub fn skill_to_value(directory: &Path, include_id: bool) -> Result<Value> {
-    Ok(read_skill_directory(directory)?.to_value(include_id))
 }
 
 pub fn sanitize_path_component(value: &str) -> String {
@@ -350,71 +437,6 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
 
     write_referenced_content_metadata(root, &metadata)?;
     Ok(())
-}
-
-fn read_referenced_content(root: &Path) -> Result<Vec<ReferencedContent>> {
-    let canonical_root = root
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve skill directory: {}", root.display()))?;
-    let mut files = Vec::new();
-    collect_markdown_files(&canonical_root, root, &mut files)?;
-    files.sort();
-    let metadata = read_referenced_content_metadata(root)?;
-
-    let mut entries = files
-        .into_iter()
-        .map(|path| {
-            let relative = path.strip_prefix(root).map_err(|_| {
-                Error::message(format!(
-                    "referenced content escaped skill directory: {}",
-                    path.display()
-                ))
-            })?;
-            let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-            let metadata_entry = metadata_entry_for(&metadata, relative)?;
-            let relative_path = metadata_entry
-                .map(|entry| entry.relative_path.clone())
-                .unwrap_or_else(|| path_to_api_relative_path(parent));
-            let name = if let Some(entry) = metadata_entry {
-                entry.name.clone()
-            } else {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .ok_or_else(|| Error::message("referenced content filename is not UTF-8"))?
-                    .to_string()
-            };
-            let content = std::fs::read_to_string(&path).with_context(|| {
-                format!("Failed to read referenced content: {}", path.display())
-            })?;
-            Ok(ReferencedContent {
-                name,
-                relative_path,
-                content,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    entries.sort_by(|left, right| {
-        left.relative_path
-            .cmp(&right.relative_path)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
-    Ok(entries)
-}
-
-fn read_referenced_content_metadata(root: &Path) -> Result<ReferencedContentMetadata> {
-    let path = root.join(REFERENCED_CONTENT_METADATA_FILE);
-    if !path.exists() {
-        return Ok(ReferencedContentMetadata::default());
-    }
-
-    let content = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "Failed to read referenced content metadata: {}",
-            path.display()
-        )
-    })?;
-    yaml_serde::from_str(&content).context("Failed to parse referenced content metadata")
 }
 
 fn write_referenced_content_metadata(

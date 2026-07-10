@@ -19,3 +19,40 @@ let version = default_space.server_version().await?;
 # Ok(())
 # }
 ```
+
+## Bundle sources
+
+Use `KibanaBundle<Filesystem>` for the stable on-disk bundle layout:
+
+```rust,no_run
+use kibana_sync::{Filesystem, KibanaBundle};
+
+# fn run() -> kibana_sync::Result<()> {
+let bundle: KibanaBundle<Filesystem> = KibanaBundle::open("./kibana-bundle")?;
+let resources = bundle.read_all()?;
+# let _ = resources;
+# Ok(())
+# }
+```
+
+Embedded or in-memory consumers can provide root-relative paths and any uniform
+content type implementing `AsRef<[u8]>`:
+
+```rust,no_run
+use kibana_sync::{Entries, KibanaBundle};
+
+# fn run() -> kibana_sync::Result<()> {
+let bundle: KibanaBundle<Entries<&'static [u8]>> = KibanaBundle::from_entries([
+    (
+        "spaces.yml",
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).as_slice(),
+    ),
+])?;
+let resources = bundle.read_all()?;
+# let _ = resources;
+# Ok(())
+# }
+```
+
+The same constructor accepts dynamically collected `(path, Vec<u8>)` entries
+without changing bundle parsing or materializing temporary files.
