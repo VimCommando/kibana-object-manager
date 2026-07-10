@@ -9,7 +9,6 @@ use std::{
 };
 
 pub(crate) const SKILL_FILE: &str = "SKILL.md";
-pub(crate) const REFERENCED_CONTENT_METADATA_FILE: &str = ".referenced_content.yml";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SkillFrontmatter {
@@ -51,20 +50,6 @@ pub struct SkillDirectory {
     pub frontmatter: SkillFrontmatter,
     pub content: String,
     pub referenced_content: Vec<ReferencedContent>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct ReferencedContentMetadata {
-    #[serde(default)]
-    entries: Vec<ReferencedContentMetadataEntry>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ReferencedContentMetadataEntry {
-    path: String,
-    name: String,
-    #[serde(rename = "relativePath")]
-    relative_path: String,
 }
 
 impl SkillDirectory {
@@ -198,7 +183,7 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
     let content = std::fs::read_to_string(&skill_file)
         .with_context(|| format!("Failed to read skill file: {}", skill_file.display()))?;
     let mut files = Vec::new();
-    collect_markdown_files(&canonical_directory, directory, &mut files)?;
+    collect_reference_files(&canonical_directory, directory, &mut files)?;
     files.sort();
     let referenced_files = files
         .into_iter()
@@ -218,50 +203,7 @@ pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
             Ok((relative, content))
         })
         .collect::<Result<Vec<_>>>()?;
-    let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
-    let metadata = match std::fs::symlink_metadata(&metadata_path) {
-        Ok(_) => {
-            validate_file_within_directory(&canonical_directory, &metadata_path)?;
-            Some(std::fs::read_to_string(&metadata_path).with_context(|| {
-                format!(
-                    "Failed to read referenced content metadata: {}",
-                    metadata_path.display()
-                )
-            })?)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "Failed to inspect referenced content metadata: {}",
-                    metadata_path.display()
-                )
-            });
-        }
-    };
-
-    skill_files_to_directory(&content, referenced_files, metadata.as_deref())
-}
-
-fn validate_file_within_directory(canonical_directory: &Path, path: &Path) -> Result<()> {
-    let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("Failed to inspect path: {}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(Error::message(format!(
-            "path uses symlink traversal inside skill directory: {}",
-            path.display()
-        )));
-    }
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve path: {}", path.display()))?;
-    if !canonical.starts_with(canonical_directory) {
-        return Err(Error::message(format!(
-            "path escapes skill directory: {}",
-            path.display()
-        )));
-    }
-    Ok(())
+    skill_files_to_directory(&content, referenced_files)
 }
 
 pub fn skill_to_value(directory: &Path, include_id: bool) -> Result<Value> {
@@ -271,47 +213,27 @@ pub fn skill_to_value(directory: &Path, include_id: bool) -> Result<Value> {
 pub(crate) fn skill_files_to_value(
     skill_markdown: &str,
     referenced_files: impl IntoIterator<Item = (PathBuf, String)>,
-    metadata_yaml: Option<&str>,
     include_id: bool,
 ) -> Result<Value> {
-    Ok(
-        skill_files_to_directory(skill_markdown, referenced_files, metadata_yaml)?
-            .to_value(include_id),
-    )
+    Ok(skill_files_to_directory(skill_markdown, referenced_files)?.to_value(include_id))
 }
 
 fn skill_files_to_directory(
     skill_markdown: &str,
     referenced_files: impl IntoIterator<Item = (PathBuf, String)>,
-    metadata_yaml: Option<&str>,
 ) -> Result<SkillDirectory> {
     let (frontmatter, body) = parse_skill_markdown(skill_markdown)?;
-    let metadata = metadata_yaml
-        .map(|content| {
-            yaml_serde::from_str(content).context("Failed to parse referenced content metadata")
-        })
-        .transpose()?
-        .unwrap_or_default();
     let mut referenced_content = referenced_files
         .into_iter()
         .map(|(relative, content)| {
             let parent = relative.parent().unwrap_or_else(|| Path::new(""));
-            let metadata_entry = metadata_entry_for(&metadata, &relative)?;
-            let relative_path = metadata_entry
-                .map(|entry| entry.relative_path.clone())
-                .unwrap_or_else(|| path_to_api_relative_path(parent));
-            let name = if let Some(entry) = metadata_entry {
-                entry.name.clone()
-            } else {
-                relative
+            Ok(ReferencedContent {
+                name: relative
                     .file_stem()
                     .and_then(|stem| stem.to_str())
                     .ok_or_else(|| Error::message("referenced content filename is not UTF-8"))?
-                    .to_string()
-            };
-            Ok(ReferencedContent {
-                name,
-                relative_path,
+                    .to_string(),
+                relative_path: path_to_api_relative_path(parent),
                 content,
             })
         })
@@ -444,7 +366,6 @@ fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
 }
 
 fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Result<()> {
-    let mut metadata = ReferencedContentMetadata::default();
     let mut seen_paths = BTreeSet::new();
 
     for entry in entries {
@@ -452,11 +373,11 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
         let sanitized_name = sanitize_path_component(&entry.name);
         let file_name = format!("{sanitized_name}.md");
         let relative_file = relative_dir.join(file_name);
-        let metadata_path = metadata_path_for(&relative_file)?;
-        let comparable_metadata_path = metadata_path.to_lowercase();
+        let comparable_metadata_path = relative_file.to_string_lossy().to_lowercase();
         if !seen_paths.insert(comparable_metadata_path) {
             return Err(Error::message(format!(
-                "duplicate referenced content path after sanitization: {metadata_path}"
+                "duplicate referenced content path after sanitization: {}",
+                relative_file.display()
             )));
         }
 
@@ -472,50 +393,11 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
         }
         std::fs::write(&path, &entry.content)
             .with_context(|| format!("Failed to write referenced content: {}", path.display()))?;
-
-        let normalized_relative_path = normalize_api_relative_path(&entry.relative_path)?;
-        let derived_relative_path = path_to_api_relative_path(&relative_dir);
-        if sanitized_name != entry.name || derived_relative_path != normalized_relative_path {
-            metadata.entries.push(ReferencedContentMetadataEntry {
-                path: metadata_path,
-                name: entry.name.clone(),
-                relative_path: normalized_relative_path,
-            });
-        }
     }
-
-    write_referenced_content_metadata(root, &metadata)?;
     Ok(())
 }
 
-fn write_referenced_content_metadata(
-    root: &Path,
-    metadata: &ReferencedContentMetadata,
-) -> Result<()> {
-    if metadata.entries.is_empty() {
-        return Ok(());
-    }
-
-    let path = root.join(REFERENCED_CONTENT_METADATA_FILE);
-    let yaml = yaml_serde::to_string(metadata)
-        .context("Failed to serialize referenced content metadata")?;
-    std::fs::write(&path, yaml).with_context(|| {
-        format!(
-            "Failed to write referenced content metadata: {}",
-            path.display()
-        )
-    })
-}
-
-fn metadata_entry_for<'a>(
-    metadata: &'a ReferencedContentMetadata,
-    relative: &Path,
-) -> Result<Option<&'a ReferencedContentMetadataEntry>> {
-    let path = metadata_path_for(relative)?;
-    Ok(metadata.entries.iter().find(|entry| entry.path == path))
-}
-
-fn collect_markdown_files(
+fn collect_reference_files(
     canonical_root: &Path,
     directory: &Path,
     files: &mut Vec<PathBuf>,
@@ -543,10 +425,8 @@ fn collect_markdown_files(
         }
 
         if metadata.is_dir() {
-            collect_markdown_files(canonical_root, &path, files)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md")
-            && path.file_name().and_then(|name| name.to_str()) != Some(SKILL_FILE)
-        {
+            collect_reference_files(canonical_root, &path, files)?;
+        } else if path.file_name().and_then(|name| name.to_str()) != Some(SKILL_FILE) {
             files.push(path);
         }
     }
@@ -603,58 +483,6 @@ fn safe_relative_dir(relative_path: &str) -> Result<PathBuf> {
     }
 
     Ok(path)
-}
-
-fn normalize_api_relative_path(relative_path: &str) -> Result<String> {
-    let mut parts = Vec::new();
-    if relative_path.is_empty() {
-        return Ok(String::new());
-    }
-
-    for component in Path::new(relative_path).components() {
-        match component {
-            Component::Normal(value) => {
-                let value = value
-                    .to_str()
-                    .ok_or_else(|| Error::message("relativePath contains non-UTF-8 data"))?;
-                parts.push(value);
-            }
-            Component::CurDir => {}
-            _ => {
-                return Err(Error::message(format!(
-                    "unsafe referenced content relativePath: {relative_path}"
-                )));
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        Ok(String::new())
-    } else {
-        Ok(format!("./{}", parts.join("/")))
-    }
-}
-
-fn metadata_path_for(relative: &Path) -> Result<String> {
-    let mut parts = Vec::new();
-    for component in relative.components() {
-        match component {
-            Component::Normal(value) => {
-                let value = value
-                    .to_str()
-                    .ok_or_else(|| Error::message("referenced content path is not UTF-8"))?;
-                parts.push(value);
-            }
-            _ => {
-                return Err(Error::message(format!(
-                    "unsafe referenced content path: {}",
-                    relative.display()
-                )));
-            }
-        }
-    }
-
-    Ok(parts.join("/"))
 }
 
 fn path_to_api_relative_path(path: &Path) -> String {
@@ -739,7 +567,10 @@ mod tests {
         assert!(dir.join("SKILL.md").exists());
         assert!(dir.join("overview.md").exists());
         assert!(dir.join("examples/query.md").exists());
-        assert!(!dir.join(REFERENCED_CONTENT_METADATA_FILE).exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("overview.md")).unwrap(),
+            "Root ref\n"
+        );
 
         let read = read_skill_directory(&dir).unwrap();
         assert_eq!(read.frontmatter.id, "threat-hunting-copy");
@@ -844,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_referenced_content_values_when_paths_are_sanitized() {
+    fn derives_referenced_content_values_from_sanitized_paths() {
         let temp = TempDir::new().unwrap();
         let skill = json!({
             "id": "sanitize-skill",
@@ -862,15 +693,42 @@ mod tests {
         let dir = skill_to_directory(temp.path(), &skill).unwrap();
 
         assert!(dir.join("examples_prod/query_prod.md").exists());
-        assert!(dir.join(REFERENCED_CONTENT_METADATA_FILE).exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("examples_prod/query_prod.md")).unwrap(),
+            "from logs\n"
+        );
 
         let projected = skill_to_value(&dir, true).unwrap();
-        assert_eq!(projected["referenced_content"][0]["name"], "query:prod");
+        assert_eq!(projected["referenced_content"][0]["name"], "query_prod");
         assert_eq!(
             projected["referenced_content"][0]["relativePath"],
-            "./examples:prod"
+            "./examples_prod"
         );
         assert_eq!(projected["referenced_content"][0]["content"], "from logs\n");
+    }
+
+    #[test]
+    fn collects_non_markdown_referenced_content() {
+        let temp = TempDir::new().unwrap();
+        let skill_dir = temp.path().join("skill");
+        std::fs::create_dir(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join(SKILL_FILE),
+            "---\nid: skill\nname: Skill\n---\nInstructions\n",
+        )
+        .unwrap();
+        std::fs::create_dir(skill_dir.join("examples")).unwrap();
+        std::fs::write(skill_dir.join("examples/query.json"), r#"{"query":"*"}"#).unwrap();
+        std::fs::write(skill_dir.join("notes.txt"), "Notes\n").unwrap();
+
+        let projected = skill_to_value(&skill_dir, true).unwrap();
+
+        assert_eq!(projected["referenced_content"].as_array().unwrap().len(), 2);
+        assert_eq!(projected["referenced_content"][0]["name"], "notes");
+        assert_eq!(projected["referenced_content"][0]["relativePath"], "");
+        assert_eq!(projected["referenced_content"][1]["name"], "query");
+        assert_eq!(projected["referenced_content"][1]["relativePath"], "./examples");
+        assert_eq!(projected["referenced_content"][1]["content"], r#"{"query":"*"}"#);
     }
 
     #[test]
@@ -958,20 +816,6 @@ mod tests {
             err.to_string()
                 .contains("skill directory cannot be a symlink")
         );
-    }
-
-    #[test]
-    fn rejects_referenced_content_metadata_symlink_escape() {
-        let temp = TempDir::new().unwrap();
-        let skill_dir = temp.path().join("skill");
-        std::fs::create_dir(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join(SKILL_FILE), "---\nid: skill\n---\nBody\n").unwrap();
-        let outside = temp.path().join("missing-metadata.yml");
-        symlink_file(&outside, &skill_dir.join(REFERENCED_CONTENT_METADATA_FILE)).unwrap();
-
-        let err = read_skill_directory(&skill_dir).unwrap_err();
-
-        assert!(err.to_string().contains("symlink traversal"));
     }
 
     #[test]

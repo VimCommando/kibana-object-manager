@@ -23,10 +23,10 @@
 
 ## 4. Source-Neutral Skill Projection
 
-- [x] 4.1 Separate skill frontmatter, body, referenced-content, and reference-metadata parsing from operating-system directory traversal.
+- [x] 4.1 Separate skill frontmatter, body, and referenced-content parsing from operating-system directory traversal.
 - [x] 4.2 Adapt filesystem skill projection to the shared format parser while retaining canonical-root containment and symlink rejection.
-- [x] 4.3 Implement entry-backed skill discovery from immediate skill directories containing `SKILL.md`, including nested referenced Markdown files and reference metadata.
-- [x] 4.4 Add tests for skill manifest filtering, missing `SKILL.md`, nested referenced content, metadata path restoration, deterministic ordering, and filesystem/entry value equality.
+- [x] 4.3 Implement entry-backed skill discovery from immediate skill directories containing `SKILL.md`, including nested referenced files.
+- [x] 4.4 Add tests for skill manifest filtering, missing `SKILL.md`, nested referenced content, filesystem-derived names and relative paths, deterministic ordering, and filesystem/entry value equality.
 
 ## 5. Parity and Documentation
 

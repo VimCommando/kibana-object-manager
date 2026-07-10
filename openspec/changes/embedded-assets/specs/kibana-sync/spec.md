@@ -34,10 +34,10 @@ The `kibana-sync` crate SHALL expose `KibanaBundle<S>` with a `Filesystem` sourc
 - **AND** any decode or parse error identifies the resource's logical relative path
 
 #### Scenario: Load a complete virtual skill directory
-- **GIVEN** an entry-backed skill directory containing `SKILL.md`, nested referenced Markdown content, and reference metadata
+- **GIVEN** an entry-backed skill directory containing `SKILL.md` and nested referenced files with filesystem-safe names
 - **WHEN** the bundle is read with skills enabled
 - **THEN** the library projects the skill and its referenced content into the same Kibana value produced from the equivalent filesystem directory
-- **AND** preserves referenced-content names, relative paths, content, and deterministic ordering
+- **AND** derives referenced-content names from filename stems and relative paths from the directory structure, with deterministic ordering
 
 #### Scenario: Discover spaces from virtual layout
 - **GIVEN** an entry-backed bundle with space entries in `spaces.yml` and a space directory containing supported resources but absent from that manifest

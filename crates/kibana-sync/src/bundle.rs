@@ -3,7 +3,7 @@
 use crate::kibana::agents::AgentsManifest;
 use crate::kibana::saved_objects::SavedObjectsManifest;
 use crate::kibana::skills::{
-    REFERENCED_CONTENT_METADATA_FILE, SKILL_FILE, SkillsManifest, skill_files_to_value,
+    SKILL_FILE, SkillsManifest, skill_files_to_value,
 };
 use crate::kibana::spaces::{SpaceEntry, SpacesManifest};
 use crate::kibana::tools::ToolsManifest;
@@ -323,17 +323,9 @@ impl<S: BundleSource> KibanaBundle<S> {
             }
             self.source.validate_skill_directory(&directory)?;
             let skill_markdown = self.read_text(&skill_file, "skill file")?;
-            let metadata_path = directory.join(REFERENCED_CONTENT_METADATA_FILE);
-            let metadata = self
-                .source
-                .is_file(&metadata_path)
-                .then(|| self.read_text(&metadata_path, "referenced content metadata"))
-                .transpose()?;
             let mut referenced = Vec::new();
             for file in self.source.files_under(&directory)? {
-                if file.extension().and_then(|value| value.to_str()) != Some("md")
-                    || file.file_name().and_then(|value| value.to_str()) == Some(SKILL_FILE)
-                {
+                if file.file_name().and_then(|value| value.to_str()) == Some(SKILL_FILE) {
                     continue;
                 }
                 let relative = file
@@ -350,7 +342,6 @@ impl<S: BundleSource> KibanaBundle<S> {
             values.push(skill_files_to_value(
                 &skill_markdown,
                 referenced,
-                metadata.as_deref(),
                 true,
             )?);
         }
@@ -876,9 +867,8 @@ mod tests {
             ("default/tools/tool.json", r#"{"id":"tool-1","name":"Tool"}"#),
             ("default/manifest/skills.yml", "skills:\n  - id: skill-1\n    name: Skill\n"),
             ("default/skills/skill-1/SKILL.md", "---\nid: skill-1\nname: Skill\ntool_ids:\n  - tool-1\n---\nInstructions\n"),
-            ("default/skills/skill-1/aaa/query.md", "Query body\n"),
-            ("default/skills/skill-1/zzz/intro.md", "Intro body\n"),
-            ("default/skills/skill-1/.referenced_content.yml", "entries:\n  - path: aaa/query.md\n    name: Query Reference\n    relativePath: ./references\n  - path: zzz/intro.md\n    name: Intro Reference\n    relativePath: ./examples\n"),
+            ("default/skills/skill-1/references/query.txt", "Query body\n"),
+            ("default/skills/skill-1/examples/intro.yml", "Intro body\n"),
         ]
         .into_iter()
         .map(|(path, content)| (path.to_string(), content.as_bytes().to_vec()))
@@ -922,9 +912,9 @@ mod tests {
         let referenced = owned.by_space["default"].skills[0]["referenced_content"]
             .as_array()
             .unwrap();
-        assert_eq!(referenced[0]["name"], "Intro Reference");
+        assert_eq!(referenced[0]["name"], "intro");
         assert_eq!(referenced[0]["relativePath"], "./examples");
-        assert_eq!(referenced[1]["name"], "Query Reference");
+        assert_eq!(referenced[1]["name"], "query");
         assert_eq!(referenced[1]["relativePath"], "./references");
 
         let application = KibanaBundle::from_entries(

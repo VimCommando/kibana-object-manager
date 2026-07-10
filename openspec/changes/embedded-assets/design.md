@@ -1,6 +1,6 @@
 ## Context
 
-`KibanaFsBundle` currently combines two responsibilities: access to an operating-system directory tree and interpretation of the Kibana bundle layout. Its read path calls `Path::exists`, `std::fs::read_dir`, and `std::fs::read_to_string` directly, while skill projection expects a real skill directory so it can discover `SKILL.md` and referenced Markdown files. This prevents ESDiag and similar consumers from loading assets exposed as relative paths and bytes without first creating a temporary directory or duplicating the layout parser.
+`KibanaFsBundle` currently combines two responsibilities: access to an operating-system directory tree and interpretation of the Kibana bundle layout. Its read path calls `Path::exists`, `std::fs::read_dir`, and `std::fs::read_to_string` directly, while skill projection expects a real skill directory so it can discover `SKILL.md` and referenced files. This prevents ESDiag and similar consumers from loading assets exposed as relative paths and bytes without first creating a temporary directory or duplicating the layout parser.
 
 The established behavior is broader than parsing JSON files. The reader discovers spaces from `spaces.yml` and space directories, honors per-space manifests as ordering and selection authorities, recursively parses JSON5 resources, validates manifest references, and converts complete skill directory trees into Kibana values. The stable layout and parsing behavior must remain intact, but `KibanaFsBundle` source compatibility is unnecessary because the only two consumers are this workspace and ESDiag, both of which can migrate before the first public release.
 
@@ -21,7 +21,7 @@ The change affects only the extraction side of the sync ETL pipeline. `SyncBundl
 **Goals:**
 - Load a complete Kibana asset bundle from relative-path and byte-content entries without filesystem materialization.
 - Produce the same `SyncBundle` content, ordering, selection behavior, and validation outcomes as filesystem reads.
-- Preserve JSON5 support and complete skill projection, including nested referenced content and its metadata.
+- Preserve JSON5 support and complete skill projection, including nested referenced files.
 - Provide one generic `KibanaBundle<S>` API with compile-time backend capabilities.
 - Keep filesystem bundle layout and read/write behavior while allowing both consumers to migrate to the generic API.
 - Reject paths that could escape the entry root or make lookup ambiguous.
@@ -84,7 +84,7 @@ Alternative considered: silently clean `.` and `..` components. Rejected because
 
 ### 4) Parse text from bytes at the source-neutral boundary
 
-Manifest, JSON5, `SKILL.md`, referenced-content Markdown, and skill metadata readers decode required text files as UTF-8 and attach the normalized logical path to parse and decoding errors. JSON resources retain the current recursive `.json` discovery, lexicographic ordering, and `json5::from_json5_str` behavior. YAML and JSON manifests continue using their existing schemas and source-of-truth semantics.
+Manifest, JSON5, `SKILL.md`, and referenced-content readers decode required text files as UTF-8 and attach the normalized logical path to parse and decoding errors. JSON resources retain the current recursive `.json` discovery, lexicographic ordering, and `json5::from_json5_str` behavior. YAML and JSON manifests continue using their existing schemas and source-of-truth semantics.
 
 Rationale: byte entries support normal embedding APIs while explicit UTF-8 validation preserves the text formats' current expectations and provides useful diagnostics.
 
@@ -92,7 +92,7 @@ Alternative considered: require entry content as `str`. Rejected because common 
 
 ### 5) Project skills directly from their logical directory tree
 
-Extract the format-level portions of `skill_to_value` so they can consume a logical skill directory and its text entries rather than requiring `Path::canonicalize` and `std::fs` traversal. A skill is discoverable only when an immediate child of `<space>/skills/` contains `SKILL.md`. Nested Markdown referenced content and the existing reference metadata file are read using normalized relative paths, with the same ordering, names, relative paths, and validation as filesystem projection.
+Extract the format-level portions of `skill_to_value` so they can consume a logical skill directory and its text entries rather than requiring `Path::canonicalize` and `std::fs` traversal. A skill is discoverable only when an immediate child of `<space>/skills/` contains `SKILL.md`. Every other nested file is referenced content: the filesystem-safe filename stem is its API name and its parent directory determines its API relative path. No metadata sidecar or path override is accepted.
 
 Filesystem projection continues to enforce canonical-root containment and reject symlinked skill directories or referenced content. Entry-backed sources cannot contain symlinks, so their equivalent safety guarantee comes from constructor path validation.
 
@@ -102,7 +102,7 @@ Alternative considered: represent each skill as a prebuilt Kibana JSON value in 
 
 ### 6) Verify parity with source conformance fixtures
 
-Build one representative bundle fixture containing spaces, manifests, nested saved objects, workflows, agents, tools, JSON5 syntax, skills, reference metadata, and nested referenced content. Load it through `KibanaBundle<Filesystem>` and `KibanaBundle<Entries<&[u8]>>`, then assert equal `SyncBundle` results for `read_all` and representative selections. Add entry-only tests for invalid paths, duplicates, invalid UTF-8 in selected text assets, missing manifest resources, deterministic ordering, and empty bundles.
+Build one representative bundle fixture containing spaces, manifests, nested saved objects, workflows, agents, tools, JSON5 syntax, skills, and nested referenced files. Load it through `KibanaBundle<Filesystem>` and `KibanaBundle<Entries<&[u8]>>`, then assert equal `SyncBundle` results for `read_all` and representative selections. Add entry-only tests for invalid paths, duplicates, invalid UTF-8 in selected text assets, missing manifest resources, deterministic ordering, and empty bundles.
 
 Rationale: parity is the primary compatibility promise and is stronger when exercised against identical logical content.
 
