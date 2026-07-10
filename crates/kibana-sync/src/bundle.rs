@@ -22,7 +22,7 @@ mod sealed {
 /// Read operations required by [`KibanaBundle`].
 ///
 /// This trait is sealed. Use [`Filesystem`] or [`Entries`] as the source.
-pub trait BundleSource: sealed::Sealed {
+pub(crate) trait BundleSource: sealed::Sealed {
     /// Borrowed or owned content returned by this source.
     type Content<'a>: AsRef<[u8]>
     where
@@ -653,9 +653,8 @@ impl<B: AsRef<[u8]>> BundleSource for Entries<B> {
     fn files_under(&self, path: &Path) -> Result<Vec<PathBuf>> {
         Ok(self
             .files
-            .range(path.to_path_buf()..)
-            .take_while(|(entry, _)| entry.starts_with(path))
-            .map(|(entry, _)| entry)
+            .keys()
+            .filter(|entry| entry.starts_with(path))
             .cloned()
             .collect())
     }
@@ -1021,6 +1020,26 @@ mod tests {
     }
 
     #[test]
+    fn entry_files_under_does_not_stop_at_lexicographic_siblings() {
+        let bundle = KibanaBundle::from_entries([
+            ("default/skills/incident-response/SKILL.md", b"skill".as_slice()),
+            (
+                "default/skills/incident-response-v2/notes.md",
+                b"sibling".as_slice(),
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            bundle
+                .source
+                .files_under(Path::new("default/skills/incident-response"))
+                .unwrap(),
+            vec![PathBuf::from("default/skills/incident-response/SKILL.md")]
+        );
+    }
+
+    #[test]
     fn entry_errors_include_logical_paths() {
         let invalid_utf8 = KibanaBundle::from_entries([("spaces.yml", [0xff])])
             .unwrap()
@@ -1229,5 +1248,19 @@ mod tests {
             read.spaces,
             vec![json!({"id": "default", "name": "default"})]
         );
+    }
+
+    #[test]
+    fn filesystem_write_rejects_non_object_spaces() {
+        let temp = TempDir::new().unwrap();
+        let filesystem = KibanaBundle::create(temp.path()).unwrap();
+        let bundle = SyncBundle {
+            spaces: vec![json!("default")],
+            ..SyncBundle::default()
+        };
+
+        let error = filesystem.write(&bundle).unwrap_err();
+
+        assert_eq!(error.to_string(), "space must be a JSON object");
     }
 }

@@ -82,6 +82,9 @@ impl FilesystemWriter {
     fn write_spaces(&self, spaces: &[Value]) -> Result<()> {
         let mut entries = Vec::with_capacity(spaces.len());
         for space in spaces {
+            if !space.is_object() {
+                return Err(Error::message("space must be a JSON object"));
+            }
             let id = required_str(space, "id", "space")?;
             let name = optional_str(space, "name").unwrap_or(id);
             entries.push(SpaceEntry::new(id.to_string(), name.to_string()));

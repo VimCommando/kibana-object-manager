@@ -18,7 +18,7 @@ pub mod sync;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use bundle::{BundleSource, Entries, Filesystem, KibanaBundle};
+pub use bundle::{Entries, Filesystem, KibanaBundle};
 pub use client::{
     ApiCapability, Auth, KibanaClient, KibanaClientBuilder, KibanaVersion, KibanaVersionInfo,
     SpaceRegistry, parse_kibana_version,
