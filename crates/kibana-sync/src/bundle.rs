@@ -472,7 +472,12 @@ impl<S: BundleSource> KibanaBundle<S> {
             )
         })?;
         let text = utf8(content.as_ref(), &self.source.display_path(path))?;
-        yaml_serde::from_str(text).with_context(|| format!("Failed to parse {kind} manifest YAML"))
+        yaml_serde::from_str(text).with_context(|| {
+            format!(
+                "Failed to parse {kind} manifest YAML: {}",
+                self.source.display_path(path)
+            )
+        })
     }
 
     fn read_json_manifest<T: DeserializeOwned>(&self, path: &Path, kind: &str) -> Result<T> {
@@ -483,7 +488,12 @@ impl<S: BundleSource> KibanaBundle<S> {
             )
         })?;
         let text = utf8(content.as_ref(), &self.source.display_path(path))?;
-        serde_json::from_str(text).with_context(|| format!("Failed to parse {kind} manifest JSON"))
+        serde_json::from_str(text).with_context(|| {
+            format!(
+                "Failed to parse {kind} manifest JSON: {}",
+                self.source.display_path(path)
+            )
+        })
     }
 
     fn missing_manifest_resource(
@@ -540,7 +550,12 @@ impl BundleSource for Filesystem {
         let mut directories = Vec::new();
         for entry in std::fs::read_dir(directory)? {
             let entry = entry?;
-            if entry.path().is_dir() {
+            let entry_path = entry.path();
+            let metadata = std::fs::symlink_metadata(&entry_path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(bundle_symlink_error(&entry_path));
+            }
+            if metadata.is_dir() {
                 directories.push(path.join(entry.file_name()));
             }
         }
@@ -650,14 +665,26 @@ fn normalize_entry_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    if !directory.is_dir() {
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(bundle_symlink_error(directory));
+    }
+    if !metadata.is_dir() {
         return Ok(());
     }
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
-        if path.is_dir() {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&path));
+        }
+        if metadata.is_dir() {
             collect_files(root, &path, files)?;
-        } else if path.is_file() {
+        } else if metadata.is_file() {
             files.push(
                 path.strip_prefix(root)
                     .map_err(|_| {
@@ -668,6 +695,13 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Res
         }
     }
     Ok(())
+}
+
+fn bundle_symlink_error(path: &Path) -> Error {
+    Error::message(format!(
+        "bundle paths cannot be symlinks: {}",
+        path.display()
+    ))
 }
 
 fn validate_filesystem_tree(canonical_root: &Path, directory: &Path) -> Result<()> {
@@ -931,6 +965,45 @@ mod tests {
             invalid_json
                 .to_string()
                 .contains("default/objects/bad.json")
+        );
+    }
+
+    #[test]
+    fn manifest_parse_errors_include_logical_paths() {
+        let yaml_error = KibanaBundle::from_entries([("spaces.yml", b"{".as_slice())])
+            .unwrap()
+            .read_all()
+            .unwrap_err();
+        assert!(yaml_error.to_string().contains("spaces.yml"));
+
+        let json_error =
+            KibanaBundle::from_entries([("default/manifest/saved_objects.json", b"{".as_slice())])
+                .unwrap()
+                .read_all()
+                .unwrap_err();
+        assert!(
+            json_error
+                .to_string()
+                .contains("default/manifest/saved_objects.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_sources_reject_symlink_traversal() {
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("default")).unwrap();
+
+        let error = KibanaBundle::open(temp.path())
+            .unwrap()
+            .read_all()
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("bundle paths cannot be symlinks")
         );
     }
 
