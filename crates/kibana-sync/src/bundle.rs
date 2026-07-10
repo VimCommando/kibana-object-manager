@@ -76,6 +76,9 @@ impl KibanaBundle<Filesystem> {
                 root.display()
             )));
         }
+        if std::fs::symlink_metadata(&root)?.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&root));
+        }
         Ok(Self {
             source: Filesystem { root },
         })
@@ -86,6 +89,9 @@ impl KibanaBundle<Filesystem> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)
             .with_context(|| format!("Failed to create bundle root: {}", root.display()))?;
+        if std::fs::symlink_metadata(&root)?.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&root));
+        }
         Ok(Self {
             source: Filesystem { root },
         })
@@ -1069,6 +1075,24 @@ mod tests {
                 .to_string()
                 .contains("bundle paths cannot be symlinks")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_bundle_roots_cannot_be_symlinks() {
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = temp.path().join("bundle");
+        std::os::unix::fs::symlink(outside.path(), &root).unwrap();
+
+        for result in [KibanaBundle::open(&root), KibanaBundle::create(&root)] {
+            let error = result.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("bundle paths cannot be symlinks")
+            );
+        }
     }
 
     #[test]
