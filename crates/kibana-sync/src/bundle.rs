@@ -2,9 +2,7 @@
 
 use crate::kibana::agents::AgentsManifest;
 use crate::kibana::saved_objects::SavedObjectsManifest;
-use crate::kibana::skills::{
-    SKILL_FILE, SkillsManifest, skill_files_to_value,
-};
+use crate::kibana::skills::{SKILL_FILE, SkillsManifest, skill_files_to_value};
 use crate::kibana::spaces::{SpaceEntry, SpacesManifest};
 use crate::kibana::tools::ToolsManifest;
 use crate::kibana::workflows::WorkflowsManifest;
@@ -339,11 +337,7 @@ impl<S: BundleSource> KibanaBundle<S> {
                     .to_path_buf();
                 referenced.push((relative, self.read_text(&file, "referenced content")?));
             }
-            values.push(skill_files_to_value(
-                &skill_markdown,
-                referenced,
-                true,
-            )?);
+            values.push(skill_files_to_value(&skill_markdown, referenced, true)?);
         }
 
         let Some(manifest) = manifest else {
@@ -720,10 +714,7 @@ fn normalize_entry_path(path: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn validate_space_id(id: &str) -> Result<()> {
-    if id.is_empty()
-        || matches!(id, "." | "..")
-        || id.contains(['/', '\\', ':'])
-    {
+    if id.is_empty() || matches!(id, "." | "..") || id.contains(['/', '\\', ':']) {
         return Err(Error::message(format!(
             "invalid space id '{id}': space ids must be a single path component"
         )));
@@ -851,23 +842,56 @@ mod tests {
 
     fn fixture() -> Vec<(String, Vec<u8>)> {
         [
-            ("spaces.yml", "spaces:\n  - id: default\n    name: Default\n"),
-            ("default/manifest/saved_objects.json", r#"{"objects":[{"type":"dashboard","id":"dash-1"}]}"#),
-            ("default/objects/dashboard/dash-1.json", r#"{
+            (
+                "spaces.yml",
+                "spaces:\n  - id: default\n    name: Default\n",
+            ),
+            (
+                "default/manifest/saved_objects.json",
+                r#"{"objects":[{"type":"dashboard","id":"dash-1"}]}"#,
+            ),
+            (
+                "default/objects/dashboard/dash-1.json",
+                r#"{
                 // JSON5 comments, unquoted keys, and trailing commas are valid.
                 type: "dashboard",
                 id: "dash-1",
                 attributes: { title: "Dash", },
-            }"#),
-            ("default/manifest/workflows.yml", "workflows:\n  - id: workflow-1\n    name: Workflow\n"),
-            ("default/workflows/workflow.json", r#"{"id":"workflow-1","name":"Workflow"}"#),
-            ("default/manifest/agents.yml", "agents:\n  - id: agent-1\n    name: Agent\n"),
-            ("default/agents/agent.json", r#"{"id":"agent-1","name":"Agent"}"#),
+            }"#,
+            ),
+            (
+                "default/manifest/workflows.yml",
+                "workflows:\n  - id: workflow-1\n    name: Workflow\n",
+            ),
+            (
+                "default/workflows/workflow.json",
+                r#"{"id":"workflow-1","name":"Workflow"}"#,
+            ),
+            (
+                "default/manifest/agents.yml",
+                "agents:\n  - id: agent-1\n    name: Agent\n",
+            ),
+            (
+                "default/agents/agent.json",
+                r#"{"id":"agent-1","name":"Agent"}"#,
+            ),
             ("default/manifest/tools.yml", "tools:\n  - tool-1\n"),
-            ("default/tools/tool.json", r#"{"id":"tool-1","name":"Tool"}"#),
-            ("default/manifest/skills.yml", "skills:\n  - id: skill-1\n    name: Skill\n"),
-            ("default/skills/skill-1/SKILL.md", "---\nid: skill-1\nname: Skill\ntool_ids:\n  - tool-1\n---\nInstructions\n"),
-            ("default/skills/skill-1/references/query.txt", "Query body\n"),
+            (
+                "default/tools/tool.json",
+                r#"{"id":"tool-1","name":"Tool"}"#,
+            ),
+            (
+                "default/manifest/skills.yml",
+                "skills:\n  - id: skill-1\n    name: Skill\n",
+            ),
+            (
+                "default/skills/skill-1/SKILL.md",
+                "---\nid: skill-1\nname: Skill\ntool_ids:\n  - tool-1\n---\nInstructions\n",
+            ),
+            (
+                "default/skills/skill-1/references/query.txt",
+                "Query body\n",
+            ),
             ("default/skills/skill-1/examples/intro.yml", "Intro body\n"),
         ]
         .into_iter()
@@ -1041,7 +1065,10 @@ mod tests {
     #[test]
     fn entry_files_under_does_not_stop_at_lexicographic_siblings() {
         let bundle = KibanaBundle::from_entries([
-            ("default/skills/incident-response/SKILL.md", b"skill".as_slice()),
+            (
+                "default/skills/incident-response/SKILL.md",
+                b"skill".as_slice(),
+            ),
             (
                 "default/skills/incident-response-v2/notes.md",
                 b"sibling".as_slice(),
@@ -1290,13 +1317,11 @@ mod tests {
             include_tools: true,
             ..SyncSelection::default()
         };
-        let error = KibanaBundle::<Entries<&[u8]>>::from_entries(std::iter::empty::<(
-            &str,
-            &[u8],
-        )>())
-        .unwrap()
-            .read(&selection)
-            .unwrap_err();
+        let error =
+            KibanaBundle::<Entries<&[u8]>>::from_entries(std::iter::empty::<(&str, &[u8])>())
+                .unwrap()
+                .read(&selection)
+                .unwrap_err();
 
         assert!(error.to_string().contains("invalid space id '../outside'"));
     }
@@ -1318,10 +1343,7 @@ mod tests {
     fn bundle_reader_rejects_manifest_directories() {
         for entries in [
             vec![("spaces.yml/marker", b"directory".as_slice())],
-            vec![(
-                "default/manifest/tools.yml/marker",
-                b"directory".as_slice(),
-            )],
+            vec![("default/manifest/tools.yml/marker", b"directory".as_slice())],
         ] {
             let error = KibanaBundle::from_entries(entries)
                 .unwrap()

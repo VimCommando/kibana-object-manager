@@ -727,8 +727,14 @@ mod tests {
         assert_eq!(projected["referenced_content"][0]["name"], "notes");
         assert_eq!(projected["referenced_content"][0]["relativePath"], "");
         assert_eq!(projected["referenced_content"][1]["name"], "query");
-        assert_eq!(projected["referenced_content"][1]["relativePath"], "./examples");
-        assert_eq!(projected["referenced_content"][1]["content"], r#"{"query":"*"}"#);
+        assert_eq!(
+            projected["referenced_content"][1]["relativePath"],
+            "./examples"
+        );
+        assert_eq!(
+            projected["referenced_content"][1]["content"],
+            r#"{"query":"*"}"#
+        );
     }
 
     #[test]
@@ -795,10 +801,7 @@ mod tests {
 
         let err = read_skill_directory(&skill_dir).unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("skill file cannot be a symlink")
-        );
+        assert!(err.to_string().contains("skill file cannot be a symlink"));
     }
 
     #[test]
