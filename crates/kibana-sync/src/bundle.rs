@@ -381,7 +381,12 @@ impl<S: BundleSource> KibanaBundle<S> {
             return Ok(serde_json::json!({"id": space.id, "name": space.name}));
         }
 
-        let content = self.source.read(&path)?;
+        let content = self.source.read(&path).with_context(|| {
+            format!(
+                "Failed to read space definition: {}",
+                self.source.display_path(&path)
+            )
+        })?;
         let text = utf8(content.as_ref(), &self.source.display_path(&path))?;
         let definition = json5::from_json5_str(text).with_context(|| {
             format!(
@@ -442,7 +447,12 @@ impl<S: BundleSource> KibanaBundle<S> {
         files
             .into_iter()
             .map(|path| {
-                let content = self.source.read(&path)?;
+                let content = self.source.read(&path).with_context(|| {
+                    format!(
+                        "Failed to read JSON resource: {}",
+                        self.source.display_path(&path)
+                    )
+                })?;
                 let text = utf8(content.as_ref(), &self.source.display_path(&path))?;
                 json5::from_json5_str(text).with_context(|| {
                     format!(

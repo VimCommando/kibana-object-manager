@@ -163,6 +163,14 @@ pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
 }
 
 pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
+    let directory_metadata = std::fs::symlink_metadata(directory)
+        .with_context(|| format!("Failed to inspect skill directory: {}", directory.display()))?;
+    if directory_metadata.file_type().is_symlink() {
+        return Err(Error::message(format!(
+            "skill directory cannot be a symlink: {}",
+            directory.display()
+        )));
+    }
     let canonical_directory = directory
         .canonicalize()
         .with_context(|| format!("Failed to resolve skill directory: {}", directory.display()))?;
@@ -913,6 +921,23 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("skill file escapes skill directory")
+        );
+    }
+
+    #[test]
+    fn rejects_skill_directory_symlink() {
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join(SKILL_FILE), "---\nid: skill\n---\nBody\n").unwrap();
+        let link = temp.path().join("link");
+        symlink_dir(&target, &link).unwrap();
+
+        let err = read_skill_directory(&link).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("skill directory cannot be a symlink")
         );
     }
 
