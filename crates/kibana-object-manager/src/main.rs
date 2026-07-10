@@ -258,7 +258,7 @@ enum Commands {
     /// Skills are experimental as of Kibana 9.4 and are stored as
     /// skills/{skill-directory}/SKILL.md with YAML frontmatter fields:
     /// id, name, description, tool_ids, and experimental.
-    /// Referenced content is projected from sibling markdown files.
+    /// Referenced content is projected from all files under the skill directory.
     /// Local experimental metadata is omitted from API create/update bodies.
     ///
     /// Examples:
