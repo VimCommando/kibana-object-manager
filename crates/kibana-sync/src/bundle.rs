@@ -22,7 +22,7 @@ mod sealed {
 /// Read operations required by [`KibanaBundle`].
 ///
 /// This trait is sealed. Use [`Filesystem`] or [`Entries`] as the source.
-pub(crate) trait BundleSource: sealed::Sealed {
+pub trait BundleSource: sealed::Sealed {
     /// Borrowed or owned content returned by this source.
     type Content<'a>: AsRef<[u8]>
     where
@@ -181,6 +181,7 @@ impl<S: BundleSource> KibanaBundle<S> {
         }
 
         for space_id in &selection.spaces {
+            validate_space_id(space_id)?;
             let mut space_bundle = SpaceBundle::default();
             if let Some(selection_manifest) = &selection.saved_objects {
                 space_bundle.saved_objects =
@@ -379,7 +380,10 @@ impl<S: BundleSource> KibanaBundle<S> {
         manifest
             .spaces
             .into_iter()
-            .map(|space| self.read_space_definition(&space))
+            .map(|space| {
+                validate_space_id(&space.id)?;
+                self.read_space_definition(&space)
+            })
             .collect()
     }
 
@@ -709,6 +713,18 @@ fn normalize_entry_path(path: &Path) -> Result<PathBuf> {
         )));
     }
     Ok(normalized)
+}
+
+pub(crate) fn validate_space_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || matches!(id, "." | "..")
+        || id.contains(['/', '\\', ':'])
+    {
+        return Err(Error::message(format!(
+            "invalid space id '{id}': space ids must be a single path component"
+        )));
+    }
+    Ok(())
 }
 
 fn logical_path(path: &Path) -> String {
@@ -1262,5 +1278,53 @@ mod tests {
         let error = filesystem.write(&bundle).unwrap_err();
 
         assert_eq!(error.to_string(), "space must be a JSON object");
+    }
+
+    #[test]
+    fn bundle_reader_rejects_path_traversal_space_ids() {
+        let selection = SyncSelection {
+            spaces: vec!["../outside".to_string()],
+            include_tools: true,
+            ..SyncSelection::default()
+        };
+        let error = KibanaBundle::<Entries<&[u8]>>::from_entries(std::iter::empty::<(
+            &str,
+            &[u8],
+        )>())
+        .unwrap()
+            .read(&selection)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("invalid space id '../outside'"));
+    }
+
+    #[test]
+    fn bundle_reader_rejects_path_traversal_space_manifest_ids() {
+        let error = KibanaBundle::from_entries([(
+            "spaces.yml",
+            b"spaces:\n  - id: ../outside\n    name: Outside\n".as_slice(),
+        )])
+        .unwrap()
+        .read_all()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid space id '../outside'"));
+    }
+
+    #[test]
+    fn filesystem_write_rejects_path_traversal_space_ids() {
+        let temp = TempDir::new().unwrap();
+        let filesystem = KibanaBundle::create(temp.path()).unwrap();
+        let bundle = SyncBundle {
+            by_space: std::collections::HashMap::from([(
+                "../outside".to_string(),
+                SpaceBundle::default(),
+            )]),
+            ..SyncBundle::default()
+        };
+
+        let error = filesystem.write(&bundle).unwrap_err();
+
+        assert!(error.to_string().contains("invalid space id '../outside'"));
     }
 }

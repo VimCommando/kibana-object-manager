@@ -1,5 +1,6 @@
 //! Filesystem writer for the stable Kibana bundle layout.
 
+use crate::bundle::validate_space_id;
 use crate::kibana::agents::{AgentEntry, AgentsManifest};
 use crate::kibana::saved_objects::{SavedObject, SavedObjectsManifest};
 use crate::kibana::skills::{SkillEntry, SkillsManifest, skill_to_directory};
@@ -37,6 +38,7 @@ impl FilesystemWriter {
     }
 
     fn write_space_bundle(&self, space_id: &str, bundle: &SpaceBundle) -> Result<()> {
+        validate_space_id(space_id)?;
         let manifest_dir = self.manifest_dir(space_id);
 
         if !bundle.saved_objects.is_empty() {
@@ -86,6 +88,7 @@ impl FilesystemWriter {
                 return Err(Error::message("space must be a JSON object"));
             }
             let id = required_str(space, "id", "space")?;
+            validate_space_id(id)?;
             let name = optional_str(space, "name").unwrap_or(id);
             entries.push(SpaceEntry::new(id.to_string(), name.to_string()));
         }
