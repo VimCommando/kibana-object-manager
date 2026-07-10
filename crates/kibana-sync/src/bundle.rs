@@ -117,13 +117,13 @@ impl<B: AsRef<[u8]>> KibanaBundle<Entries<B>> {
             if directories.contains(&normalized) {
                 return Err(Error::message(format!(
                     "bundle entry path conflicts with an implicit directory: {}",
-                    normalized.display()
+                    logical_path(&normalized)
                 )));
             }
             if files.insert(normalized.clone(), content).is_some() {
                 return Err(Error::message(format!(
                     "duplicate bundle entry path: {}",
-                    normalized.display()
+                    logical_path(&normalized)
                 )));
             }
 
@@ -135,7 +135,7 @@ impl<B: AsRef<[u8]>> KibanaBundle<Entries<B>> {
                 if files.contains_key(directory) {
                     return Err(Error::message(format!(
                         "bundle entry path conflicts with a file: {}",
-                        directory.display()
+                        logical_path(directory)
                     )));
                 }
                 directories.insert(directory.to_path_buf());
@@ -388,20 +388,22 @@ impl<S: BundleSource> KibanaBundle<S> {
             )
         })?;
         let text = utf8(content.as_ref(), &self.source.display_path(&path))?;
-        let definition = json5::from_json5_str(text).with_context(|| {
+        let mut definition = json5::from_json5_str(text).with_context(|| {
             format!(
                 "Failed to parse space definition: {}",
                 self.source.display_path(&path)
             )
         })?;
         let id = definition.get("id").and_then(Value::as_str);
-        let name = definition.get("name").and_then(Value::as_str);
-        if id != Some(space.id.as_str()) || name.is_none() {
+        if id != Some(space.id.as_str()) {
             return Err(Error::message(format!(
-                "space definition {} must contain the manifest id '{}' and a name",
+                "space definition {} must contain the manifest id '{}'",
                 self.source.display_path(&path),
                 space.id
             )));
+        }
+        if definition.get("name").and_then(Value::as_str).is_none() {
+            definition["name"] = Value::String(space.name.clone());
         }
         Ok(definition)
     }
@@ -609,7 +611,10 @@ impl<B: AsRef<[u8]>> BundleSource for Entries<B> {
 
     fn read(&self, path: &Path) -> Result<Self::Content<'_>> {
         self.files.get(path).ok_or_else(|| {
-            Error::message(format!("bundle entry does not exist: {}", path.display()))
+            Error::message(format!(
+                "bundle entry does not exist: {}",
+                self.display_path(path)
+            ))
         })
     }
 
@@ -672,6 +677,10 @@ fn normalize_entry_path(path: &Path) -> Result<PathBuf> {
         )));
     }
     Ok(normalized)
+}
+
+fn logical_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -905,6 +914,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(bundle.spaces[0]["description"], "Full definition");
+        assert_eq!(bundle.spaces[0]["solution"], "oblt");
+    }
+
+    #[test]
+    fn space_definitions_default_missing_name_from_manifest() {
+        let bundle = KibanaBundle::from_entries([
+            (
+                "spaces.yml",
+                b"spaces:\n  - id: default\n    name: Default\n".as_slice(),
+            ),
+            (
+                "default/space.json",
+                br#"{id: "default", solution: "oblt"}"#.as_slice(),
+            ),
+        ])
+        .unwrap()
+        .read_all()
+        .unwrap();
+
+        assert_eq!(bundle.spaces[0]["name"], "Default");
         assert_eq!(bundle.spaces[0]["solution"], "oblt");
     }
 
