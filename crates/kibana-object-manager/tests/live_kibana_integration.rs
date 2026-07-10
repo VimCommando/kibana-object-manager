@@ -266,7 +266,7 @@ fn normalized_referenced_content(skill: &serde_json::Value) -> Vec<serde_json::V
         })
         .unwrap_or_default();
 
-    referenced.sort_by_key(|left| left.to_string());
+    referenced.sort_by_cached_key(|left| left.to_string());
     referenced
 }
 

@@ -537,13 +537,13 @@ impl BundleSource for Filesystem {
 
     fn is_file(&self, path: &Path) -> bool {
         std::fs::symlink_metadata(self.root.join(path))
-            .map(|metadata| metadata.is_file())
+            .map(|metadata| metadata.is_file() || metadata.file_type().is_symlink())
             .unwrap_or(false)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
         std::fs::symlink_metadata(self.root.join(path))
-            .map(|metadata| metadata.is_dir())
+            .map(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
             .unwrap_or(false)
     }
 
@@ -630,8 +630,9 @@ impl<B: AsRef<[u8]>> BundleSource for Entries<B> {
     fn files_under(&self, path: &Path) -> Result<Vec<PathBuf>> {
         Ok(self
             .files
-            .keys()
-            .filter(|entry| entry.starts_with(path))
+            .range(path.to_path_buf()..)
+            .take_while(|(entry, _)| entry.starts_with(path))
+            .map(|(entry, _)| entry)
             .cloned()
             .collect())
     }
