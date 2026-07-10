@@ -536,15 +536,24 @@ impl BundleSource for Filesystem {
     type Content<'a> = Vec<u8>;
 
     fn is_file(&self, path: &Path) -> bool {
-        self.root.join(path).is_file()
+        std::fs::symlink_metadata(self.root.join(path))
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
-        self.root.join(path).is_dir()
+        std::fs::symlink_metadata(self.root.join(path))
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
     }
 
     fn read(&self, path: &Path) -> Result<Self::Content<'_>> {
-        std::fs::read(self.root.join(path)).map_err(Into::into)
+        let path = self.root.join(path);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&path));
+        }
+        std::fs::read(path).map_err(Into::into)
     }
 
     fn files_under(&self, path: &Path) -> Result<Vec<PathBuf>> {
