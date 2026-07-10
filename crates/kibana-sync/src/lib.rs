@@ -10,6 +10,7 @@ pub mod client;
 pub mod error;
 pub mod etl;
 pub mod fs;
+pub mod json5;
 pub mod kibana;
 pub mod sync;
 

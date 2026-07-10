@@ -11,7 +11,7 @@ use crate::kibana::spaces::{SpaceEntry, SpacesManifest};
 use crate::kibana::tools::ToolsManifest;
 use crate::kibana::workflows::{WorkflowEntry, WorkflowsManifest};
 use crate::sync::{SpaceBundle, SyncBundle, SyncSelection};
-use crate::{Error, Result, ResultContext};
+use crate::{Error, Result, ResultContext, json5};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -476,7 +476,7 @@ fn read_json_dir(path: &Path) -> Result<Vec<Value>> {
         .map(|file| {
             let content = std::fs::read_to_string(&file)
                 .with_context(|| format!("Failed to read JSON resource: {}", file.display()))?;
-            serde_json::from_str(&content)
+            json5::from_json5_str(&content)
                 .with_context(|| format!("Failed to parse JSON resource: {}", file.display()))
         })
         .collect()
@@ -1143,6 +1143,29 @@ mod tests {
         let result = KibanaFsBundle::open(temp.path().join("missing"));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn reads_json5_resources_from_directories() {
+        let temp = TempDir::new().unwrap();
+        let resources_dir = temp.path().join("resources");
+        std::fs::create_dir(&resources_dir).unwrap();
+        std::fs::write(
+            resources_dir.join("resource.json"),
+            r#"{
+                // Comments and trailing commas are valid.
+                id: "resource-1",
+                definition: """first line
+second line""",
+            }"#,
+        )
+        .unwrap();
+
+        let resources = read_json_dir(&resources_dir).unwrap();
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0]["id"], "resource-1");
+        assert_eq!(resources[0]["definition"], "first line\nsecond line");
     }
 
     #[cfg(unix)]

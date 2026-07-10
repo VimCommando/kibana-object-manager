@@ -1136,7 +1136,7 @@ pub async fn add_workflows_to_manifest(
             "json" => {
                 // Parse JSON format (API response or array)
                 let content = std::fs::read_to_string(file_path)?;
-                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+                let parsed = storage::from_json5_str(&content)?;
 
                 // Check if it's an API response with "results" field
                 if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
@@ -1366,7 +1366,7 @@ pub async fn add_spaces_to_manifest(
             "json" => {
                 // Parse JSON format (array of spaces)
                 let content = std::fs::read_to_string(file_path)?;
-                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+                let parsed = storage::from_json5_str(&content)?;
 
                 // Spaces API returns an array directly
                 if let Some(arr) = parsed.as_array() {
@@ -1678,7 +1678,7 @@ async fn push_spaces_internal(
         }
 
         let content = std::fs::read_to_string(&space_file)?;
-        let space: serde_json::Value = serde_json::from_str(&content)?;
+        let space = storage::from_json5_str(&content)?;
         spaces.push(space);
     }
 
@@ -1718,7 +1718,7 @@ pub async fn push_spaces(project_dir: impl AsRef<Path>) -> Result<usize> {
         }
 
         let content = std::fs::read_to_string(&space_file)?;
-        let space: serde_json::Value = serde_json::from_str(&content)?;
+        let space = storage::from_json5_str(&content)?;
         spaces.push(space);
     }
 
@@ -1767,7 +1767,7 @@ async fn bundle_spaces_to_ndjson_internal(
         }
 
         let content = std::fs::read_to_string(&space_file)?;
-        let space: serde_json::Value = serde_json::from_str(&content)?;
+        let space = storage::from_json5_str(&content)?;
         spaces.push(space);
     }
 
@@ -1814,7 +1814,7 @@ pub async fn bundle_spaces_to_ndjson(
         }
 
         let content = std::fs::read_to_string(&space_file)?;
-        let space: serde_json::Value = serde_json::from_str(&content)?;
+        let space = storage::from_json5_str(&content)?;
         spaces.push(space);
     }
 
@@ -1976,8 +1976,7 @@ pub async fn bundle_workflows_to_ndjson(
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            let workflow = storage::read_json5_file(&path)?;
             workflows.push(workflow);
         }
     }
@@ -2128,7 +2127,7 @@ pub async fn add_agents_to_manifest(
             "json" => {
                 // Parse JSON format (array or single object)
                 let content = std::fs::read_to_string(file_path)?;
-                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+                let parsed = storage::from_json5_str(&content)?;
 
                 // Check if it's an array
                 if let Some(arr) = parsed.as_array() {
@@ -2549,7 +2548,7 @@ pub async fn add_tools_to_manifest(
             "json" => {
                 // Parse JSON format (array or single object)
                 let content = std::fs::read_to_string(file_path)?;
-                let parsed: serde_json::Value = serde_json::from_str(&content)?;
+                let parsed = storage::from_json5_str(&content)?;
 
                 // Check if it's an array
                 if let Some(arr) = parsed.as_array() {
@@ -2891,7 +2890,7 @@ fn read_agent_builder_values_from_file(file: &str, label: &str) -> Result<Vec<Va
         }
         "json" => {
             let content = std::fs::read_to_string(file_path)?;
-            let parsed: Value = serde_json::from_str(&content)?;
+            let parsed = storage::from_json5_str(&content)?;
 
             if let Some(results) = parsed.get("results").and_then(|v| v.as_array()) {
                 log::info!("Read {} {}(s) from JSON API response", results.len(), label);
@@ -3638,8 +3637,7 @@ async fn bundle_space_workflows(project_dir: &Path, space_id: &str) -> Result<us
         let path = entry.path();
 
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
-            let content = std::fs::read_to_string(&path)?;
-            let workflow: serde_json::Value = serde_json::from_str(&content)?;
+            let workflow = storage::read_json5_file(&path)?;
             workflows.push(workflow);
         }
     }

@@ -96,6 +96,18 @@ async fn test_bundle_workflows_to_ndjson() -> Result<()> {
     let temp_dir = TempDir::new()?;
     create_test_project_with_workflows(temp_dir.path())?;
 
+    std::fs::write(
+        temp_dir.path().join("workflows/my-workflow.json"),
+        r#"{
+            // Project resource files accept JSON5.
+            id: "workflow-123",
+            name: "my-workflow",
+            description: """My example
+workflow""",
+            enabled: true,
+        }"#,
+    )?;
+
     let output_file = temp_dir.path().join("workflows.ndjson");
     let count = bundle_workflows_to_ndjson(temp_dir.path(), &output_file).await?;
 
@@ -109,7 +121,10 @@ async fn test_bundle_workflows_to_ndjson() -> Result<()> {
 
     // Verify each line is valid JSON
     for line in lines {
-        let _workflow: serde_json::Value = serde_json::from_str(line)?;
+        let workflow: serde_json::Value = serde_json::from_str(line)?;
+        if workflow["id"] == "workflow-123" {
+            assert_eq!(workflow["description"], "My example\nworkflow");
+        }
     }
 
     Ok(())

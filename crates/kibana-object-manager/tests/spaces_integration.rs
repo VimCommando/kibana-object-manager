@@ -93,6 +93,18 @@ async fn test_bundle_spaces_to_ndjson() -> Result<()> {
     let temp_dir = TempDir::new()?;
     create_test_project_with_spaces(temp_dir.path())?;
 
+    std::fs::write(
+        temp_dir.path().join("default/space.json"),
+        r#"{
+            // Project resource files accept JSON5.
+            id: "default",
+            name: "Default",
+            description: """This is the
+default space""",
+            disabledFeatures: [],
+        }"#,
+    )?;
+
     let output_file = temp_dir.path().join("spaces.ndjson");
     let count = bundle_spaces_to_ndjson(temp_dir.path(), &output_file).await?;
 
@@ -106,7 +118,10 @@ async fn test_bundle_spaces_to_ndjson() -> Result<()> {
 
     // Verify each line is valid JSON
     for line in lines {
-        let _space: serde_json::Value = serde_json::from_str(line)?;
+        let space: serde_json::Value = serde_json::from_str(line)?;
+        if space["id"] == "default" {
+            assert_eq!(space["description"], "This is the\ndefault space");
+        }
     }
 
     Ok(())

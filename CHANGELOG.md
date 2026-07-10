@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Accept JSON5 syntax and triple-quoted multiline strings consistently in project-managed JSON resources (#24).
 - Report redacted unauthenticated Kibana `/api/status` responses as authentication failures instead of a missing `version.number` field.
 - Use the documented `/api/workflows/workflow` endpoint when pulling, pushing, and resolving dependent workflows.
 - Normalize workflow JSON filenames by sanitizing names, lowercasing them, and replacing spaces with underscores.
