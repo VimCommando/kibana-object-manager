@@ -548,12 +548,19 @@ impl BundleSource for Filesystem {
     }
 
     fn read(&self, path: &Path) -> Result<Self::Content<'_>> {
-        let path = self.root.join(path);
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            return Err(bundle_symlink_error(&path));
+        let mut full_path = self.root.clone();
+        for component in path.components() {
+            full_path.push(component);
+            let metadata = std::fs::symlink_metadata(&full_path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(bundle_symlink_error(&full_path));
+            }
         }
-        std::fs::read(path).map_err(Into::into)
+        let metadata = std::fs::symlink_metadata(&full_path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(bundle_symlink_error(&full_path));
+        }
+        std::fs::read(full_path).map_err(Into::into)
     }
 
     fn files_under(&self, path: &Path) -> Result<Vec<PathBuf>> {
