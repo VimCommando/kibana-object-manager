@@ -394,6 +394,13 @@ pub async fn push_sync(
                 .await?;
         }
 
+        if include_workflows {
+            summary.workflows_attempted += space_bundle.workflows.len();
+            summary.workflows_applied += WorkflowsLoader::new(space_client.clone())
+                .load(space_bundle.workflows.clone())
+                .await?;
+        }
+
         if include_tools {
             summary.tools_attempted += space_bundle.tools.len();
             summary.tools_applied += ToolsLoader::new(space_client.clone())
@@ -412,13 +419,6 @@ pub async fn push_sync(
             summary.agents_attempted += space_bundle.agents.len();
             summary.agents_applied += AgentsLoader::new(space_client.clone())
                 .load(space_bundle.agents.clone())
-                .await?;
-        }
-
-        if include_workflows {
-            summary.workflows_attempted += space_bundle.workflows.len();
-            summary.workflows_applied += WorkflowsLoader::new(space_client)
-                .load(space_bundle.workflows.clone())
                 .await?;
         }
     }
@@ -619,6 +619,110 @@ mod tests {
 
         assert_eq!(plan.supported, vec![ApiCapability::Skills]);
         assert!(plan.unsupported.is_empty());
+    }
+
+    #[tokio::test]
+    async fn push_sync_loads_local_dependencies_before_dependents() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/workflows/workflow/workflow-w",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/workflows/workflow",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "HEAD",
+                path: "/api/agent_builder/tools/tool-t",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/agent_builder/tools",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/skills/skill-s",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/agent_builder/skills",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "HEAD",
+                path: "/api/agent_builder/agents/agent-a",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/agent_builder/agents",
+                status: 200,
+                body: json!({}),
+            },
+        ]);
+        let bundle = SyncBundle {
+            by_space: HashMap::from([(
+                "default".to_string(),
+                SpaceBundle {
+                    workflows: vec![json!({"id": "workflow-w", "name": "Workflow W"})],
+                    tools: vec![json!({
+                        "id": "tool-t",
+                        "configuration": {"workflow_id": "workflow-w"}
+                    })],
+                    skills: vec![json!({"id": "skill-s", "tool_ids": ["tool-t"]})],
+                    agents: vec![json!({
+                        "id": "agent-a",
+                        "configuration": {"skill_id": "skill-s"}
+                    })],
+                    ..SpaceBundle::default()
+                },
+            )]),
+            ..SyncBundle::default()
+        };
+        let options = SyncOptions {
+            unsupported_api_policy: UnsupportedApiPolicy::Force,
+            ..SyncOptions::default()
+        };
+
+        let summary = push_sync(&server.client().unwrap(), &bundle, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.workflows_applied, 1);
+        assert_eq!(summary.tools_applied, 1);
+        assert_eq!(summary.skills_applied, 1);
+        assert_eq!(summary.agents_applied, 1);
+        let paths = server
+            .requests()
+            .into_iter()
+            .map(|request| request.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "/api/workflows/workflow/workflow-w",
+                "/api/workflows/workflow",
+                "/api/agent_builder/tools/tool-t",
+                "/api/agent_builder/tools",
+                "/api/agent_builder/skills/skill-s",
+                "/api/agent_builder/skills",
+                "/api/agent_builder/agents/agent-a",
+                "/api/agent_builder/agents",
+            ]
+        );
     }
 
     #[tokio::test]
