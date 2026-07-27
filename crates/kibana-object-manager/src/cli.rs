@@ -439,7 +439,7 @@ fn required_export_name<'a>(value: &'a Value, label: &str) -> kibana_sync::Resul
 }
 
 fn validate_immediate_filename(name: &str, family: ResourceFamily) -> kibana_sync::Result<()> {
-    const PORTABLE_FORBIDDEN: [char; 10] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '&'];
+    const PORTABLE_FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     let reserved_stem = name
         .split('.')
         .next()
@@ -5701,7 +5701,6 @@ mod tests {
                 "bad<name",
                 "bad>name",
                 "bad|name",
-                "bad&name",
                 "trailing.",
                 "trailing ",
                 "CON",
@@ -5713,6 +5712,8 @@ mod tests {
                 );
             }
         }
+
+        assert!(validate_immediate_filename("research & response", ResourceFamily::Tools).is_ok());
     }
 
     #[test]
