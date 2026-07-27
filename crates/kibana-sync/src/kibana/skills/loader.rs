@@ -125,7 +125,7 @@ async fn upsert_skill(client: KibanaClient, skill: Value) -> ResourceOutcome {
 
     if let Some(existing) = existing {
         if is_readonly(&existing) {
-            tracing::debug!("Skipping server-side readonly skill: {}", skill_id);
+            tracing::debug!("Rejecting server-side readonly skill: {}", skill_id);
             return ResourceOutcome::failed(
                 ResourceFamily::Skills,
                 skill_id,
