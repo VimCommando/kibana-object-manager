@@ -126,7 +126,9 @@ existence check by ID
     └─ readonly resource ─▶ failed outcome; no mutation
 ```
 
-Skills use their existing `GET` existence check. Tools and Agents use their existing `HEAD` item checks. Workflows use `HEAD /api/workflows/workflow/{id}` and retain the required internal-origin header. Import never enumerates remote collections, deletes absent IDs, or expands dependencies. Repeating the same import converges the selected IDs while leaving every unselected remote resource alone.
+Skills use their existing `GET` existence check. Tools and Agents use their existing `HEAD` item checks. Workflows retain the required internal-origin header and select the route family from the detected Kibana version: Kibana 9.3 uses `/api/workflows[/{id}]`, while Kibana 9.4 and later use `/api/workflows/workflow[/{id}]`. Import never enumerates remote collections, deletes absent IDs, or expands dependencies. Repeating the same import converges the selected IDs while leaving every unselected remote resource alone.
+
+Fetched definitions may contain response-only metadata that is not accepted by create or update schemas. Family loaders continue to sanitize those fields before mutation; for example, Agent imports omit `created_by` and related audit timestamps while preserving writable fields such as `visibility`.
 
 Alternative considered: create-only import unless `--overwrite` is present. Deferred because existing project push and all four family loaders already provide create-or-update semantics, and repeatable one-shot delivery is the primary use case. A future conflict policy can be added to the resource-specific subcommand without changing the command grammar.
 
@@ -135,7 +137,7 @@ Alternative considered: create-only import unless `--overwrite` is present. Defe
 Clap enforces a required, mutually exclusive selector group:
 
 - Repeatable `--id <resource-id>` preserves caller order.
-- `--all` uses the selected family's existing list or search endpoint, filters `readonly: true` resources where applicable, sorts IDs, and fetches each full definition.
+- `--all` uses the selected family's existing list or search endpoint, filters `readonly: true` resources where applicable, sorts IDs, and fetches each full definition. Workflow discovery also follows the detected server contract: Kibana 9.3 uses `POST /api/workflows/search`, while Kibana 9.4 and later use `GET /api/workflows`.
 
 List and search responses are not written directly because they may omit fields present in item responses. An explicitly selected readonly resource is an error, not a silent skip, because the produced artifact would not be safely re-importable with the same ID.
 

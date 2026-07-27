@@ -1,11 +1,13 @@
-use clap::{Parser, Subcommand, builder::styling};
+use clap::{ArgGroup, Args, Parser, Subcommand, builder::styling};
 use eyre::Result;
 use kibana_object_manager::{
     cli::{
-        add_objects_to_manifest, bundle_to_ndjson, init_from_export, load_kibana_client,
-        pull_saved_objects, push_saved_objects, version_warning_message,
+        StandaloneExportSelection, add_objects_to_manifest, bundle_to_ndjson,
+        export_standalone_resources, import_standalone_resources, init_from_export,
+        load_kibana_client, pull_saved_objects, push_saved_objects, version_warning_message,
     },
     migration::{MigrationResult, migrate_to_multispace_unified},
+    standalone::{ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcomeStatus},
 };
 use owo_colors::OwoColorize;
 use std::fmt;
@@ -144,7 +146,7 @@ const STYLES: styling::Styles = styling::Styles::styled()
 ///   kibob init export.ndjson ./dashboards   Initialize project from export
 ///   kibob pull .                            Fetch objects from Kibana
 ///   kibob push . --managed true             Deploy to Kibana as managed objects
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "kibob", version, styles = STYLES, about, long_about)]
 struct Cli {
     /// Dotenv file to load environment variables from
@@ -160,7 +162,7 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// Initialize a new project from a Kibana export file
     ///
@@ -187,6 +189,21 @@ enum Commands {
     /// Example:
     ///   kibob auth
     Auth,
+
+    /// Import manifest-free artifacts into one Kibana API family
+    ///
+    /// Standalone imports create or update exactly the resources found at the
+    /// source. They do not read manifests, expand dependencies, or prune Kibana.
+    Import {
+        #[command(subcommand)]
+        resource: ImportResources,
+    },
+
+    /// Export explicitly selected resources without creating a project manifest
+    Export {
+        #[command(subcommand)]
+        resource: ExportResources,
+    },
 
     /// Pull (fetch) saved objects from Kibana to local files
     ///
@@ -381,6 +398,144 @@ enum Commands {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ImportResources {
+    /// Import one Skill directory or immediate-child Skill directories
+    Skills(ImportArgs),
+    /// Import one Tool JSON file or immediate JSON files in a directory
+    Tools(ImportArgs),
+    /// Import one Agent JSON file or immediate JSON files in a directory
+    Agents(ImportArgs),
+    /// Import one Workflow JSON file or immediate JSON files in a directory
+    Workflows(ImportArgs),
+}
+
+impl ImportResources {
+    fn into_parts(self) -> (ResourceFamily, ImportArgs) {
+        match self {
+            Self::Skills(args) => (ResourceFamily::Skills, args),
+            Self::Tools(args) => (ResourceFamily::Tools, args),
+            Self::Agents(args) => (ResourceFamily::Agents, args),
+            Self::Workflows(args) => (ResourceFamily::Workflows, args),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct ImportArgs {
+    /// Skill directory, JSON file, or immediate-child collection root
+    source: PathBuf,
+
+    /// Kibana space ID (defaults to KIBANA_SPACE or default)
+    #[arg(long)]
+    space: Option<String>,
+
+    /// Bypass the selected API family's Kibana version check
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExportResources {
+    /// Export Skills as immediate child directories containing SKILL.md
+    Skills(ExportArgs),
+    /// Export Tools as immediate JSON files
+    Tools(ExportArgs),
+    /// Export Agents as immediate JSON files
+    Agents(ExportArgs),
+    /// Export Workflows as immediate JSON files
+    Workflows(ExportArgs),
+}
+
+impl ExportResources {
+    fn into_parts(self) -> (ResourceFamily, ExportArgs) {
+        match self {
+            Self::Skills(args) => (ResourceFamily::Skills, args),
+            Self::Tools(args) => (ResourceFamily::Tools, args),
+            Self::Agents(args) => (ResourceFamily::Agents, args),
+            Self::Workflows(args) => (ResourceFamily::Workflows, args),
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+#[command(group(
+    ArgGroup::new("selection")
+        .required(true)
+        .multiple(false)
+        .args(["id", "all"])
+))]
+struct ExportArgs {
+    /// Destination collection root
+    destination: PathBuf,
+
+    /// Resource ID to export; repeat for multiple resources
+    #[arg(long)]
+    id: Vec<String>,
+
+    /// Export every user-created resource in the selected family
+    #[arg(long)]
+    all: bool,
+
+    /// Kibana space ID (defaults to KIBANA_SPACE or default)
+    #[arg(long)]
+    space: Option<String>,
+
+    /// Replace only selected outputs that already exist
+    #[arg(long)]
+    overwrite: bool,
+
+    /// Bypass the selected API family's Kibana version check
+    #[arg(long)]
+    force: bool,
+}
+
+impl ExportArgs {
+    fn selection(&self) -> StandaloneExportSelection {
+        if self.all {
+            StandaloneExportSelection::All
+        } else {
+            StandaloneExportSelection::Ids(self.id.clone())
+        }
+    }
+}
+
+fn log_resource_batch_report(report: &ResourceBatchReport, default_applied_label: &str) {
+    for outcome in report.outcomes() {
+        match outcome.status() {
+            ResourceOutcomeStatus::Applied => {
+                let operation = match outcome.operation() {
+                    Some(ResourceOperation::Create) => "created",
+                    Some(ResourceOperation::Update) => "updated",
+                    None => default_applied_label,
+                };
+                log::info!("✓ {} {} {}", operation, outcome.family(), outcome.id());
+            }
+            ResourceOutcomeStatus::Skipped => log::warn!(
+                "- skipped {} {}: {}",
+                outcome.family(),
+                outcome.id(),
+                outcome.detail().unwrap_or("no detail")
+            ),
+            ResourceOutcomeStatus::Failed => log::error!(
+                "✗ failed {} {}: {}",
+                outcome.family(),
+                outcome.id(),
+                outcome.detail().unwrap_or("no detail")
+            ),
+        }
+    }
+
+    let counts = report.counts();
+    log::info!(
+        "attempted: {}, applied: {}, skipped: {}, failed: {}",
+        counts.attempted,
+        counts.applied,
+        counts.skipped,
+        counts.failed
+    );
+}
+
 fn resolve_env_path(env: &str) -> PathBuf {
     let env_path = Path::new(env);
 
@@ -486,6 +641,80 @@ async fn main() -> Result<()> {
                 Err(e) => {
                     log::error!("✗ Failed to create Kibana client: {}", e);
                     return Err(e);
+                }
+            }
+        }
+        Commands::Import { resource } => {
+            let (family, args) = resource.into_parts();
+            log::info!(
+                "Importing standalone {} from {}",
+                family,
+                args.source.display().to_string().bright_black()
+            );
+
+            match import_standalone_resources(
+                family,
+                &args.source,
+                args.space.as_deref(),
+                args.force,
+            )
+            .await
+            {
+                Ok(report) => {
+                    log_resource_batch_report(&report, "applied");
+                    if report.has_failures() {
+                        return Err(eyre::eyre!(
+                            "standalone {} import failed for {} of {} resources",
+                            family,
+                            report.counts().failed,
+                            report.counts().attempted
+                        ));
+                    }
+                }
+                Err(error) => {
+                    if let Some(message) = version_warning_message(&error) {
+                        log::warn!("{message}");
+                        std::process::exit(2);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Commands::Export { resource } => {
+            let (family, args) = resource.into_parts();
+            log::info!(
+                "Exporting standalone {} to {}",
+                family,
+                args.destination.display().to_string().bright_black()
+            );
+
+            match export_standalone_resources(
+                family,
+                &args.destination,
+                args.selection(),
+                args.space.as_deref(),
+                args.overwrite,
+                args.force,
+            )
+            .await
+            {
+                Ok(report) => {
+                    log_resource_batch_report(&report, "written");
+                    if report.has_failures() {
+                        return Err(eyre::eyre!(
+                            "standalone {} export failed for {} of {} resources",
+                            family,
+                            report.counts().failed,
+                            report.counts().attempted
+                        ));
+                    }
+                }
+                Err(error) => {
+                    if let Some(message) = version_warning_message(&error) {
+                        log::warn!("{message}");
+                        std::process::exit(2);
+                    }
+                    return Err(error);
                 }
             }
         }
@@ -833,4 +1062,181 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn parses_every_standalone_import_family() {
+        for (name, expected) in [
+            ("skills", ResourceFamily::Skills),
+            ("tools", ResourceFamily::Tools),
+            ("agents", ResourceFamily::Agents),
+            ("workflows", ResourceFamily::Workflows),
+        ] {
+            let cli = Cli::try_parse_from([
+                "kibob",
+                "import",
+                name,
+                "artifacts",
+                "--space",
+                "security",
+                "--force",
+            ])
+            .unwrap();
+            let Commands::Import { resource } = cli.command else {
+                panic!("expected import command");
+            };
+            let (family, args) = resource.into_parts();
+
+            assert_eq!(family, expected);
+            assert_eq!(args.source, PathBuf::from("artifacts"));
+            assert_eq!(args.space.as_deref(), Some("security"));
+            assert!(args.force);
+        }
+    }
+
+    #[test]
+    fn import_help_lists_only_plural_supported_families() {
+        let error = Cli::try_parse_from(["kibob", "import", "--help"]).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        for family in ["skills", "tools", "agents", "workflows"] {
+            assert!(help.contains(family));
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_and_singular_import_families() {
+        for family in ["saved-objects", "skill", "tool", "agent", "workflow"] {
+            let error = Cli::try_parse_from(["kibob", "import", family, "artifacts"]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
+    fn existing_push_syntax_remains_project_oriented() {
+        let cli = Cli::try_parse_from([
+            "kibob",
+            "push",
+            "project",
+            "--managed",
+            "false",
+            "--space",
+            "security",
+            "--api",
+            "tools",
+            "--force",
+        ])
+        .unwrap();
+
+        let Commands::Push {
+            input_dir,
+            managed,
+            space,
+            api,
+            force,
+        } = cli.command
+        else {
+            panic!("expected push command");
+        };
+        assert_eq!(input_dir, "project");
+        assert!(!managed);
+        assert_eq!(space, Some(vec!["security".to_string()]));
+        assert_eq!(api, Some(vec!["tools".to_string()]));
+        assert!(force);
+    }
+
+    #[test]
+    fn parses_every_standalone_export_family_and_repeated_ids() {
+        for (name, expected) in [
+            ("skills", ResourceFamily::Skills),
+            ("tools", ResourceFamily::Tools),
+            ("agents", ResourceFamily::Agents),
+            ("workflows", ResourceFamily::Workflows),
+        ] {
+            let cli = Cli::try_parse_from([
+                "kibob",
+                "export",
+                name,
+                "artifacts",
+                "--id",
+                "first",
+                "--id",
+                "second",
+                "--space",
+                "security",
+                "--overwrite",
+                "--force",
+            ])
+            .unwrap();
+            let Commands::Export { resource } = cli.command else {
+                panic!("expected export command");
+            };
+            let (family, args) = resource.into_parts();
+
+            assert_eq!(family, expected);
+            assert_eq!(args.destination, PathBuf::from("artifacts"));
+            assert_eq!(
+                args.selection(),
+                StandaloneExportSelection::Ids(vec!["first".into(), "second".into()])
+            );
+            assert_eq!(args.space.as_deref(), Some("security"));
+            assert!(args.overwrite);
+            assert!(args.force);
+        }
+    }
+
+    #[test]
+    fn export_requires_exactly_one_selector_form() {
+        let missing = Cli::try_parse_from(["kibob", "export", "tools", "artifacts"]).unwrap_err();
+        assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
+
+        let conflicting = Cli::try_parse_from([
+            "kibob",
+            "export",
+            "tools",
+            "artifacts",
+            "--id",
+            "tool-a",
+            "--all",
+        ])
+        .unwrap_err();
+        assert_eq!(conflicting.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn rejects_unsupported_and_singular_export_families() {
+        for family in ["saved-objects", "skill", "tool", "agent", "workflow"] {
+            let error =
+                Cli::try_parse_from(["kibob", "export", family, "artifacts", "--all"]).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
+    fn existing_pull_syntax_remains_project_oriented() {
+        let cli = Cli::try_parse_from([
+            "kibob", "pull", "project", "--space", "security", "--api", "tools", "--force",
+        ])
+        .unwrap();
+
+        let Commands::Pull {
+            output_dir,
+            space,
+            api,
+            force,
+        } = cli.command
+        else {
+            panic!("expected pull command");
+        };
+        assert_eq!(output_dir, "project");
+        assert_eq!(space, Some(vec!["security".to_string()]));
+        assert_eq!(api, Some(vec!["tools".to_string()]));
+        assert!(force);
+    }
 }

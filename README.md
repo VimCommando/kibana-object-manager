@@ -339,6 +339,43 @@ Options:
 - `--api <...>` - comma-separated list of APIs to push
 - Skills are tracked in `{space_id}/manifest/skills.yml` and projected from `{space_id}/skills/*/SKILL.md` directories to Kibana JSON only when pushing.
 
+## Standalone `import` and `export`
+
+Move one file-backed API family without creating or consulting a kibob project:
+
+```sh
+kibob import <skills|tools|agents|workflows> <source> [--space <id>] [--force]
+kibob export <skills|tools|agents|workflows> <destination> \
+  (--id <resource-id>... | --all) [--space <id>] [--overwrite] [--force]
+```
+
+Standalone import accepts these existing project artifact layouts:
+
+- `skills`: one directory containing `SKILL.md`, or a collection root whose immediate child directories contain `SKILL.md`.
+- `tools`, `agents`, and `workflows`: one `.json` file, or a directory of immediate `.json` files. Files use the existing JSON5 parser, including comments, trailing commas, and triple-quoted multiline strings.
+
+Export always treats the destination as a collection root. Skills are written to
+`<destination>/<skill-id>/SKILL.md` with referenced content. Tools, Agents, and
+Workflows are written as immediate `.json` files using their existing project
+filenames and multiline formatting.
+
+Examples:
+
+```sh
+kibob import skills ./skills/threat-hunting --space security
+kibob import tools ./tools
+kibob export agents ./agent-backup --id triage-agent --id response-agent
+kibob export workflows ./workflows --all --overwrite
+```
+
+Imports use create-or-update semantics and validate the complete local batch
+before connecting to Kibana. Exports require an explicit `--id` or `--all`;
+readonly resources are not exported because they cannot be re-imported under
+the same ID. These commands never read or write `skills.yml`, `tools.yml`,
+`agents.yml`, `workflows.yml`, or `spaces.yml`, and they do not expand
+dependencies, prune remote resources, or change project-oriented `push` and
+`pull`.
+
 ## `kibob add <api> [dir] [options]`
 
 Add items to an existing manifest.

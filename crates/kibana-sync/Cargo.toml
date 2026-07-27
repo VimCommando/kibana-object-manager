@@ -19,6 +19,9 @@ include = [
     "../../LICENSE",
 ]
 
+[features]
+test-support = []
+
 [dependencies]
 base64 = "^0.22"
 json5 = "^1.0"

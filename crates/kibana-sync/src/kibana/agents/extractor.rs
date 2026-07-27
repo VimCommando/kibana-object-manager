@@ -98,6 +98,27 @@ impl AgentsExtractor {
         Ok(agents)
     }
 
+    /// Fetch one complete Agent definition by ID.
+    pub async fn fetch_agent(&self, agent_id: &str) -> Result<Value> {
+        let path = format!("api/agent_builder/agents/{agent_id}");
+        let response = self
+            .client
+            .get(&path)
+            .await
+            .with_context(|| format!("Failed to fetch agent '{agent_id}'"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::api_response(status, body));
+        }
+
+        response
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse agent '{agent_id}' response"))
+    }
+
     /// Fetch specific agents by ID from manifest
     async fn fetch_manifest_agents(&self, manifest: &super::AgentsManifest) -> Result<Vec<Value>> {
         let mut agents = Vec::new();

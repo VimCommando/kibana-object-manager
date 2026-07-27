@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added manifest-free standalone import and export for Skills, Tools, Agents, and Workflows, with explicit export selection, per-resource outcomes, and license-aware live validation.
+
 ### Fixed
 
 - Accept JSON5 syntax and triple-quoted multiline strings consistently in project-managed JSON resources (#24).

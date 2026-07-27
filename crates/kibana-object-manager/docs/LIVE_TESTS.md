@@ -17,6 +17,15 @@ The script:
 3. Waits for Kibana to answer `/api/status`.
 4. Runs `cargo test --test live_kibana_integration -- --ignored --nocapture`.
 
+The ordinary workspace test suite remains license-independent:
+
+```bash
+cargo test --workspace --all-features
+```
+
+It covers standalone discovery, parsing, CLI behavior, filesystem round trips,
+and mocked APIs for Skills, Tools, Agents, and Workflows without a live node.
+
 ## Stop and Clean Up
 
 ```bash
@@ -40,12 +49,33 @@ settings:
 - `KIBANA_TEST_KIBANA_PORT`: host port for Kibana, default `15601`
 - `KIBANA_TEST_SPACE_PREFIX`: prefix for temporary test spaces
 
-## Manual Test Against Existing Kibana
+## Test Against an Existing Licensed Kibana
+
+Use the harness without starting containers by configuring an
+operator-controlled node:
 
 ```bash
-KIBOB_LIVE_KIBANA_TESTS=1 \
 KIBANA_TEST_URL=http://localhost:5601 \
 KIBANA_TEST_USERNAME=elastic \
 KIBANA_TEST_PASSWORD=changeme \
-cargo test --test live_kibana_integration -- --ignored --nocapture
+crates/kibana-object-manager/scripts/live-kibana-tests.sh test-existing
 ```
+
+`KIBANA_TEST_APIKEY` can be used instead of username/password. The harness does
+not provision, activate, downgrade, or otherwise change the node’s license.
+
+Each standalone family case records the detected Kibana version, probes the
+family API, creates a unique temporary resource, exports and verifies its local
+artifact, re-imports it, verifies the remote definition, and performs
+best-effort cleanup.
+
+Results are reported per family:
+
+- `passed` when the complete round trip succeeds.
+- `skipped` only when the detected Kibana version is below the family minimum,
+  or the API explicitly returns a license/subscription restriction.
+- `failed` for authentication errors, generic `403`/`404` responses, malformed
+  responses, and all other unexpected API failures; response details are
+  retained for diagnosis.
+
+Minimum versions are Agents and Tools 9.2.0, Workflows 9.3.0, and Skills 9.4.0.

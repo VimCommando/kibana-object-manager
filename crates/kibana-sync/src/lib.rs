@@ -13,10 +13,12 @@ pub mod etl;
 mod fs;
 pub mod json5;
 pub mod kibana;
+pub mod standalone;
 pub mod sync;
 
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;
 
 pub use bundle::{Entries, Filesystem, KibanaBundle};
 pub use client::{

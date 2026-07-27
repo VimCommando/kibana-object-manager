@@ -47,3 +47,4 @@ url = "^2.5.0"
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
+kibana-sync = { path = "../kibana-sync", features = ["test-support"] }

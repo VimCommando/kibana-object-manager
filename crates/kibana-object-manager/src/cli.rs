@@ -2,7 +2,8 @@
 
 use crate::{
     client::{
-        ApiCapability, Auth, KibanaClient, KibanaVersion, KibanaVersionInfo, parse_kibana_version,
+        ApiCapability, Auth, KibanaClient, KibanaClientBuilder, KibanaVersion, KibanaVersionInfo,
+        parse_kibana_version,
     },
     etl::{Extractor, Loader, Transformer},
     kibana::agents::{AgentEntry, AgentsExtractor, AgentsLoader, AgentsManifest},
@@ -13,18 +14,21 @@ use crate::{
     kibana::saved_objects::{SavedObjectsExtractor, SavedObjectsLoader},
     kibana::skills::{
         SkillEntry, SkillsExtractor, SkillsLoader, SkillsManifest, skill_to_directory,
-        skill_to_value,
+        skill_to_value, validate_skill_for_directory,
     },
     kibana::spaces::{SpacesExtractor, SpacesLoader, SpacesManifest},
     kibana::tools::{ToolsExtractor, ToolsLoader, ToolsManifest},
     kibana::workflows::{
         WorkflowEntry, WorkflowsExtractor, WorkflowsLoader, WorkflowsManifest,
-        workflow_resource_path,
+        workflow_resource_path_for_version,
+    },
+    standalone::{
+        ExportPlan, ImportPlan, ReadyToWrite, ResourceBatchReport, ResourceFamily, ResourceOutcome,
     },
     storage::{self, DirectoryReader, DirectoryWriter},
     transform::{
         FieldDropper, FieldEscaper, FieldUnescaper, ManagedFlagAdder, MultilineFieldFormatter,
-        VegaSpecEscaper, VegaSpecUnescaper,
+        VegaSpecEscaper, VegaSpecUnescaper, YamlFormatter,
     },
 };
 use eyre::{Context, Report, Result};
@@ -51,6 +55,29 @@ const SKILL_FETCH_BATCH_SIZE: usize = 16;
 /// # Arguments
 /// * `project_dir` - Project directory path containing spaces.yml
 pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient> {
+    let builder = kibana_client_builder_from_env()?;
+    let spaces_manifest_path = project_dir.as_ref().join("spaces.yml");
+    let spaces = if spaces_manifest_path.exists() {
+        log::debug!("Loading spaces from {}", spaces_manifest_path.display());
+        SpacesManifest::read(&spaces_manifest_path)
+            .context("Failed to load spaces manifest")?
+            .spaces
+            .into_iter()
+            .map(|space| (space.id, space.name))
+            .collect::<Vec<_>>()
+    } else {
+        log::debug!("No spaces manifest found, defaulting to 'default' space");
+        vec![("default".to_string(), "Default".to_string())]
+    };
+
+    builder
+        .spaces(spaces)
+        .build()
+        .map_err(Report::new)
+        .context("Failed to create Kibana client")
+}
+
+fn kibana_client_builder_from_env() -> Result<KibanaClientBuilder> {
     let url_str = std::env::var("KIBANA_URL").context("KIBANA_URL environment variable not set")?;
     let url = Url::parse(&url_str).with_context(|| format!("Invalid KIBANA_URL: {}", url_str))?;
 
@@ -70,29 +97,34 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
 
-    let spaces_manifest_path = project_dir.as_ref().join("spaces.yml");
-    let spaces = if spaces_manifest_path.exists() {
-        log::debug!("Loading spaces from {}", spaces_manifest_path.display());
-        SpacesManifest::read(&spaces_manifest_path)
-            .context("Failed to load spaces manifest")?
-            .spaces
-            .into_iter()
-            .map(|space| (space.id, space.name))
-            .collect::<Vec<_>>()
+    Ok(KibanaClient::builder(url)
+        .auth(auth)
+        .max_concurrency(max_requests))
+}
+
+/// Build one space-scoped client without reading project manifests.
+pub fn load_standalone_kibana_client(space: Option<&str>) -> Result<KibanaClient> {
+    let space = space
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("KIBANA_SPACE").ok())
+        .filter(|space| !space.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let name = if space == "default" {
+        "Default".to_string()
     } else {
-        log::debug!("No spaces manifest found, defaulting to 'default' space");
-        [("default".to_string(), "Default".to_string())]
-            .into_iter()
-            .collect::<Vec<_>>()
+        space.clone()
     };
 
-    KibanaClient::builder(url)
-        .auth(auth)
-        .max_concurrency(max_requests)
-        .spaces(spaces)
+    let client = kibana_client_builder_from_env()?
+        .spaces([(space.clone(), name)])
         .build()
         .map_err(Report::new)
-        .context("Failed to create Kibana client")
+        .context("Failed to create standalone Kibana client")?;
+
+    client
+        .space(&space)
+        .map_err(Report::new)
+        .context("Failed to select standalone Kibana space")
 }
 
 /// Warning report used to signal a version-gating warning exit (status code 2).
@@ -126,6 +158,316 @@ pub fn version_warning_message(report: &Report) -> Option<&str> {
     report
         .downcast_ref::<VersionWarning>()
         .map(|warning| warning.message.as_str())
+}
+
+fn standalone_capability(family: ResourceFamily) -> ApiCapability {
+    match family {
+        ResourceFamily::Skills => ApiCapability::Skills,
+        ResourceFamily::Tools => ApiCapability::Tools,
+        ResourceFamily::Agents => ApiCapability::Agents,
+        ResourceFamily::Workflows => ApiCapability::Workflows,
+    }
+}
+
+fn enforce_standalone_capability(
+    version: &KibanaVersion,
+    family: ResourceFamily,
+    force: bool,
+) -> Result<()> {
+    let capability = standalone_capability(family);
+    if KibanaClient::supports_capability(version, capability) {
+        return Ok(());
+    }
+
+    let message = KibanaClient::unsupported_capability_reason(version, capability);
+    if force {
+        log::warn!("{message}");
+        Ok(())
+    } else {
+        Err(version_warning(message))
+    }
+}
+
+/// Detect the server version and gate exactly one standalone resource family.
+pub async fn run_standalone_capability_preflight(
+    client: &KibanaClient,
+    family: ResourceFamily,
+    force: bool,
+) -> Result<KibanaVersionInfo> {
+    let detected = client.server_version_info().await?;
+    enforce_standalone_capability(&detected.parsed, family, force)?;
+    Ok(detected)
+}
+
+/// Validate and import one manifest-free resource family into one Kibana space.
+pub async fn import_standalone_resources(
+    family: ResourceFamily,
+    source: impl AsRef<Path>,
+    space: Option<&str>,
+    force: bool,
+) -> Result<ResourceBatchReport> {
+    // Local discovery and complete batch validation intentionally precede
+    // environment lookup, client creation, and all remote requests.
+    let plan = ImportPlan::discover(family, source)?.validate()?;
+    let client = load_standalone_kibana_client(space)?;
+    run_standalone_capability_preflight(&client, family, force).await?;
+    let values = plan.into_values();
+
+    let report = match family {
+        ResourceFamily::Skills => SkillsLoader::new(client).load_report(values).await,
+        ResourceFamily::Tools => ToolsLoader::new(client).load_report(values).await,
+        ResourceFamily::Agents => AgentsLoader::new(client).load_report(values).await,
+        ResourceFamily::Workflows => WorkflowsLoader::new(client).load_report(values).await,
+    };
+
+    Ok(report)
+}
+
+/// Resource selection for one standalone export invocation.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum StandaloneExportSelection {
+    Ids(Vec<String>),
+    All,
+}
+
+/// Fetch, validate, and write one manifest-free resource family.
+pub async fn export_standalone_resources(
+    family: ResourceFamily,
+    destination: impl AsRef<Path>,
+    selection: StandaloneExportSelection,
+    space: Option<&str>,
+    overwrite: bool,
+    force: bool,
+) -> Result<ResourceBatchReport> {
+    let client = load_standalone_kibana_client(space)?;
+    run_standalone_capability_preflight(&client, family, force).await?;
+    let selected_ids = resolve_export_ids(&client, family, selection).await?;
+    let fetched = fetch_export_resources(&client, family, selected_ids).await?;
+
+    let mut transformed = Vec::with_capacity(fetched.len());
+    for (id, value) in fetched {
+        let value = match family {
+            ResourceFamily::Tools => MultilineFieldFormatter::for_tools().transform(value)?,
+            ResourceFamily::Agents => MultilineFieldFormatter::for_agents().transform(value)?,
+            ResourceFamily::Workflows => YamlFormatter::for_workflows().transform(value)?,
+            ResourceFamily::Skills => value,
+        };
+        transformed.push((id, value));
+    }
+
+    let plan = ExportPlan::selected(family, destination, transformed, overwrite)?
+        .prepare(standalone_export_output_path)?;
+    write_standalone_export(plan)
+}
+
+async fn resolve_export_ids(
+    client: &KibanaClient,
+    family: ResourceFamily,
+    selection: StandaloneExportSelection,
+) -> Result<Vec<String>> {
+    match selection {
+        StandaloneExportSelection::Ids(ids) => return Ok(ids),
+        StandaloneExportSelection::All => {}
+    }
+
+    let listed = match family {
+        ResourceFamily::Skills => {
+            SkillsExtractor::new(client.clone(), None)
+                .search_skills(false)
+                .await?
+        }
+        ResourceFamily::Tools => {
+            ToolsExtractor::new(client.clone(), None)
+                .search_tools(None)
+                .await?
+        }
+        ResourceFamily::Agents => {
+            AgentsExtractor::new(client.clone(), None)
+                .search_agents(None)
+                .await?
+        }
+        ResourceFamily::Workflows => {
+            WorkflowsExtractor::new(client.clone(), None)
+                .search_workflows(None, Some(1000))
+                .await?
+        }
+    };
+
+    let mut ids = Vec::new();
+    let mut failures = Vec::new();
+    for (index, resource) in listed.into_iter().enumerate() {
+        if is_readonly(&resource) {
+            continue;
+        }
+        match resource.get("id").and_then(Value::as_str) {
+            Some(id) if !id.trim().is_empty() => ids.push(id.to_string()),
+            _ => failures.push(format!(
+                "{} list result {} is missing a non-empty 'id'",
+                family,
+                index + 1
+            )),
+        }
+    }
+    if !failures.is_empty() {
+        eyre::bail!(
+            "standalone {} export discovery failed:\n- {}",
+            family,
+            failures.join("\n- ")
+        );
+    }
+
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+async fn fetch_export_resources(
+    client: &KibanaClient,
+    family: ResourceFamily,
+    ids: Vec<String>,
+) -> Result<Vec<(String, Value)>> {
+    let mut fetched = Vec::with_capacity(ids.len());
+    let mut failures = Vec::new();
+
+    for id in ids {
+        let result = match family {
+            ResourceFamily::Skills => {
+                SkillsExtractor::new(client.clone(), None)
+                    .fetch_skill(&id)
+                    .await
+            }
+            ResourceFamily::Tools => {
+                ToolsExtractor::new(client.clone(), None)
+                    .fetch_tool(&id)
+                    .await
+            }
+            ResourceFamily::Agents => {
+                AgentsExtractor::new(client.clone(), None)
+                    .fetch_agent(&id)
+                    .await
+            }
+            ResourceFamily::Workflows => {
+                WorkflowsExtractor::new(client.clone(), None)
+                    .fetch_workflow(&id)
+                    .await
+            }
+        };
+        match result {
+            Ok(value) => fetched.push((id, value)),
+            Err(error) => failures.push(format!("{id}: {error}")),
+        }
+    }
+
+    if !failures.is_empty() {
+        eyre::bail!(
+            "standalone {} export fetch failed:\n- {}",
+            family,
+            failures.join("\n- ")
+        );
+    }
+
+    Ok(fetched)
+}
+
+fn standalone_export_output_path(
+    family: ResourceFamily,
+    value: &Value,
+    destination: &Path,
+) -> kibana_sync::Result<std::path::PathBuf> {
+    let filename = match family {
+        ResourceFamily::Skills => {
+            return Ok(destination.join(crate::kibana::skills::skill_directory_name(value)?));
+        }
+        ResourceFamily::Tools => value
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("id").and_then(Value::as_str))
+            .ok_or(kibana_sync::Error::MissingField { field: "name" })?
+            .to_string(),
+        ResourceFamily::Agents => required_export_name(value, "Agent")?.to_string(),
+        ResourceFamily::Workflows => workflow_file_stem(required_export_name(value, "Workflow")?),
+    };
+    validate_immediate_filename(&filename, family)?;
+    Ok(destination.join(format!("{filename}.json")))
+}
+
+fn required_export_name<'a>(value: &'a Value, label: &str) -> kibana_sync::Result<&'a str> {
+    value
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| kibana_sync::Error::message(format!("{label} is missing required 'name'")))
+}
+
+fn validate_immediate_filename(name: &str, family: ResourceFamily) -> kibana_sync::Result<()> {
+    if name.trim().is_empty()
+        || matches!(name, "." | "..")
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+    {
+        return Err(kibana_sync::Error::message(format!(
+            "{} name cannot be represented as an immediate JSON filename: {name:?}",
+            family
+        )));
+    }
+    Ok(())
+}
+
+fn write_standalone_export(plan: ExportPlan<ReadyToWrite>) -> Result<ResourceBatchReport> {
+    let family = plan.family();
+    let mut serialized = Vec::with_capacity(plan.resources().len());
+    let mut failures = Vec::new();
+
+    for resource in plan.resources() {
+        match family {
+            ResourceFamily::Skills => match validate_skill_for_directory(resource.value()) {
+                Ok(()) => serialized.push(None),
+                Err(error) => failures.push(format!("{}: {error}", resource.id())),
+            },
+            ResourceFamily::Tools | ResourceFamily::Agents | ResourceFamily::Workflows => {
+                match storage::to_string_with_multiline(resource.value()) {
+                    Ok(json) => serialized.push(Some(json)),
+                    Err(error) => failures.push(format!("{}: {error}", resource.id())),
+                }
+            }
+        }
+    }
+    if !failures.is_empty() {
+        eyre::bail!(
+            "standalone {} export serialization failed:\n- {}",
+            family,
+            failures.join("\n- ")
+        );
+    }
+
+    std::fs::create_dir_all(plan.destination()).with_context(|| {
+        format!(
+            "Failed to create export destination: {}",
+            plan.destination().display()
+        )
+    })?;
+
+    let mut outcomes = Vec::with_capacity(plan.resources().len());
+    for (resource, json) in plan.resources().iter().zip(serialized) {
+        let result = match json {
+            None => skill_to_directory(plan.destination(), resource.value())
+                .map(|_| ())
+                .map_err(Report::new),
+            Some(json) => std::fs::write(resource.output(), json)
+                .with_context(|| format!("Failed to write {}", resource.output().display())),
+        };
+        match result {
+            Ok(()) => outcomes.push(ResourceOutcome::written(family, resource.id())),
+            Err(error) => outcomes.push(ResourceOutcome::failed(
+                family,
+                resource.id(),
+                None,
+                error.to_string(),
+            )),
+        }
+    }
+
+    Ok(ResourceBatchReport::new(outcomes))
 }
 
 #[derive(Debug, Clone)]
@@ -4225,7 +4567,7 @@ async fn resolve_and_add_dependencies(
                 }
 
                 log::info!("Automatically adding dependent workflow: {}", id.cyan());
-                let path = workflow_resource_path(&id);
+                let path = workflow_resource_path_for_version(&detected_version, &id);
                 let response = client.get_internal(&path).await?;
                 if !response.status().is_success() {
                     log::warn!(
@@ -4259,6 +4601,8 @@ async fn resolve_and_add_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kibana_sync::test_support::{MockResponse, TestServer};
+    use serde_json::json;
 
     #[test]
     #[serial_test::serial]
@@ -4308,6 +4652,789 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Invalid KIBANA_URL")
+        );
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_load_standalone_client_selects_default_and_explicit_space_without_manifest() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+            std::env::remove_var("KIBANA_SPACE");
+            std::env::remove_var("KIBANA_USERNAME");
+            std::env::remove_var("KIBANA_PASSWORD");
+            std::env::remove_var("KIBANA_APIKEY");
+        }
+
+        let default = load_standalone_kibana_client(None).unwrap();
+        assert_eq!(default.space_id(), "default");
+        assert!(default.is_root());
+
+        let security = load_standalone_kibana_client(Some("security")).unwrap();
+        assert_eq!(security.space_id(), "security");
+        assert!(!security.is_root());
+        assert_eq!(security.space_ids(), vec!["security"]);
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_load_standalone_client_honors_configured_space() {
+        unsafe {
+            std::env::set_var("KIBANA_URL", "http://localhost:5601");
+            std::env::set_var("KIBANA_SPACE", "configured");
+        }
+
+        let client = load_standalone_kibana_client(None).unwrap();
+        assert_eq!(client.space_id(), "configured");
+        assert_eq!(client.space_ids(), vec!["configured"]);
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+            std::env::remove_var("KIBANA_SPACE");
+        }
+    }
+
+    #[test]
+    fn test_standalone_capability_thresholds_and_force_bypass() {
+        for (family, below, minimum) in [
+            (ResourceFamily::Agents, "9.1.9", "9.2.0"),
+            (ResourceFamily::Tools, "9.1.9", "9.2.0"),
+            (ResourceFamily::Workflows, "9.2.9", "9.3.0"),
+            (ResourceFamily::Skills, "9.3.9", "9.4.0"),
+        ] {
+            let below = parse_kibana_version(below).unwrap();
+            let minimum = parse_kibana_version(minimum).unwrap();
+
+            let error = enforce_standalone_capability(&below, family, false).unwrap_err();
+            assert!(
+                version_warning_message(&error).is_some(),
+                "{family} should use the existing version-warning result"
+            );
+            assert!(error.to_string().contains(&minimum.to_string()));
+            assert!(enforce_standalone_capability(&below, family, true).is_ok());
+            assert!(enforce_standalone_capability(&minimum, family, false).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_import_validates_before_environment_client_creation() {
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+        let empty = tempfile::TempDir::new().unwrap();
+
+        let error = import_standalone_resources(ResourceFamily::Skills, empty.path(), None, false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no Skills found"));
+        assert!(!error.to_string().contains("KIBANA_URL"));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_import_upserts_every_family_without_manifests() {
+        let cases = [
+            (
+                ResourceFamily::Skills,
+                "skill-a",
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/s/esdiag/api/agent_builder/skills/skill-a",
+                        status: 404,
+                        body: json!({}),
+                    },
+                    MockResponse {
+                        method: "POST",
+                        path: "/s/esdiag/api/agent_builder/skills",
+                        status: 200,
+                        body: json!({"id": "skill-a"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Tools,
+                "tool-a",
+                vec![
+                    MockResponse {
+                        method: "HEAD",
+                        path: "/s/esdiag/api/agent_builder/tools/tool-a",
+                        status: 404,
+                        body: json!({}),
+                    },
+                    MockResponse {
+                        method: "POST",
+                        path: "/s/esdiag/api/agent_builder/tools",
+                        status: 200,
+                        body: json!({"id": "tool-a"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Agents,
+                "agent-a",
+                vec![
+                    MockResponse {
+                        method: "HEAD",
+                        path: "/s/esdiag/api/agent_builder/agents/agent-a",
+                        status: 404,
+                        body: json!({}),
+                    },
+                    MockResponse {
+                        method: "POST",
+                        path: "/s/esdiag/api/agent_builder/agents",
+                        status: 200,
+                        body: json!({"id": "agent-a"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Workflows,
+                "workflow-a",
+                vec![
+                    MockResponse {
+                        method: "HEAD",
+                        path: "/s/esdiag/api/workflows/workflow/workflow-a",
+                        status: 404,
+                        body: json!({}),
+                    },
+                    MockResponse {
+                        method: "POST",
+                        path: "/s/esdiag/api/workflows/workflow",
+                        status: 200,
+                        body: json!({"id": "workflow-a"}),
+                    },
+                ],
+            ),
+        ];
+
+        for (family, id, family_responses) in cases {
+            let mut responses = vec![MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.0"}}),
+            }];
+            responses.extend(family_responses);
+            let server = TestServer::new(responses);
+            unsafe {
+                std::env::set_var("KIBANA_URL", server.url().as_str());
+                std::env::set_var("KIBANA_MAX_REQUESTS", "1");
+            }
+
+            let temp = tempfile::TempDir::new().unwrap();
+            let source = match family {
+                ResourceFamily::Skills => {
+                    let directory = temp.path().join("skill");
+                    std::fs::create_dir(&directory).unwrap();
+                    std::fs::write(
+                        directory.join("SKILL.md"),
+                        format!("---\nid: {id}\nname: {id}\n---\nInstructions\n"),
+                    )
+                    .unwrap();
+                    directory
+                }
+                _ => {
+                    let path = temp.path().join("resource.json");
+                    std::fs::write(&path, format!(r#"{{id: "{id}", name: "{id}"}}"#)).unwrap();
+                    path
+                }
+            };
+            std::fs::write(
+                temp.path().join(format!("{}.yml", family.as_str())),
+                "{ invalid",
+            )
+            .unwrap();
+
+            let report = import_standalone_resources(family, &source, Some("esdiag"), false)
+                .await
+                .unwrap();
+
+            assert_eq!(report.counts().applied, 1, "{family}");
+            assert_eq!(report.outcomes()[0].id(), id);
+            assert_eq!(
+                report.outcomes()[0].operation(),
+                Some(crate::standalone::ResourceOperation::Create)
+            );
+        }
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+            std::env::remove_var("KIBANA_MAX_REQUESTS");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_import_preserves_partial_failure_report() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.0"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/skills/a-skill",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/agent_builder/skills",
+                status: 200,
+                body: json!({"id": "a-skill"}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/skills/b-skill",
+                status: 200,
+                body: json!({"id": "b-skill", "readonly": true}),
+            },
+        ]);
+        unsafe {
+            std::env::set_var("KIBANA_URL", server.url().as_str());
+            std::env::set_var("KIBANA_MAX_REQUESTS", "1");
+            std::env::remove_var("KIBANA_SPACE");
+        }
+        let temp = tempfile::TempDir::new().unwrap();
+        for (directory, id) in [("a", "a-skill"), ("b", "b-skill")] {
+            let directory = temp.path().join(directory);
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nid: {id}\n---\nInstructions\n"),
+            )
+            .unwrap();
+        }
+
+        let report = import_standalone_resources(ResourceFamily::Skills, temp.path(), None, false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            report.counts(),
+            crate::standalone::ResourceBatchCounts {
+                attempted: 2,
+                applied: 1,
+                skipped: 0,
+                failed: 1,
+            }
+        );
+        assert_eq!(
+            report
+                .outcomes()
+                .iter()
+                .map(|outcome| outcome.id())
+                .collect::<Vec<_>>(),
+            vec!["a-skill", "b-skill"]
+        );
+        assert!(
+            report.outcomes()[1]
+                .detail()
+                .unwrap()
+                .contains("server-side Skill is readonly")
+        );
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+            std::env::remove_var("KIBANA_MAX_REQUESTS");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_export_explicit_ids_round_trip_every_family() {
+        let cases = [
+            (
+                ResourceFamily::Skills,
+                "skill-a",
+                MockResponse {
+                    method: "GET",
+                    path: "/s/esdiag/api/agent_builder/skills/skill-a",
+                    status: 200,
+                    body: json!({
+                        "id": "skill-a",
+                        "name": "Skill A",
+                        "content": "Instructions\n",
+                        "tool_ids": [],
+                        "referenced_content": [
+                            {"name": "example", "relativePath": "./references", "content": "Example\n"}
+                        ]
+                    }),
+                },
+                "skill-a/SKILL.md",
+            ),
+            (
+                ResourceFamily::Tools,
+                "tool-a",
+                MockResponse {
+                    method: "GET",
+                    path: "/s/esdiag/api/agent_builder/tools/tool-a",
+                    status: 200,
+                    body: json!({
+                        "id": "tool-a",
+                        "name": "Tool A",
+                        "description": "Tool",
+                        "query": "from logs\n| limit 1"
+                    }),
+                },
+                "Tool A.json",
+            ),
+            (
+                ResourceFamily::Agents,
+                "agent-a",
+                MockResponse {
+                    method: "GET",
+                    path: "/s/esdiag/api/agent_builder/agents/agent-a",
+                    status: 200,
+                    body: json!({
+                        "id": "agent-a",
+                        "name": "Agent A",
+                        "instructions": "First\nSecond"
+                    }),
+                },
+                "Agent A.json",
+            ),
+            (
+                ResourceFamily::Workflows,
+                "workflow-a",
+                MockResponse {
+                    method: "GET",
+                    path: "/s/esdiag/api/workflows/workflow/workflow-a",
+                    status: 200,
+                    body: json!({
+                        "id": "workflow-a",
+                        "name": "Workflow A",
+                        "yaml": "name: Workflow A\nsteps: []"
+                    }),
+                },
+                "workflow_a.json",
+            ),
+        ];
+
+        for (family, id, fetch, expected_file) in cases {
+            let server = TestServer::new(vec![
+                MockResponse {
+                    method: "GET",
+                    path: "/api/status",
+                    status: 200,
+                    body: json!({"version": {"number": "9.4.0"}}),
+                },
+                fetch,
+            ]);
+            unsafe {
+                std::env::set_var("KIBANA_URL", server.url().as_str());
+                std::env::remove_var("KIBANA_SPACE");
+            }
+            let temp = tempfile::TempDir::new().unwrap();
+            let destination = temp.path().join("export");
+
+            let report = export_standalone_resources(
+                family,
+                &destination,
+                StandaloneExportSelection::Ids(vec![id.to_string()]),
+                Some("esdiag"),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(report.counts().applied, 1, "{family}");
+            assert_eq!(report.outcomes()[0].id(), id);
+            assert_eq!(report.outcomes()[0].operation(), None);
+            assert!(destination.join(expected_file).exists(), "{family}");
+            assert!(
+                !destination
+                    .join(format!("{}.yml", family.as_str()))
+                    .exists()
+            );
+
+            let round_trip = ImportPlan::discover(family, &destination)
+                .unwrap()
+                .validate()
+                .unwrap();
+            assert_eq!(round_trip.resources()[0].id(), id);
+
+            if family == ResourceFamily::Workflows {
+                assert!(
+                    server.requests().iter().all(|request| {
+                        request.path == "/api/status"
+                            || request
+                                .headers
+                                .get("x-elastic-internal-origin")
+                                .map(String::as_str)
+                                == Some("Kibana")
+                    }),
+                    "Workflow fetch must use the internal-origin header"
+                );
+            }
+        }
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_export_all_filters_readonly_and_sorts_every_family() {
+        let cases = [
+            (
+                ResourceFamily::Skills,
+                MockResponse {
+                    method: "GET",
+                    path: "/api/agent_builder/skills",
+                    status: 200,
+                    body: json!({"results": [
+                        {"id": "z-skill"},
+                        {"id": "system-skill", "readonly": true},
+                        {"id": "a-skill"}
+                    ]}),
+                },
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/skills/a-skill",
+                        status: 200,
+                        body: json!({"id": "a-skill", "content": "A\n"}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/skills/z-skill",
+                        status: 200,
+                        body: json!({"id": "z-skill", "content": "Z\n"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Tools,
+                MockResponse {
+                    method: "GET",
+                    path: "/api/agent_builder/tools",
+                    status: 200,
+                    body: json!({"results": [
+                        {"id": "z-tool"},
+                        {"id": "system-tool", "readonly": true},
+                        {"id": "a-tool"}
+                    ]}),
+                },
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/tools/a-tool",
+                        status: 200,
+                        body: json!({"id": "a-tool", "name": "A Tool"}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/tools/z-tool",
+                        status: 200,
+                        body: json!({"id": "z-tool", "name": "Z Tool"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Agents,
+                MockResponse {
+                    method: "GET",
+                    path: "/api/agent_builder/agents",
+                    status: 200,
+                    body: json!({"results": [
+                        {"id": "z-agent"},
+                        {"id": "system-agent", "readonly": true},
+                        {"id": "a-agent"}
+                    ]}),
+                },
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/agents/a-agent",
+                        status: 200,
+                        body: json!({"id": "a-agent", "name": "A Agent"}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/agents/z-agent",
+                        status: 200,
+                        body: json!({"id": "z-agent", "name": "Z Agent"}),
+                    },
+                ],
+            ),
+            (
+                ResourceFamily::Workflows,
+                MockResponse {
+                    method: "GET",
+                    path: "/api/workflows?size=1000&page=1",
+                    status: 200,
+                    body: json!({"results": [
+                        {"id": "z-workflow"},
+                        {"id": "system-workflow", "readonly": true},
+                        {"id": "a-workflow"}
+                    ]}),
+                },
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/workflows/workflow/a-workflow",
+                        status: 200,
+                        body: json!({"id": "a-workflow", "name": "A Workflow"}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/workflows/workflow/z-workflow",
+                        status: 200,
+                        body: json!({"id": "z-workflow", "name": "Z Workflow"}),
+                    },
+                ],
+            ),
+        ];
+
+        for (family, list, fetches) in cases {
+            let mut responses = vec![
+                MockResponse {
+                    method: "GET",
+                    path: "/api/status",
+                    status: 200,
+                    body: json!({"version": {"number": "9.4.0"}}),
+                },
+                list,
+            ];
+            responses.extend(fetches);
+            let server = TestServer::new(responses);
+            unsafe {
+                std::env::set_var("KIBANA_URL", server.url().as_str());
+            }
+            let temp = tempfile::TempDir::new().unwrap();
+
+            let report = export_standalone_resources(
+                family,
+                temp.path(),
+                StandaloneExportSelection::All,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+
+            let ids = report
+                .outcomes()
+                .iter()
+                .map(ResourceOutcome::id)
+                .collect::<Vec<_>>();
+            assert_eq!(ids.len(), 2);
+            assert!(ids[0].starts_with("a-"), "{family}: {ids:?}");
+            assert!(ids[1].starts_with("z-"), "{family}: {ids:?}");
+            assert!(
+                server
+                    .requests()
+                    .iter()
+                    .all(|request| !request.path.contains("system-"))
+            );
+        }
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_export_fetch_or_readonly_failure_writes_nothing() {
+        for (responses, ids, expected) in [
+            (
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/status",
+                        status: 200,
+                        body: json!({"version": {"number": "9.4.0"}}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/skills/readonly-skill",
+                        status: 200,
+                        body: json!({"id": "readonly-skill", "readonly": true}),
+                    },
+                ],
+                vec!["readonly-skill".to_string()],
+                "readonly",
+            ),
+            (
+                vec![
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/status",
+                        status: 200,
+                        body: json!({"version": {"number": "9.4.0"}}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/skills/good-skill",
+                        status: 200,
+                        body: json!({"id": "good-skill", "content": "Good\n"}),
+                    },
+                    MockResponse {
+                        method: "GET",
+                        path: "/api/agent_builder/skills/missing-skill",
+                        status: 500,
+                        body: json!({"message": "fetch exploded"}),
+                    },
+                ],
+                vec!["good-skill".to_string(), "missing-skill".to_string()],
+                "fetch exploded",
+            ),
+        ] {
+            let server = TestServer::new(responses);
+            unsafe {
+                std::env::set_var("KIBANA_URL", server.url().as_str());
+            }
+            let temp = tempfile::TempDir::new().unwrap();
+            let destination = temp.path().join("export");
+
+            let error = export_standalone_resources(
+                ResourceFamily::Skills,
+                &destination,
+                StandaloneExportSelection::Ids(ids),
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap_err();
+
+            assert!(error.to_string().contains(expected));
+            assert!(!destination.exists());
+        }
+
+        unsafe {
+            std::env::remove_var("KIBANA_URL");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn standalone_export_preflights_collisions_and_overwrite() {
+        let collision_server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.0"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({"id": "tool-a", "name": "Same Name"}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-b",
+                status: 200,
+                body: json!({"id": "tool-b", "name": "Same Name"}),
+            },
+        ]);
+        unsafe {
+            std::env::set_var("KIBANA_URL", collision_server.url().as_str());
+        }
+        let collision_temp = tempfile::TempDir::new().unwrap();
+        let error = export_standalone_resources(
+            ResourceFamily::Tools,
+            collision_temp.path(),
+            StandaloneExportSelection::Ids(vec!["tool-a".into(), "tool-b".into()]),
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("same output path"));
+        assert!(
+            std::fs::read_dir(collision_temp.path())
+                .unwrap()
+                .next()
+                .is_none()
+        );
+
+        let existing_temp = tempfile::TempDir::new().unwrap();
+        let existing = existing_temp.path().join("Tool A.json");
+        std::fs::write(&existing, "original").unwrap();
+        let no_overwrite_server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.0"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({"id": "tool-a", "name": "Tool A", "description": "new"}),
+            },
+        ]);
+        unsafe {
+            std::env::set_var("KIBANA_URL", no_overwrite_server.url().as_str());
+        }
+        let error = export_standalone_resources(
+            ResourceFamily::Tools,
+            existing_temp.path(),
+            StandaloneExportSelection::Ids(vec!["tool-a".into()]),
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("--overwrite"));
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
+
+        let overwrite_server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.0"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({"id": "tool-a", "name": "Tool A", "description": "new"}),
+            },
+        ]);
+        unsafe {
+            std::env::set_var("KIBANA_URL", overwrite_server.url().as_str());
+        }
+        let report = export_standalone_resources(
+            ResourceFamily::Tools,
+            existing_temp.path(),
+            StandaloneExportSelection::Ids(vec!["tool-a".into()]),
+            None,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.counts().applied, 1);
+        assert!(
+            std::fs::read_to_string(&existing)
+                .unwrap()
+                .contains("\"description\": \"new\"")
         );
 
         unsafe {

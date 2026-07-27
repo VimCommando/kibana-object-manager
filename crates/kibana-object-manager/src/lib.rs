@@ -7,7 +7,7 @@ pub mod migration;
 pub mod storage;
 pub mod transform;
 
-pub use kibana_sync::{client, etl, kibana};
+pub use kibana_sync::{client, etl, kibana, standalone};
 
 // Re-exports for convenience
 pub use client::{

@@ -12,7 +12,7 @@ use std::time::Duration;
 use url::Url;
 
 #[derive(Clone, Debug)]
-pub(crate) struct MockResponse {
+pub struct MockResponse {
     pub method: &'static str,
     pub path: &'static str,
     pub status: u16,
@@ -20,7 +20,7 @@ pub(crate) struct MockResponse {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RecordedRequest {
+pub struct RecordedRequest {
     pub method: String,
     pub path: String,
     pub headers: HashMap<String, String>,
@@ -28,7 +28,7 @@ pub(crate) struct RecordedRequest {
 }
 
 #[derive(Debug)]
-pub(crate) struct TestServer {
+pub struct TestServer {
     url: Url,
     addr: SocketAddr,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
@@ -37,7 +37,7 @@ pub(crate) struct TestServer {
 }
 
 impl TestServer {
-    pub(crate) fn new(responses: Vec<MockResponse>) -> Self {
+    pub fn new(responses: Vec<MockResponse>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         listener
             .set_nonblocking(true)
@@ -49,7 +49,8 @@ impl TestServer {
         let thread_running = running.clone();
 
         let handle = thread::spawn(move || {
-            for expected in responses {
+            let mut responses = responses;
+            while !responses.is_empty() {
                 let stream = loop {
                     if !thread_running.load(Ordering::Relaxed) {
                         return;
@@ -64,7 +65,7 @@ impl TestServer {
                     }
                 };
                 let _ = stream.set_nonblocking(false);
-                handle_connection(stream, expected, &thread_requests);
+                handle_connection(stream, &mut responses, &thread_requests);
             }
         });
 
@@ -77,7 +78,7 @@ impl TestServer {
         }
     }
 
-    pub(crate) fn client(&self) -> Result<KibanaClient> {
+    pub fn client(&self) -> Result<KibanaClient> {
         KibanaClient::builder(self.url.clone())
             .auth(Auth::None)
             .spaces([
@@ -88,7 +89,11 @@ impl TestServer {
             .build()
     }
 
-    pub(crate) fn requests(&self) -> Vec<RecordedRequest> {
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    pub fn requests(&self) -> Vec<RecordedRequest> {
         self.requests.lock().expect("requests lock").clone()
     }
 }
@@ -109,15 +114,20 @@ fn server_url(addr: SocketAddr) -> Url {
 
 fn handle_connection(
     mut stream: TcpStream,
-    expected: MockResponse,
+    responses: &mut Vec<MockResponse>,
     requests: &Arc<Mutex<Vec<RecordedRequest>>>,
 ) {
     match read_request(&mut stream) {
         Ok(request) => {
-            let matches = request.method == expected.method && request.path == expected.path;
+            let response_index = responses.iter().position(|expected| {
+                request.method == expected.method && request.path == expected.path
+            });
+            let actual_method = request.method.clone();
+            let actual_path = request.path.clone();
             requests.lock().expect("requests lock").push(request);
 
-            if matches {
+            if let Some(index) = response_index {
+                let expected = responses.remove(index);
                 write_response(&mut stream, expected.status, &expected.body);
             } else {
                 write_response(
@@ -125,7 +135,19 @@ fn handle_connection(
                     500,
                     &serde_json::json!({
                         "error": "unexpected request",
-                        "expected": {"method": expected.method, "path": expected.path}
+                        "actual": {
+                            "method": actual_method,
+                            "path": actual_path
+                        },
+                        "expected": responses
+                            .iter()
+                            .map(|expected| {
+                                serde_json::json!({
+                                    "method": expected.method,
+                                    "path": expected.path
+                                })
+                            })
+                            .collect::<Vec<_>>()
                     }),
                 );
             }

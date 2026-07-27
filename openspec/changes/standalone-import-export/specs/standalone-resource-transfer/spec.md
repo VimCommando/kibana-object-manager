@@ -170,12 +170,15 @@ Standalone Tools, Agents, and Workflows imports SHALL use their existing create-
 - **WHEN** the command imports the Agent
 - **THEN** it checks `HEAD /api/agent_builder/agents/{id}`
 - **AND** sends `POST /api/agent_builder/agents` when missing or `PUT /api/agent_builder/agents/{id}` when present
+- **AND** omits response-only audit fields such as `created_by` from the mutating request
 - **AND** mutating requests include `kbn-xsrf: true`
 
 #### Scenario: Create or update Workflow
 - **GIVEN** a validated Workflow with an authoritative `id`
 - **WHEN** the command imports the Workflow
-- **THEN** it checks `HEAD /api/workflows/workflow/{id}`
+- **THEN** on Kibana 9.3 it checks `HEAD /api/workflows/{id}`
+- **AND** sends `POST /api/workflows` when missing or `PUT /api/workflows/{id}` when present
+- **THEN** on Kibana 9.4 or later it checks `HEAD /api/workflows/workflow/{id}`
 - **AND** sends `POST /api/workflows/workflow` when missing or `PUT /api/workflows/workflow/{id}` when present
 - **AND** every Workflow request includes `X-Elastic-Internal-Origin: Kibana`
 - **AND** mutating requests include `kbn-xsrf: true`
@@ -226,7 +229,8 @@ Every standalone export SHALL require either one or more `--id <resource-id>` se
 - **WHEN** the command exports Skills
 - **THEN** it lists with `GET /api/agent_builder/skills` and fetches with `GET /api/agent_builder/skills/{id}`
 - **WHEN** the command exports Workflows
-- **THEN** it searches with `POST /api/workflows/search` and fetches with `GET /api/workflows/workflow/{id}`
+- **THEN** on Kibana 9.3 it searches with `POST /api/workflows/search` and fetches with `GET /api/workflows/{id}`
+- **THEN** on Kibana 9.4 or later it lists with `GET /api/workflows` and fetches with `GET /api/workflows/workflow/{id}`
 - **AND** Workflow requests include `X-Elastic-Internal-Origin: Kibana`
 
 ### Requirement: Manifest-Free Skills Export Layout

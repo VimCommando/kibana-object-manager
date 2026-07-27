@@ -147,6 +147,14 @@ pub fn skill_to_directory(root: &Path, skill: &Value) -> Result<PathBuf> {
     Ok(directory)
 }
 
+/// Validate a Skill's complete directory projection without writing it.
+pub fn validate_skill_for_directory(skill: &Value) -> Result<()> {
+    skill_directory_name(skill)?;
+    let document = skill_value_to_directory(skill)?;
+    referenced_content_paths(&document.referenced_content)?;
+    Ok(())
+}
+
 pub fn read_skill_directory(directory: &Path) -> Result<SkillDirectory> {
     let directory_metadata = std::fs::symlink_metadata(directory)
         .with_context(|| format!("Failed to inspect skill directory: {}", directory.display()))?;
@@ -366,7 +374,23 @@ fn parse_skill_markdown(markdown: &str) -> Result<(SkillFrontmatter, &str)> {
 }
 
 fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Result<()> {
+    for (relative_file, entry) in referenced_content_paths(entries)? {
+        let path = root.join(&relative_file);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+        std::fs::write(&path, &entry.content)
+            .with_context(|| format!("Failed to write referenced content: {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn referenced_content_paths(
+    entries: &[ReferencedContent],
+) -> Result<Vec<(PathBuf, &ReferencedContent)>> {
     let mut seen_paths = BTreeSet::new();
+    let mut paths = Vec::with_capacity(entries.len());
 
     for entry in entries {
         let relative_dir = safe_relative_dir(&entry.relative_path)?;
@@ -381,20 +405,14 @@ fn write_referenced_content(root: &Path, entries: &[ReferencedContent]) -> Resul
             )));
         }
 
-        let path = root.join(&relative_file);
-        if path.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE) {
+        if relative_file.file_name().and_then(|name| name.to_str()) == Some(SKILL_FILE) {
             return Err(Error::message(
                 "referenced content cannot be written as SKILL.md",
             ));
         }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
-        }
-        std::fs::write(&path, &entry.content)
-            .with_context(|| format!("Failed to write referenced content: {}", path.display()))?;
+        paths.push((relative_file, entry));
     }
-    Ok(())
+    Ok(paths)
 }
 
 fn collect_reference_files(

@@ -1,10 +1,10 @@
 //! Workflows API extractor
 //!
-//! Extracts workflow definitions from Kibana via GET /api/workflows/workflow/<id>
+//! Extracts workflow definitions from Kibana's version-specific Workflows API.
 
 use crate::client::KibanaClient;
 use crate::etl::Extractor;
-use crate::kibana::workflows::workflow_resource_path;
+use crate::kibana::workflows::{uses_current_workflow_routes, workflow_resource_path_for_version};
 
 use crate::{Error, Result, ResultContext};
 use serde_json::Value;
@@ -53,7 +53,7 @@ impl WorkflowsExtractor {
 
     /// Search for workflows via the Workflows API
     ///
-    /// Uses POST /api/workflows/search with optional query parameter.
+    /// Uses the server's Workflow listing endpoint with optional query parameter.
     /// This is useful for discovering workflows before adding them to the manifest.
     ///
     /// # Arguments
@@ -67,22 +67,36 @@ impl WorkflowsExtractor {
         query: Option<&str>,
         size: Option<usize>,
     ) -> Result<Vec<Value>> {
-        let search_body = serde_json::json!({
-            "size": size.unwrap_or(100),
-            "query": query.unwrap_or("")
-        });
-
         tracing::debug!(
             "Searching workflows with query: {:?} in space '{}'",
             query,
             self.client.space_id()
         );
 
-        let response = self
-            .client
-            .post_json_value_internal("api/workflows/search", &search_body)
-            .await
-            .context("Failed to search workflows")?;
+        let version = self.client.server_version().await?;
+        let response = if uses_current_workflow_routes(&version) {
+            let mut query_string = url::form_urlencoded::Serializer::new(String::new());
+            query_string
+                .append_pair("size", &size.unwrap_or(100).to_string())
+                .append_pair("page", "1");
+            if let Some(query) = query.filter(|query| !query.is_empty()) {
+                query_string.append_pair("query", query);
+            }
+            let path = format!("api/workflows?{}", query_string.finish());
+            self.client
+                .get_internal(&path)
+                .await
+                .context("Failed to list workflows")?
+        } else {
+            let search_body = serde_json::json!({
+                "size": size.unwrap_or(100),
+                "query": query.unwrap_or("")
+            });
+            self.client
+                .post_json_value_internal("api/workflows/search", &search_body)
+                .await
+                .context("Failed to search workflows")?
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -107,6 +121,28 @@ impl WorkflowsExtractor {
         Ok(workflows)
     }
 
+    /// Fetch one complete Workflow definition by ID.
+    pub async fn fetch_workflow(&self, workflow_id: &str) -> Result<Value> {
+        let version = self.client.server_version().await?;
+        let path = workflow_resource_path_for_version(&version, workflow_id);
+        let response = self
+            .client
+            .get_internal(&path)
+            .await
+            .with_context(|| format!("Failed to fetch workflow '{workflow_id}'"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::api_response(status, body));
+        }
+
+        response
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse workflow '{workflow_id}' response"))
+    }
+
     /// Fetch specific workflows by ID from manifest
     async fn fetch_manifest_workflows(
         &self,
@@ -114,14 +150,15 @@ impl WorkflowsExtractor {
     ) -> Result<Vec<Value>> {
         let mut workflows = Vec::new();
         let mut set = JoinSet::new();
+        let version = self.client.server_version().await?;
 
         for entry in &manifest.workflows {
             let client = self.client.clone();
             let workflow_id = entry.id.clone();
             let workflow_name = entry.name.clone();
+            let path = workflow_resource_path_for_version(&version, &workflow_id);
 
             set.spawn(async move {
-                let path = workflow_resource_path(&workflow_id);
                 tracing::debug!(
                     "Fetching workflow '{}' from space '{}'",
                     workflow_id,
@@ -210,16 +247,24 @@ mod tests {
 
     #[tokio::test]
     async fn fetches_manifest_workflow_with_documented_endpoint() {
-        let server = TestServer::new(vec![MockResponse {
-            method: "GET",
-            path: "/api/workflows/workflow/workflow-123",
-            status: 200,
-            body: json!({
-                "id": "workflow-123",
-                "name": "test-workflow",
-                "yaml": "name: test"
-            }),
-        }]);
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows/workflow/workflow-123",
+                status: 200,
+                body: json!({
+                    "id": "workflow-123",
+                    "name": "test-workflow",
+                    "yaml": "name: test"
+                }),
+            },
+        ]);
         let manifest = super::super::WorkflowsManifest::with_workflows(vec![
             super::super::WorkflowEntry::new("workflow-123", "test-workflow"),
         ]);
@@ -230,7 +275,71 @@ mod tests {
         assert_eq!(workflows.len(), 1);
         assert_eq!(workflows[0]["id"], "workflow-123");
         let requests = server.requests();
-        assert_eq!(requests[0].method, "GET");
-        assert_eq!(requests[0].path, "/api/workflows/workflow/workflow-123");
+        assert_eq!(requests[1].method, "GET");
+        assert_eq!(requests[1].path, "/api/workflows/workflow/workflow-123");
+    }
+
+    #[tokio::test]
+    async fn searches_workflows_with_93_endpoint() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.3.3"}}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/api/workflows/search",
+                status: 200,
+                body: json!({"results": [{"id": "workflow-123"}]}),
+            },
+        ]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+
+        let workflows = extractor
+            .search_workflows(Some("test workflow"), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(workflows[0]["id"], "workflow-123");
+        let requests = server.requests();
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].path, "/api/workflows/search");
+        let body: Value = serde_json::from_str(&requests[1].body).unwrap();
+        assert_eq!(body["query"], "test workflow");
+        assert_eq!(body["size"], 25);
+    }
+
+    #[tokio::test]
+    async fn lists_workflows_with_94_endpoint() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows?size=25&page=1&query=test+workflow",
+                status: 200,
+                body: json!({"results": [{"id": "workflow-123"}]}),
+            },
+        ]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+
+        let workflows = extractor
+            .search_workflows(Some("test workflow"), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(workflows[0]["id"], "workflow-123");
+        let requests = server.requests();
+        assert_eq!(requests[1].method, "GET");
+        assert_eq!(
+            requests[1].path,
+            "/api/workflows?size=25&page=1&query=test+workflow"
+        );
     }
 }

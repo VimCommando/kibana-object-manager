@@ -4,6 +4,9 @@
 
 use crate::client::KibanaClient;
 use crate::etl::Loader;
+use crate::standalone::{
+    ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcome, ResourceOutcomeStatus,
+};
 
 use crate::{Error, Result};
 use serde_json::Value;
@@ -51,104 +54,178 @@ impl ToolsLoader {
     pub fn new(client: KibanaClient) -> Self {
         Self { client }
     }
+
+    /// Apply Tools while preserving a structured outcome for every input item.
+    pub async fn load_report(&self, items: Vec<Value>) -> ResourceBatchReport {
+        let mut set = JoinSet::new();
+        let mut outcomes = items
+            .iter()
+            .map(|tool| {
+                ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    resource_id(tool),
+                    None,
+                    "loader task did not complete",
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for (index, tool) in items.into_iter().enumerate() {
+            let client = self.client.clone();
+            set.spawn(async move { (index, upsert_tool(client, tool).await) });
+        }
+
+        while let Some(result) = set.join_next().await {
+            match result {
+                Ok((index, outcome)) => outcomes[index] = outcome,
+                Err(error) => tracing::error!("Tool loader task panicked: {error}"),
+            }
+        }
+
+        ResourceBatchReport::new(outcomes)
+    }
 }
 
 impl Loader for ToolsLoader {
     type Item = Value;
 
     async fn load(&self, items: Vec<Self::Item>) -> Result<usize> {
-        let mut count = 0;
-        let mut set = JoinSet::new();
-
-        for tool in items {
-            let client = self.client.clone();
-
-            set.spawn(async move {
-                let tool_id = tool
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or(Error::MissingResourceId { resource: "tool" })?;
-
-                // Skip readonly tools
-                if tool
-                    .get("readonly")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    tracing::debug!("Skipping readonly tool: {}", tool_id);
-                    return Ok::<bool, Error>(false);
-                }
-
-                // Check existence
-                let path = format!("api/agent_builder/tools/{}", tool_id);
-                let exists = match client.head(&path).await?.status().as_u16() {
-                    200 => true,
-                    404 => false,
-                    status => {
-                        return Err(Error::message(format!(
-                            "Failed to check tool existence ({tool_id}): {status}"
-                        )));
-                    }
-                };
-
-                if exists {
-                    // Update
-                    let mut tool_body = tool.clone();
-                    if let Some(obj) = tool_body.as_object_mut() {
-                        obj.remove("id");
-                        obj.remove("readonly");
-                        obj.remove("schema");
-                        obj.remove("type");
-                    }
-                    let path = format!("api/agent_builder/tools/{}", tool_id);
-                    let response = client.put_json_value(&path, &tool_body).await?;
-                    if !response.status().is_success() {
-                        let status = response.status();
-                        let body = response.text().await.unwrap_or_default();
-                        return Err(Error::api_response(status, body));
-                    }
-                    tracing::info!("Updated tool: {}", tool_id);
-                } else {
-                    // Create
-                    let mut tool_body = tool.clone();
-                    if let Some(obj) = tool_body.as_object_mut() {
-                        obj.remove("readonly");
-                        obj.remove("schema");
-                    }
-                    let path = "api/agent_builder/tools";
-                    let response = client.post_json_value(path, &tool_body).await?;
-                    if !response.status().is_success() {
-                        let status = response.status();
-                        let body = response.text().await.unwrap_or_default();
-                        return Err(Error::api_response(status, body));
-                    }
-                    tracing::info!("Created tool: {}", tool_id);
-                }
-
-                Ok::<bool, Error>(true)
-            });
-        }
-
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok(Ok(loaded)) => {
-                    if loaded {
-                        count += 1;
-                    }
-                }
-                Ok(Err(e)) => tracing::error!("Failed to load tool: {}", e),
-                Err(e) => tracing::error!("Task panicked: {}", e),
+        let report = self.load_report(items).await;
+        for outcome in report.outcomes() {
+            if outcome.status() == ResourceOutcomeStatus::Failed {
+                tracing::error!(
+                    "Failed to load tool '{}': {}",
+                    outcome.id(),
+                    outcome.detail().unwrap_or("unknown failure")
+                );
             }
         }
 
-        Ok(count)
+        Ok(report.counts().applied)
     }
+}
+
+async fn upsert_tool(client: KibanaClient, tool: Value) -> ResourceOutcome {
+    let Some(tool_id) = tool
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
+        return ResourceOutcome::failed(
+            ResourceFamily::Tools,
+            "<missing>",
+            None,
+            Error::MissingResourceId { resource: "tool" }.to_string(),
+        );
+    };
+
+    if tool.get("readonly").and_then(Value::as_bool) == Some(true) {
+        tracing::debug!("Skipping readonly tool: {}", tool_id);
+        return ResourceOutcome::skipped(ResourceFamily::Tools, tool_id, "local Tool is readonly");
+    }
+
+    let path = format!("api/agent_builder/tools/{tool_id}");
+    let exists = match client.head(&path).await {
+        Ok(response) => match response.status().as_u16() {
+            200 => true,
+            404 => false,
+            status => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    tool_id,
+                    None,
+                    format!("Failed to check tool existence: {status}"),
+                );
+            }
+        },
+        Err(error) => {
+            return ResourceOutcome::failed(
+                ResourceFamily::Tools,
+                tool_id,
+                None,
+                error.to_string(),
+            );
+        }
+    };
+
+    if exists {
+        let mut body = tool;
+        if let Some(object) = body.as_object_mut() {
+            object.remove("id");
+            object.remove("readonly");
+            object.remove("schema");
+            object.remove("type");
+        }
+        let response = match client.put_json_value(&path, &body).await {
+            Ok(response) => response,
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    tool_id,
+                    Some(ResourceOperation::Update),
+                    error.to_string(),
+                );
+            }
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return ResourceOutcome::failed(
+                ResourceFamily::Tools,
+                tool_id,
+                Some(ResourceOperation::Update),
+                Error::api_response(status, body).to_string(),
+            );
+        }
+        tracing::info!("Updated tool: {}", tool_id);
+        ResourceOutcome::applied(ResourceFamily::Tools, tool_id, ResourceOperation::Update)
+    } else {
+        let mut body = tool;
+        if let Some(object) = body.as_object_mut() {
+            object.remove("readonly");
+            object.remove("schema");
+        }
+        let response = match client
+            .post_json_value("api/agent_builder/tools", &body)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    tool_id,
+                    Some(ResourceOperation::Create),
+                    error.to_string(),
+                );
+            }
+        };
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return ResourceOutcome::failed(
+                ResourceFamily::Tools,
+                tool_id,
+                Some(ResourceOperation::Create),
+                Error::api_response(status, body).to_string(),
+            );
+        }
+        tracing::info!("Created tool: {}", tool_id);
+        ResourceOutcome::applied(ResourceFamily::Tools, tool_id, ResourceOperation::Create)
+    }
+}
+
+fn resource_id(resource: &Value) -> &str {
+    resource
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing>")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::{Auth, KibanaClient};
+    use crate::test_support::{MockResponse, TestServer};
     use serde_json::json;
     use url::Url;
 
@@ -173,5 +250,98 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn reports_create_with_required_headers_and_space_path() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/s/esdiag/api/agent_builder/tools/tool-a",
+                status: 404,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "POST",
+                path: "/s/esdiag/api/agent_builder/tools",
+                status: 200,
+                body: json!({"id": "tool-a"}),
+            },
+        ]);
+        let loader = ToolsLoader::new(server.client().unwrap().space("esdiag").unwrap());
+
+        let report = loader
+            .load_report(vec![json!({
+                "id": "tool-a",
+                "name": "Tool A",
+                "readonly": false
+            })])
+            .await;
+
+        assert_eq!(report.counts().applied, 1);
+        assert_eq!(
+            report.outcomes()[0].operation(),
+            Some(ResourceOperation::Create)
+        );
+        let requests = server.requests();
+        assert_eq!(
+            requests[1].headers.get("kbn-xsrf").map(String::as_str),
+            Some("true")
+        );
+        let body: Value = serde_json::from_str(&requests[1].body).unwrap();
+        assert_eq!(body["id"], "tool-a");
+        assert!(body.get("readonly").is_none());
+    }
+
+    #[tokio::test]
+    async fn reports_update_and_removes_server_fields() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "PUT",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({"id": "tool-a"}),
+            },
+        ]);
+        let loader = ToolsLoader::new(server.client().unwrap());
+
+        let report = loader
+            .load_report(vec![json!({
+                "id": "tool-a",
+                "name": "Tool A",
+                "readonly": false,
+                "schema": "system",
+                "type": "index_search"
+            })])
+            .await;
+
+        assert_eq!(
+            report.outcomes()[0].operation(),
+            Some(ResourceOperation::Update)
+        );
+        let body: Value = serde_json::from_str(&server.requests()[1].body).unwrap();
+        assert!(body.get("id").is_none());
+        assert!(body.get("readonly").is_none());
+        assert!(body.get("schema").is_none());
+        assert!(body.get("type").is_none());
+    }
+
+    #[tokio::test]
+    async fn skips_local_readonly_tool_without_requests() {
+        let server = TestServer::new(Vec::new());
+        let loader = ToolsLoader::new(server.client().unwrap());
+
+        let report = loader
+            .load_report(vec![json!({"id": "system-tool", "readonly": true})])
+            .await;
+
+        assert_eq!(report.counts().skipped, 1);
+        assert!(server.requests().is_empty());
     }
 }
