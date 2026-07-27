@@ -577,13 +577,46 @@ impl ExportPlan<Selected> {
             }
             ids_by_path.insert(comparable_path, resource.id.clone());
 
-            if path.exists() && !self.overwrite {
-                failures.push(format!(
-                    "output already exists for '{}': {} (use --overwrite to replace it)",
-                    resource.id,
-                    path.display()
-                ));
-                continue;
+            match std::fs::symlink_metadata(&path) {
+                Ok(_) if !self.overwrite => {
+                    failures.push(format!(
+                        "output already exists for '{}': {} (use --overwrite to replace it)",
+                        resource.id,
+                        path.display()
+                    ));
+                    continue;
+                }
+                Ok(metadata) => {
+                    let expected_type_matches = match self.family {
+                        ResourceFamily::Skills => metadata.is_dir(),
+                        ResourceFamily::Tools
+                        | ResourceFamily::Agents
+                        | ResourceFamily::Workflows => metadata.is_file(),
+                    };
+                    if metadata.file_type().is_symlink() || !expected_type_matches {
+                        let expected = if self.family == ResourceFamily::Skills {
+                            "directory"
+                        } else {
+                            "file"
+                        };
+                        failures.push(format!(
+                            "existing output for '{}' is not a replaceable {}: {}",
+                            resource.id,
+                            expected,
+                            path.display()
+                        ));
+                        continue;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failures.push(format!(
+                        "failed to inspect output for '{}': {}: {error}",
+                        resource.id,
+                        path.display()
+                    ));
+                    continue;
+                }
             }
 
             ready.push(ReadyExportResource {
@@ -1006,6 +1039,29 @@ second""",
             .unwrap_err();
 
         assert!(error.to_string().contains("outside the export destination"));
+    }
+
+    #[test]
+    fn export_plan_rejects_nonreplaceable_existing_output_before_writes() {
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("export");
+        let output = destination.join("Tool A.json");
+        std::fs::create_dir_all(&output).unwrap();
+        let plan = ExportPlan::selected(
+            ResourceFamily::Tools,
+            &destination,
+            vec![(
+                "tool-a".to_string(),
+                json!({"id": "tool-a", "name": "Tool A"}),
+            )],
+            true,
+        )
+        .unwrap();
+
+        let error = plan.prepare(|_, _, _| Ok(output.clone())).unwrap_err();
+
+        assert!(error.to_string().contains("not a replaceable file"));
+        assert!(output.is_dir());
     }
 
     #[test]
