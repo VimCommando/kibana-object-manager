@@ -67,6 +67,20 @@ wait_for_kibana() {
 }
 
 cmd="${1:-test}"
+
+if [[ "${cmd}" == "test-existing" ]]; then
+  if [[ -z "${KIBANA_TEST_URL:-}" ]]; then
+    echo "KIBANA_TEST_URL is required for test-existing" >&2
+    exit 1
+  fi
+  (
+    cd "${repo_root}"
+    KIBOB_LIVE_KIBANA_TESTS=1 \
+    cargo test --test live_kibana_integration -- --ignored --nocapture
+  )
+  exit 0
+fi
+
 source_env
 
 case "${cmd}" in
@@ -95,7 +109,7 @@ case "${cmd}" in
     )
     ;;
   *)
-    echo "Usage: $0 [up|down|logs|test]" >&2
+    echo "Usage: $0 [up|down|logs|test|test-existing]" >&2
     exit 1
     ;;
 esac

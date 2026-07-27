@@ -30,18 +30,18 @@ impl DirectoryReader {
         }
 
         let mut objects = Vec::new();
-        self.read_recursive(&self.path, &mut objects)?;
+        Self::read_recursive(&self.path, &mut objects)?;
         Ok(objects)
     }
 
-    fn read_recursive(&self, dir: &Path, objects: &mut Vec<Value>) -> Result<()> {
+    fn read_recursive(dir: &Path, objects: &mut Vec<Value>) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.is_dir() {
                 // Recursively read subdirectories
-                self.read_recursive(&path, objects)?;
+                Self::read_recursive(&path, objects)?;
             } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let content = std::fs::read_to_string(&path)
                     .with_context(|| format!("Failed to read file: {}", path.display()))?;
@@ -63,17 +63,17 @@ impl DirectoryReader {
             return Ok(0);
         }
 
-        self.count_recursive(&self.path)
+        Self::count_recursive(&self.path)
     }
 
-    fn count_recursive(&self, dir: &Path) -> Result<usize> {
+    fn count_recursive(dir: &Path) -> Result<usize> {
         let mut count = 0;
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.is_dir() {
-                count += self.count_recursive(&path)?;
+                count += Self::count_recursive(&path)?;
             } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 count += 1;
             }
@@ -232,16 +232,16 @@ impl DirectoryWriter {
             return Ok(());
         }
 
-        self.clear_recursive(&self.path)
+        Self::clear_recursive(&self.path)
     }
 
-    fn clear_recursive(&self, dir: &Path) -> Result<()> {
+    fn clear_recursive(dir: &Path) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.is_dir() {
-                self.clear_recursive(&path)?;
+                Self::clear_recursive(&path)?;
                 // Try to remove empty directory
                 let _ = std::fs::remove_dir(&path);
             } else if path.extension().and_then(|s| s.to_str()) == Some("json") {

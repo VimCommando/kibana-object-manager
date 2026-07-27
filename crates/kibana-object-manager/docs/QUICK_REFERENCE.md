@@ -10,6 +10,8 @@ Fast reference for `kibob` commands and options.
 | `kibob init` | Initialize project from export | `kibob init export.ndjson ./dashboards` |
 | `kibob pull` | Fetch objects from Kibana | `kibob pull .` |
 | `kibob push` | Upload objects to Kibana | `kibob push . --managed true` |
+| `kibob import` | Import one manifest-free API family | `kibob import tools ./tools` |
+| `kibob export` | Export explicitly selected resources | `kibob export tools ./tools --all` |
 | `kibob add` | Add objects to manifest | `kibob add . --objects "dashboard=abc123"` |
 | `kibob togo` | Bundle objects to NDJSON | `kibob togo .` |
 | `kibob migrate` | Migrate legacy manifest | `kibob migrate .` |
@@ -35,6 +37,31 @@ Fast reference for `kibob` commands and options.
 | `--version` | Show version information | `kibob --version` |
 
 ## Common Patterns
+
+### Standalone Resource Transfer
+
+```bash
+# Import one Skill directory or an immediate-child collection.
+kibob import skills ./skills --space security
+
+# JSON resources accept one .json file or immediate .json files in a directory.
+kibob import tools ./tools
+kibob import agents ./agents/triage.json
+kibob import workflows ./workflows
+
+# Export requires repeatable --id or mutually exclusive --all.
+kibob export skills ./skills-backup --id threat-hunting
+kibob export tools ./tools-backup --id search-logs --id get-document
+kibob export agents ./agents-backup --all
+kibob export workflows ./workflows-backup --all --overwrite
+```
+
+Standalone imports upsert selected IDs. Exports omit readonly resources for
+`--all` and reject explicitly selected readonly IDs. Neither command reads or
+writes manifests, expands dependencies, or prunes remote content. `--space`
+selects one space; otherwise `KIBANA_SPACE` or `default` is used. `--force`
+bypasses only the selected family’s Kibana version gate, while `--overwrite`
+replaces only selected export outputs.
 
 ### Initial Setup
 ```bash

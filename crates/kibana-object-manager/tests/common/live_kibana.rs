@@ -93,6 +93,29 @@ impl LiveKibana {
             bail!("failed to delete live test space {space_id} ({status}): {body}");
         }
     }
+
+    pub fn configure_standalone_environment(&self) {
+        let apikey = env::var("KIBANA_TEST_APIKEY").or_else(|_| env::var("KIBANA_APIKEY"));
+        let username = env::var("KIBANA_TEST_USERNAME")
+            .or_else(|_| env::var("KIBANA_USERNAME"))
+            .unwrap_or_else(|_| "elastic".to_string());
+        let password = env::var("KIBANA_TEST_PASSWORD")
+            .or_else(|_| env::var("KIBANA_PASSWORD"))
+            .unwrap_or_else(|_| "changeme".to_string());
+        unsafe {
+            env::set_var("KIBANA_URL", self.client.url().as_str());
+            env::remove_var("KIBANA_APIKEY");
+            env::remove_var("KIBANA_USERNAME");
+            env::remove_var("KIBANA_PASSWORD");
+
+            if let Ok(apikey) = apikey {
+                env::set_var("KIBANA_APIKEY", apikey);
+            } else {
+                env::set_var("KIBANA_USERNAME", username);
+                env::set_var("KIBANA_PASSWORD", password);
+            }
+        }
+    }
 }
 
 pub fn test_space_id(suffix: &str) -> String {

@@ -468,7 +468,7 @@ impl KibanaClient {
 
         let client = match path.split_once('?') {
             Some((p, query)) => {
-                let query: Vec<_> = query.split('&').filter_map(|s| s.split_once('=')).collect();
+                let query = url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
                 self.client
                     .request(method, self.url.join(p)?)
                     .query(&query)

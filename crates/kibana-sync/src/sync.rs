@@ -11,10 +11,13 @@ use crate::kibana::saved_objects::{
 use crate::kibana::skills::{SkillsExtractor, SkillsLoader};
 use crate::kibana::spaces::{SpacesExtractor, SpacesLoader};
 use crate::kibana::tools::{ToolsExtractor, ToolsLoader};
-use crate::kibana::workflows::{WorkflowsExtractor, WorkflowsLoader, workflow_resource_path};
+use crate::kibana::workflows::{
+    WorkflowsExtractor, WorkflowsLoader, workflow_resource_path_for_version,
+};
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 
 const SKILL_FETCH_BATCH_SIZE: usize = 16;
@@ -457,6 +460,7 @@ pub async fn expand_dependencies(
     capabilities: DependencyExpansionCapabilities,
 ) -> Result<()> {
     let space_client = client.space(space_id)?;
+    let workflow_version = OnceCell::new();
     let mut existing_agents = ids(&bundle.agents);
     let mut existing_skills = ids(&bundle.skills);
     let mut existing_tools = ids(&bundle.tools);
@@ -510,7 +514,10 @@ pub async fn expand_dependencies(
             Dependency::Workflow(id)
                 if !existing_workflows.contains(&id) && capabilities.workflows =>
             {
-                let path = workflow_resource_path(&id);
+                let version = workflow_version
+                    .get_or_try_init(|| space_client.server_version())
+                    .await?;
+                let path = workflow_resource_path_for_version(version, &id);
                 let response = space_client.get_internal(&path).await?;
                 if !response.status().is_success() {
                     let status = response.status();
@@ -625,6 +632,12 @@ mod tests {
     async fn push_sync_loads_local_dependencies_before_dependents() {
         let server = TestServer::new(vec![
             MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
                 method: "HEAD",
                 path: "/api/workflows/workflow/workflow-w",
                 status: 404,
@@ -713,6 +726,7 @@ mod tests {
         assert_eq!(
             paths,
             vec![
+                "/api/status",
                 "/api/workflows/workflow/workflow-w",
                 "/api/workflows/workflow",
                 "/api/agent_builder/tools/tool-t",
@@ -737,6 +751,12 @@ mod tests {
                     "name": "Skill S",
                     "tool_ids": ["tool-t"]
                 }),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
                 method: "GET",
@@ -804,6 +824,7 @@ mod tests {
             vec![
                 "/api/agent_builder/skills/skill-s",
                 "/api/agent_builder/tools/tool-t",
+                "/api/status",
                 "/api/workflows/workflow/workflow-w"
             ]
         );
