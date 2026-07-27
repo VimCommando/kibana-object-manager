@@ -474,7 +474,9 @@ fn validate_immediate_filename(name: &str, family: ResourceFamily) -> kibana_syn
     if name.trim().is_empty()
         || matches!(name, "." | "..")
         || name.ends_with(['.', ' '])
-        || name.contains(PORTABLE_FORBIDDEN)
+        || name
+            .chars()
+            .any(|character| PORTABLE_FORBIDDEN.contains(&character))
         || name.chars().any(char::is_control)
         || is_windows_reserved
     {
