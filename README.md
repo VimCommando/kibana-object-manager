@@ -53,7 +53,7 @@ CLI policy.
 
 ```toml
 [dependencies]
-kibana-sync = "0.1"
+kibana-sync = "0.4"
 ```
 
 ```rust,no_run
