@@ -2,7 +2,7 @@
 //!
 //! Extracts workflow definitions from Kibana's version-specific Workflows API.
 
-use crate::client::KibanaClient;
+use crate::client::{KibanaClient, KibanaVersion};
 use crate::etl::Extractor;
 use crate::kibana::workflows::{uses_current_workflow_routes, workflow_resource_path_for_version};
 
@@ -218,7 +218,16 @@ impl WorkflowsExtractor {
     /// Fetch one complete Workflow definition by ID.
     pub async fn fetch_workflow(&self, workflow_id: &str) -> Result<Value> {
         let version = self.client.server_version().await?;
-        let path = workflow_resource_path_for_version(&version, workflow_id);
+        self.fetch_workflow_for_version(workflow_id, &version).await
+    }
+
+    /// Fetch one complete Workflow definition using an already detected route version.
+    pub async fn fetch_workflow_for_version(
+        &self,
+        workflow_id: &str,
+        version: &KibanaVersion,
+    ) -> Result<Value> {
+        let path = workflow_resource_path_for_version(version, workflow_id);
         let response = self
             .client
             .get_internal(&path)
@@ -326,7 +335,7 @@ impl Extractor for WorkflowsExtractor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{Auth, KibanaClient};
+    use crate::client::{Auth, KibanaClient, parse_kibana_version};
     use crate::test_support::{MockResponse, TestServer};
     use serde_json::json;
     use url::Url;
@@ -382,6 +391,26 @@ mod tests {
         let requests = server.requests();
         assert_eq!(requests[1].method, "GET");
         assert_eq!(requests[1].path, "/api/workflows/workflow/workflow-123");
+    }
+
+    #[tokio::test]
+    async fn fetches_workflow_with_previously_detected_version() {
+        let server = TestServer::new(vec![MockResponse {
+            method: "GET",
+            path: "/api/workflows/workflow/workflow-123",
+            status: 200,
+            body: json!({"id": "workflow-123", "name": "test-workflow"}),
+        }]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+        let version = parse_kibana_version("9.4.1").unwrap();
+
+        let workflow = extractor
+            .fetch_workflow_for_version("workflow-123", &version)
+            .await
+            .unwrap();
+
+        assert_eq!(workflow["id"], "workflow-123");
+        assert_eq!(server.requests().len(), 1);
     }
 
     #[tokio::test]

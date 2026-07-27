@@ -352,6 +352,12 @@ async fn fetch_export_resources(
 ) -> Result<Vec<(String, Value)>> {
     let mut fetched = Vec::with_capacity(ids.len());
     let mut failures = Vec::new();
+    let workflow_version = if family == ResourceFamily::Workflows {
+        Some(client.server_version().await?)
+    } else {
+        None
+    };
+    let workflow_extractor = WorkflowsExtractor::new(client.clone(), None);
 
     for id in ids {
         let result = match family {
@@ -371,8 +377,13 @@ async fn fetch_export_resources(
                     .await
             }
             ResourceFamily::Workflows => {
-                WorkflowsExtractor::new(client.clone(), None)
-                    .fetch_workflow(&id)
+                workflow_extractor
+                    .fetch_workflow_for_version(
+                        &id,
+                        workflow_version
+                            .as_ref()
+                            .expect("Workflow version is set for Workflow exports"),
+                    )
                     .await
             }
         };

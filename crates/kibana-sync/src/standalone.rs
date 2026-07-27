@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const SKILL_FILE: &str = "SKILL.md";
 
@@ -546,7 +546,17 @@ impl ExportPlan<Selected> {
                     continue;
                 }
             };
-            if path == self.destination || !path.starts_with(&self.destination) {
+            let relative_path = path.strip_prefix(&self.destination).ok();
+            let escapes_destination = relative_path.is_none_or(|relative| {
+                relative.as_os_str().is_empty()
+                    || relative.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+            });
+            if escapes_destination {
                 failures.push(format!(
                     "{} maps outside the export destination: {}",
                     resource.id,
@@ -974,6 +984,28 @@ second""",
                     .contains(&format!("standalone {} source", family.as_str()))
             );
         }
+    }
+
+    #[test]
+    fn export_plan_rejects_parent_traversal_below_destination_prefix() {
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("export");
+        let plan = ExportPlan::selected(
+            ResourceFamily::Tools,
+            &destination,
+            vec![(
+                "tool-a".to_string(),
+                json!({"id": "tool-a", "name": "Tool A"}),
+            )],
+            false,
+        )
+        .unwrap();
+
+        let error = plan
+            .prepare(|_, _, destination| Ok(destination.join("../outside.json")))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("outside the export destination"));
     }
 
     #[test]
