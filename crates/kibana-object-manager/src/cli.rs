@@ -160,6 +160,55 @@ pub fn version_warning_message(report: &Report) -> Option<&str> {
         .map(|warning| warning.message.as_str())
 }
 
+/// Error raised when a selected standalone export batch fails before writing.
+#[derive(Debug)]
+pub struct StandaloneExportBatchFailure {
+    message: String,
+    report: ResourceBatchReport,
+}
+
+impl StandaloneExportBatchFailure {
+    fn new(family: ResourceFamily, selected_ids: &[String], message: impl Into<String>) -> Self {
+        let message = message.into();
+        let outcomes = selected_ids
+            .iter()
+            .map(|id| ResourceOutcome::failed(family, id, None, message.clone()))
+            .collect();
+
+        Self {
+            message,
+            report: ResourceBatchReport::new(outcomes),
+        }
+    }
+}
+
+impl fmt::Display for StandaloneExportBatchFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StandaloneExportBatchFailure {}
+
+/// Return the structured resource report attached to an export batch failure.
+pub fn standalone_export_failure_report(report: &Report) -> Option<&ResourceBatchReport> {
+    report
+        .downcast_ref::<StandaloneExportBatchFailure>()
+        .map(|failure| &failure.report)
+}
+
+fn export_batch_failure(
+    family: ResourceFamily,
+    selected_ids: &[String],
+    error: impl fmt::Display,
+) -> Report {
+    Report::new(StandaloneExportBatchFailure::new(
+        family,
+        selected_ids,
+        error.to_string(),
+    ))
+}
+
 fn standalone_capability(family: ResourceFamily) -> ApiCapability {
     match family {
         ResourceFamily::Skills => ApiCapability::Skills,
@@ -243,21 +292,27 @@ pub async fn export_standalone_resources(
     let client = load_standalone_kibana_client(space)?;
     run_standalone_capability_preflight(&client, family, force).await?;
     let selected_ids = resolve_export_ids(&client, family, selection).await?;
-    let fetched = fetch_export_resources(&client, family, selected_ids).await?;
+    let fetched = fetch_export_resources(&client, family, selected_ids.clone())
+        .await
+        .map_err(|error| export_batch_failure(family, &selected_ids, error))?;
 
     let mut transformed = Vec::with_capacity(fetched.len());
     for (id, value) in fetched {
-        let value = match family {
-            ResourceFamily::Tools => MultilineFieldFormatter::for_tools().transform(value)?,
-            ResourceFamily::Agents => MultilineFieldFormatter::for_agents().transform(value)?,
-            ResourceFamily::Workflows => YamlFormatter::for_workflows().transform(value)?,
-            ResourceFamily::Skills => value,
-        };
-        transformed.push((id, value));
+        let transformed_value = match family {
+            ResourceFamily::Tools => MultilineFieldFormatter::for_tools().transform(value),
+            ResourceFamily::Agents => MultilineFieldFormatter::for_agents().transform(value),
+            ResourceFamily::Workflows => YamlFormatter::for_workflows().transform(value),
+            ResourceFamily::Skills => Ok(value),
+        }
+        .map_err(|error| export_batch_failure(family, &selected_ids, error))?;
+        transformed.push((id, transformed_value));
     }
 
-    let plan = ExportPlan::selected(family, destination, transformed, overwrite)?
-        .prepare(standalone_export_output_path)?;
+    let plan = ExportPlan::selected(family, destination, transformed, overwrite)
+        .map_err(|error| export_batch_failure(family, &selected_ids, error))?;
+    let plan = plan
+        .prepare(standalone_export_output_path)
+        .map_err(|error| export_batch_failure(family, &selected_ids, error))?;
     write_standalone_export(plan)
 }
 
@@ -490,6 +545,11 @@ fn validate_immediate_filename(name: &str, family: ResourceFamily) -> kibana_syn
 
 fn write_standalone_export(plan: ExportPlan<ReadyToWrite>) -> Result<ResourceBatchReport> {
     let family = plan.family();
+    let selected_ids = plan
+        .resources()
+        .iter()
+        .map(|resource| resource.id().to_string())
+        .collect::<Vec<_>>();
     let mut serialized = Vec::with_capacity(plan.resources().len());
     let mut failures = Vec::new();
 
@@ -508,19 +568,25 @@ fn write_standalone_export(plan: ExportPlan<ReadyToWrite>) -> Result<ResourceBat
         }
     }
     if !failures.is_empty() {
-        eyre::bail!(
-            "standalone {} export serialization failed:\n- {}",
+        return Err(export_batch_failure(
             family,
-            failures.join("\n- ")
-        );
+            &selected_ids,
+            format!(
+                "standalone {} export serialization failed:\n- {}",
+                family,
+                failures.join("\n- ")
+            ),
+        ));
     }
 
-    std::fs::create_dir_all(plan.destination()).with_context(|| {
+    if let Err(error) = std::fs::create_dir_all(plan.destination()).with_context(|| {
         format!(
             "Failed to create export destination: {}",
             plan.destination().display()
         )
-    })?;
+    }) {
+        return Err(export_batch_failure(family, &selected_ids, error));
+    }
 
     let mut outcomes = Vec::with_capacity(plan.resources().len());
     for (resource, json) in plan.resources().iter().zip(serialized) {
@@ -5379,6 +5445,7 @@ mod tests {
             }
             let temp = tempfile::TempDir::new().unwrap();
             let destination = temp.path().join("export");
+            let expected_attempted = ids.len();
 
             let error = export_standalone_resources(
                 ResourceFamily::Skills,
@@ -5393,6 +5460,17 @@ mod tests {
 
             assert!(error.to_string().contains(expected));
             assert!(!destination.exists());
+            let report = standalone_export_failure_report(&error)
+                .expect("pre-write failure must carry a structured batch report");
+            assert_eq!(
+                report.counts(),
+                crate::standalone::ResourceBatchCounts {
+                    attempted: expected_attempted,
+                    applied: 0,
+                    skipped: 0,
+                    failed: expected_attempted,
+                }
+            );
         }
 
         unsafe {
@@ -5438,6 +5516,17 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("same output path"));
+        assert_eq!(
+            standalone_export_failure_report(&error)
+                .expect("collision must carry a structured batch report")
+                .counts(),
+            crate::standalone::ResourceBatchCounts {
+                attempted: 2,
+                applied: 0,
+                skipped: 0,
+                failed: 2,
+            }
+        );
         assert!(
             std::fs::read_dir(collision_temp.path())
                 .unwrap()
@@ -5476,6 +5565,17 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("--overwrite"));
+        assert_eq!(
+            standalone_export_failure_report(&error)
+                .expect("overwrite preflight must carry a structured batch report")
+                .counts(),
+            crate::standalone::ResourceBatchCounts {
+                attempted: 1,
+                applied: 0,
+                skipped: 0,
+                failed: 1,
+            }
+        );
         assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
 
         let overwrite_server = TestServer::new(vec![

@@ -4,7 +4,8 @@ use kibana_object_manager::{
     cli::{
         StandaloneExportSelection, add_objects_to_manifest, bundle_to_ndjson,
         export_standalone_resources, import_standalone_resources, init_from_export,
-        load_kibana_client, pull_saved_objects, push_saved_objects, version_warning_message,
+        load_kibana_client, pull_saved_objects, push_saved_objects,
+        standalone_export_failure_report, version_warning_message,
     },
     migration::{MigrationResult, migrate_to_multispace_unified},
     standalone::{ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcomeStatus},
@@ -714,6 +715,9 @@ async fn main() -> Result<()> {
                     if let Some(message) = version_warning_message(&error) {
                         log::warn!("{message}");
                         std::process::exit(2);
+                    }
+                    if let Some(report) = standalone_export_failure_report(&error) {
+                        log_resource_batch_report(report, "written");
                     }
                     return Err(error);
                 }
