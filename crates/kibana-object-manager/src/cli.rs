@@ -239,6 +239,7 @@ pub async fn export_standalone_resources(
     overwrite: bool,
     force: bool,
 ) -> Result<ResourceBatchReport> {
+    let selection = validate_export_selection(selection)?;
     let client = load_standalone_kibana_client(space)?;
     run_standalone_capability_preflight(&client, family, force).await?;
     let selected_ids = resolve_export_ids(&client, family, selection).await?;
@@ -258,6 +259,29 @@ pub async fn export_standalone_resources(
     let plan = ExportPlan::selected(family, destination, transformed, overwrite)?
         .prepare(standalone_export_output_path)?;
     write_standalone_export(plan)
+}
+
+fn validate_export_selection(
+    selection: StandaloneExportSelection,
+) -> Result<StandaloneExportSelection> {
+    let StandaloneExportSelection::Ids(ids) = &selection else {
+        return Ok(selection);
+    };
+    if ids.is_empty() {
+        eyre::bail!("standalone export requires one or more resource IDs");
+    }
+
+    let mut seen = HashSet::with_capacity(ids.len());
+    for id in ids {
+        if id.trim().is_empty() {
+            eyre::bail!("standalone export resource IDs cannot be blank");
+        }
+        if !seen.insert(id.as_str()) {
+            eyre::bail!("standalone export resource ID '{id}' was selected more than once");
+        }
+    }
+
+    Ok(selection)
 }
 
 async fn resolve_export_ids(
@@ -382,7 +406,11 @@ fn standalone_export_output_path(
             .get("name")
             .and_then(Value::as_str)
             .or_else(|| value.get("id").and_then(Value::as_str))
-            .ok_or(kibana_sync::Error::MissingField { field: "name" })?
+            .ok_or_else(|| {
+                kibana_sync::Error::message(
+                    "Tool export definition is missing both 'name' and fallback 'id'",
+                )
+            })?
             .to_string(),
         ResourceFamily::Agents => required_export_name(value, "Agent")?.to_string(),
         ResourceFamily::Workflows => workflow_file_stem(required_export_name(value, "Workflow")?),
@@ -5581,6 +5609,34 @@ mod tests {
         );
         assert_eq!(workflow_file_stem("  Workflow One  "), "workflow_one");
         assert_eq!(workflow_file_stem(""), "unnamed");
+    }
+
+    #[test]
+    fn standalone_export_selection_rejects_empty_blank_and_duplicate_ids() {
+        for (ids, expected) in [
+            (Vec::new(), "one or more resource IDs"),
+            (vec!["  ".to_string()], "cannot be blank"),
+            (
+                vec!["tool-a".to_string(), "tool-a".to_string()],
+                "selected more than once",
+            ),
+        ] {
+            let error = validate_export_selection(StandaloneExportSelection::Ids(ids)).unwrap_err();
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[test]
+    fn tool_export_missing_filename_reports_name_and_id() {
+        let error =
+            standalone_export_output_path(ResourceFamily::Tools, &json!({}), Path::new("export"))
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing both 'name' and fallback 'id'")
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::client::KibanaClient;
 use crate::etl::Loader;
 use crate::standalone::{
     ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcome, ResourceOutcomeStatus,
+    server_resource_is_readonly,
 };
 
 use crate::{Error, Result};
@@ -149,6 +150,26 @@ async fn upsert_tool(client: KibanaClient, tool: Value) -> ResourceOutcome {
     };
 
     if exists {
+        match server_resource_is_readonly(&client, &path, false, "Tool").await {
+            Ok(true) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    tool_id,
+                    None,
+                    "server-side Tool is readonly",
+                );
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Tools,
+                    tool_id,
+                    None,
+                    error.to_string(),
+                );
+            }
+        }
+
         let mut body = tool;
         if let Some(object) = body.as_object_mut() {
             object.remove("id");
@@ -303,6 +324,12 @@ mod tests {
                 body: json!({}),
             },
             MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/tool-a",
+                status: 200,
+                body: json!({"id": "tool-a", "readonly": false}),
+            },
+            MockResponse {
                 method: "PUT",
                 path: "/api/agent_builder/tools/tool-a",
                 status: 200,
@@ -325,11 +352,45 @@ mod tests {
             report.outcomes()[0].operation(),
             Some(ResourceOperation::Update)
         );
-        let body: Value = serde_json::from_str(&server.requests()[1].body).unwrap();
+        let body: Value = serde_json::from_str(&server.requests()[2].body).unwrap();
         assert!(body.get("id").is_none());
         assert!(body.get("readonly").is_none());
         assert!(body.get("schema").is_none());
         assert!(body.get("type").is_none());
+    }
+
+    #[tokio::test]
+    async fn fails_existing_server_side_readonly_tool_without_mutation() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/agent_builder/tools/system-tool",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/tools/system-tool",
+                status: 200,
+                body: json!({"id": "system-tool", "readonly": true}),
+            },
+        ]);
+        let loader = ToolsLoader::new(server.client().unwrap());
+
+        let report = loader
+            .load_report(vec![json!({"id": "system-tool", "name": "System Tool"})])
+            .await;
+
+        assert_eq!(report.counts().failed, 1);
+        assert_eq!(report.outcomes()[0].status(), ResourceOutcomeStatus::Failed);
+        assert_eq!(
+            report.outcomes()[0].detail(),
+            Some("server-side Tool is readonly")
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "HEAD");
+        assert_eq!(requests[1].method, "GET");
     }
 
     #[tokio::test]

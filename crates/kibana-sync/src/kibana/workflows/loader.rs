@@ -7,6 +7,7 @@ use crate::etl::Loader;
 use crate::kibana::workflows::workflow_create_path_for_version;
 use crate::standalone::{
     ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcome, ResourceOutcomeStatus,
+    server_resource_is_readonly,
 };
 
 use crate::{Error, Result};
@@ -210,6 +211,26 @@ async fn upsert_workflow(
 
     let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
     if exists {
+        match server_resource_is_readonly(&client, &path, true, "Workflow").await {
+            Ok(true) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Workflows,
+                    workflow_id,
+                    None,
+                    "server-side Workflow is readonly",
+                );
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Workflows,
+                    workflow_id,
+                    None,
+                    error.to_string(),
+                );
+            }
+        }
+
         let response = match client.put_json_value_internal(&path, &sanitized).await {
             Ok(response) => response,
             Err(error) => {
@@ -419,6 +440,12 @@ mod tests {
                 body: json!({}),
             },
             MockResponse {
+                method: "GET",
+                path: "/api/workflows/workflow/workflow-123",
+                status: 200,
+                body: json!({"id": "workflow-123", "readonly": false}),
+            },
+            MockResponse {
                 method: "PUT",
                 path: "/api/workflows/workflow/workflow-123",
                 status: 200,
@@ -459,11 +486,60 @@ mod tests {
                     "/api/workflows/workflow/workflow-123".to_string()
                 ),
                 (
+                    "GET".to_string(),
+                    "/api/workflows/workflow/workflow-123".to_string()
+                ),
+                (
                     "PUT".to_string(),
                     "/api/workflows/workflow/workflow-123".to_string()
                 )
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn fails_existing_server_side_readonly_workflow_without_mutation() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "HEAD",
+                path: "/api/workflows/workflow/system-workflow",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows/workflow/system-workflow",
+                status: 200,
+                body: json!({"id": "system-workflow", "readonly": true}),
+            },
+        ]);
+        let loader = WorkflowsLoader::new(server.client().unwrap());
+
+        let report = loader
+            .load_report(vec![json!({
+                "id": "system-workflow",
+                "name": "System Workflow",
+                "yaml": "name: system"
+            })])
+            .await;
+
+        assert_eq!(report.counts().failed, 1);
+        assert_eq!(report.outcomes()[0].status(), ResourceOutcomeStatus::Failed);
+        assert_eq!(
+            report.outcomes()[0].detail(),
+            Some("server-side Workflow is readonly")
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[1].method, "HEAD");
+        assert_eq!(requests[2].method, "GET");
     }
 
     #[tokio::test]

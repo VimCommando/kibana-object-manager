@@ -6,6 +6,7 @@ use crate::client::KibanaClient;
 use crate::etl::Loader;
 use crate::standalone::{
     ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcome, ResourceOutcomeStatus,
+    server_resource_is_readonly,
 };
 
 use crate::{Error, Result};
@@ -157,6 +158,28 @@ async fn upsert_agent(client: KibanaClient, agent: Value) -> ResourceOutcome {
             );
         }
     };
+
+    if exists {
+        match server_resource_is_readonly(&client, &path, false, "Agent").await {
+            Ok(true) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Agents,
+                    agent_id,
+                    None,
+                    "server-side Agent is readonly",
+                );
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Agents,
+                    agent_id,
+                    None,
+                    error.to_string(),
+                );
+            }
+        }
+    }
 
     let mut body = agent;
     if let Some(object) = body.as_object_mut() {
@@ -322,6 +345,12 @@ mod tests {
                 body: json!({}),
             },
             MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/agents/agent-a",
+                status: 200,
+                body: json!({"id": "agent-a", "readonly": false}),
+            },
+            MockResponse {
                 method: "PUT",
                 path: "/api/agent_builder/agents/agent-a",
                 status: 200,
@@ -348,7 +377,7 @@ mod tests {
             report.outcomes()[0].operation(),
             Some(ResourceOperation::Update)
         );
-        let body: Value = serde_json::from_str(&server.requests()[1].body).unwrap();
+        let body: Value = serde_json::from_str(&server.requests()[2].body).unwrap();
         assert!(body.get("id").is_none());
         assert!(body.get("readonly").is_none());
         assert!(body.get("schema").is_none());
@@ -357,6 +386,40 @@ mod tests {
         assert!(body.get("updated_by").is_none());
         assert!(body.get("created_at").is_none());
         assert!(body.get("updated_at").is_none());
+    }
+
+    #[tokio::test]
+    async fn fails_existing_server_side_readonly_agent_without_mutation() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "HEAD",
+                path: "/api/agent_builder/agents/system-agent",
+                status: 200,
+                body: json!({}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/agent_builder/agents/system-agent",
+                status: 200,
+                body: json!({"id": "system-agent", "readonly": true}),
+            },
+        ]);
+        let loader = AgentsLoader::new(server.client().unwrap());
+
+        let report = loader
+            .load_report(vec![json!({"id": "system-agent", "name": "System Agent"})])
+            .await;
+
+        assert_eq!(report.counts().failed, 1);
+        assert_eq!(report.outcomes()[0].status(), ResourceOutcomeStatus::Failed);
+        assert_eq!(
+            report.outcomes()[0].detail(),
+            Some("server-side Agent is readonly")
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "HEAD");
+        assert_eq!(requests[1].method, "GET");
     }
 
     #[tokio::test]

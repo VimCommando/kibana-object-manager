@@ -601,6 +601,29 @@ impl ExportPlan<Selected> {
     }
 }
 
+pub(crate) async fn server_resource_is_readonly(
+    client: &crate::client::KibanaClient,
+    path: &str,
+    internal: bool,
+    resource_name: &str,
+) -> Result<bool> {
+    let response = if internal {
+        client.get_internal(path).await?
+    } else {
+        client.get(path).await?
+    };
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::api_response(status, body));
+    }
+
+    let existing = response.json::<Value>().await.map_err(|error| {
+        Error::message(format!("Failed to parse existing {resource_name}: {error}"))
+    })?;
+    Ok(is_readonly(&existing))
+}
+
 fn is_readonly(value: &Value) -> bool {
     value.get("readonly").and_then(Value::as_bool) == Some(true)
 }
