@@ -58,7 +58,7 @@ impl WorkflowsExtractor {
     ///
     /// # Arguments
     /// * `query` - Optional search query string to filter workflows
-    /// * `size` - Maximum number of results to return (default: 100)
+    /// * `size` - Requested page/search size (default: 100)
     ///
     /// # Returns
     /// Vector of workflow JSON objects from the search results
@@ -74,20 +74,73 @@ impl WorkflowsExtractor {
         );
 
         let version = self.client.server_version().await?;
-        let response = if uses_current_workflow_routes(&version) {
-            let mut query_string = url::form_urlencoded::Serializer::new(String::new());
-            query_string
-                .append_pair("size", &size.unwrap_or(100).to_string())
-                .append_pair("page", "1");
-            if let Some(query) = query.filter(|query| !query.is_empty()) {
-                query_string.append_pair("query", query);
+        if uses_current_workflow_routes(&version) {
+            let page_size = size.unwrap_or(100);
+            if page_size == 0 {
+                return Err(Error::message(
+                    "Workflow search size must be greater than zero",
+                ));
             }
-            let path = format!("api/workflows?{}", query_string.finish());
-            self.client
-                .get_internal(&path)
-                .await
-                .context("Failed to list workflows")?
-        } else {
+
+            let mut workflows = Vec::new();
+            let mut page = 1_usize;
+            loop {
+                let mut query_string = url::form_urlencoded::Serializer::new(String::new());
+                query_string
+                    .append_pair("size", &page_size.to_string())
+                    .append_pair("page", &page.to_string());
+                if let Some(query) = query.filter(|query| !query.is_empty()) {
+                    query_string.append_pair("query", query);
+                }
+                let path = format!("api/workflows?{}", query_string.finish());
+                let response = self
+                    .client
+                    .get_internal(&path)
+                    .await
+                    .with_context(|| format!("Failed to list workflows page {page}"))?;
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response.text().await.unwrap_or_default();
+                    return Err(Error::api_response(status, body));
+                }
+
+                let search_result: Value = response
+                    .json()
+                    .await
+                    .with_context(|| format!("Failed to parse workflow list page {page}"))?;
+                let page_results = search_result
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let result_count = page_results.len();
+                workflows.extend(page_results);
+
+                let reported_total = search_result.get("total").and_then(Value::as_u64);
+                if result_count == 0
+                    && reported_total.is_some_and(|total| (workflows.len() as u64) < total)
+                {
+                    return Err(Error::message(format!(
+                        "Workflow listing stopped making progress on page {page}"
+                    )));
+                }
+                let listing_complete = reported_total
+                    .map(|total| workflows.len() as u64 >= total)
+                    .unwrap_or(result_count < page_size);
+                if listing_complete {
+                    break;
+                }
+                page = page.checked_add(1).ok_or_else(|| {
+                    Error::message("Workflow listing exceeded the supported page range")
+                })?;
+            }
+
+            tracing::info!("Found {} workflow(s) via search", workflows.len());
+            return Ok(workflows);
+        }
+
+        let response = {
             let search_body = serde_json::json!({
                 "size": size.unwrap_or(100),
                 "query": query.unwrap_or("")
@@ -341,5 +394,92 @@ mod tests {
             requests[1].path,
             "/api/workflows?size=25&page=1&query=test+workflow"
         );
+    }
+
+    #[tokio::test]
+    async fn lists_every_workflow_page_with_94_endpoint() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows?size=3&page=1",
+                status: 200,
+                body: json!({
+                    "results": [
+                        {"id": "workflow-1"},
+                        {"id": "workflow-2"}
+                    ],
+                    "total": 3
+                }),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows?size=3&page=2",
+                status: 200,
+                body: json!({
+                    "results": [{"id": "workflow-3"}],
+                    "total": 3
+                }),
+            },
+        ]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+
+        let workflows = extractor.search_workflows(None, Some(3)).await.unwrap();
+
+        assert_eq!(
+            workflows
+                .iter()
+                .map(|workflow| workflow["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["workflow-1", "workflow-2", "workflow-3"]
+        );
+        let paths = server
+            .requests()
+            .into_iter()
+            .skip(1)
+            .map(|request| request.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "/api/workflows?size=3&page=1",
+                "/api/workflows?size=3&page=2"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn stops_workflow_pagination_at_reported_total() {
+        let server = TestServer::new(vec![
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/workflows?size=2&page=1",
+                status: 200,
+                body: json!({
+                    "results": [
+                        {"id": "workflow-1"},
+                        {"id": "workflow-2"}
+                    ],
+                    "total": 2
+                }),
+            },
+        ]);
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+
+        let workflows = extractor.search_workflows(None, Some(2)).await.unwrap();
+
+        assert_eq!(workflows.len(), 2);
+        assert_eq!(server.requests().len(), 2);
     }
 }

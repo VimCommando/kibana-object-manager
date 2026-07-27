@@ -312,7 +312,7 @@ async fn resolve_export_ids(
         }
         ResourceFamily::Workflows => {
             WorkflowsExtractor::new(client.clone(), None)
-                .search_workflows(None, Some(1000))
+                .search_workflows(None, None)
                 .await?
         }
     };
@@ -5205,7 +5205,7 @@ mod tests {
                 ResourceFamily::Workflows,
                 MockResponse {
                     method: "GET",
-                    path: "/api/workflows?size=1000&page=1",
+                    path: "/api/workflows?size=100&page=1",
                     status: 200,
                     body: json!({"results": [
                         {"id": "z-workflow"},
