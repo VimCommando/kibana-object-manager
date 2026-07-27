@@ -73,15 +73,15 @@ impl WorkflowsExtractor {
             self.client.space_id()
         );
 
+        let page_size = size.unwrap_or(100);
+        if page_size == 0 {
+            return Err(Error::message(
+                "Workflow search size must be greater than zero",
+            ));
+        }
+
         let version = self.client.server_version().await?;
         if uses_current_workflow_routes(&version) {
-            let page_size = size.unwrap_or(100);
-            if page_size == 0 {
-                return Err(Error::message(
-                    "Workflow search size must be greater than zero",
-                ));
-            }
-
             let mut workflows = Vec::new();
             let mut page = 1_usize;
             loop {
@@ -142,7 +142,7 @@ impl WorkflowsExtractor {
 
         let response = {
             let search_body = serde_json::json!({
-                "size": size.unwrap_or(100),
+                "size": page_size,
                 "query": query.unwrap_or("")
             });
             self.client
@@ -296,6 +296,17 @@ mod tests {
         let client = KibanaClient::new(url, Auth::None).unwrap();
         let space_client = client.space("default").unwrap();
         let _extractor = WorkflowsExtractor::new(space_client, None);
+    }
+
+    #[tokio::test]
+    async fn rejects_zero_search_size_before_version_detection() {
+        let server = TestServer::new(Vec::new());
+        let extractor = WorkflowsExtractor::new(server.client().unwrap(), None);
+
+        let error = extractor.search_workflows(None, Some(0)).await.unwrap_err();
+
+        assert!(error.to_string().contains("greater than zero"));
+        assert!(server.requests().is_empty());
     }
 
     #[tokio::test]

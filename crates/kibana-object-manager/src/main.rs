@@ -526,14 +526,15 @@ fn log_resource_batch_report(report: &ResourceBatchReport, default_applied_label
         }
     }
 
+    log::info!("{}", resource_batch_summary(report, default_applied_label));
+}
+
+fn resource_batch_summary(report: &ResourceBatchReport, applied_label: &str) -> String {
     let counts = report.counts();
-    log::info!(
-        "attempted: {}, applied: {}, skipped: {}, failed: {}",
-        counts.attempted,
-        counts.applied,
-        counts.skipped,
-        counts.failed
-    );
+    format!(
+        "attempted: {}, {}: {}, skipped: {}, failed: {}",
+        counts.attempted, applied_label, counts.applied, counts.skipped, counts.failed
+    )
 }
 
 fn resolve_env_path(env: &str) -> PathBuf {
@@ -1068,6 +1069,20 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+
+    #[test]
+    fn resource_batch_summary_uses_the_requested_success_label() {
+        let report = ResourceBatchReport::new(Vec::new());
+
+        assert_eq!(
+            resource_batch_summary(&report, "written"),
+            "attempted: 0, written: 0, skipped: 0, failed: 0"
+        );
+        assert_eq!(
+            resource_batch_summary(&report, "applied"),
+            "attempted: 0, applied: 0, skipped: 0, failed: 0"
+        );
+    }
 
     #[test]
     fn parses_every_standalone_import_family() {
