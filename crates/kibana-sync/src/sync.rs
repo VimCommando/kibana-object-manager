@@ -459,6 +459,11 @@ pub async fn expand_dependencies(
     capabilities: DependencyExpansionCapabilities,
 ) -> Result<()> {
     let space_client = client.space(space_id)?;
+    let workflow_version = if capabilities.workflows {
+        Some(space_client.server_version().await?)
+    } else {
+        None
+    };
     let mut existing_agents = ids(&bundle.agents);
     let mut existing_skills = ids(&bundle.skills);
     let mut existing_tools = ids(&bundle.tools);
@@ -512,8 +517,10 @@ pub async fn expand_dependencies(
             Dependency::Workflow(id)
                 if !existing_workflows.contains(&id) && capabilities.workflows =>
             {
-                let version = space_client.server_version().await?;
-                let path = workflow_resource_path_for_version(&version, &id);
+                let version = workflow_version
+                    .as_ref()
+                    .expect("Workflow version is present when the capability is enabled");
+                let path = workflow_resource_path_for_version(version, &id);
                 let response = space_client.get_internal(&path).await?;
                 if !response.status().is_success() {
                     let status = response.status();
@@ -740,6 +747,12 @@ mod tests {
         let server = TestServer::new(vec![
             MockResponse {
                 method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
+            },
+            MockResponse {
+                method: "GET",
                 path: "/api/agent_builder/skills/skill-s",
                 status: 200,
                 body: json!({
@@ -759,12 +772,6 @@ mod tests {
                         "workflow_id": "workflow-w"
                     }
                 }),
-            },
-            MockResponse {
-                method: "GET",
-                path: "/api/status",
-                status: 200,
-                body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
                 method: "GET",
@@ -818,9 +825,9 @@ mod tests {
         assert_eq!(
             paths,
             vec![
+                "/api/status",
                 "/api/agent_builder/skills/skill-s",
                 "/api/agent_builder/tools/tool-t",
-                "/api/status",
                 "/api/workflows/workflow/workflow-w"
             ]
         );
@@ -859,7 +866,7 @@ mod tests {
                 agents: true,
                 skills: true,
                 tools: true,
-                workflows: true,
+                workflows: false,
             },
         )
         .await

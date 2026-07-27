@@ -674,7 +674,7 @@ fn discover_skill_sources(source: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn discover_json_sources(family: ResourceFamily, source: &Path) -> Result<Vec<PathBuf>> {
-    let metadata = source_metadata(source, family.resource_name())?;
+    let metadata = source_metadata(source, family.as_str())?;
     if metadata.is_file() {
         if has_json_extension(source) {
             return Ok(vec![source.to_path_buf()]);
@@ -957,6 +957,22 @@ second""",
             );
             let error = ImportPlan::discover(family, empty.path()).unwrap_err();
             assert!(error.to_string().contains("immediate .json files"));
+        }
+    }
+
+    #[test]
+    fn missing_json_source_names_the_plural_command_family() {
+        let temp = TempDir::new().unwrap();
+
+        for (family, _) in json_families() {
+            let missing = temp.path().join(format!("missing-{}", family.as_str()));
+            let error = ImportPlan::discover(family, &missing).unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("standalone {} source", family.as_str()))
+            );
         }
     }
 
