@@ -17,6 +17,7 @@ use crate::kibana::workflows::{
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 
 const SKILL_FETCH_BATCH_SIZE: usize = 16;
@@ -459,11 +460,7 @@ pub async fn expand_dependencies(
     capabilities: DependencyExpansionCapabilities,
 ) -> Result<()> {
     let space_client = client.space(space_id)?;
-    let workflow_version = if capabilities.workflows {
-        Some(space_client.server_version().await?)
-    } else {
-        None
-    };
+    let workflow_version = OnceCell::new();
     let mut existing_agents = ids(&bundle.agents);
     let mut existing_skills = ids(&bundle.skills);
     let mut existing_tools = ids(&bundle.tools);
@@ -518,8 +515,8 @@ pub async fn expand_dependencies(
                 if !existing_workflows.contains(&id) && capabilities.workflows =>
             {
                 let version = workflow_version
-                    .as_ref()
-                    .expect("Workflow version is present when the capability is enabled");
+                    .get_or_try_init(|| space_client.server_version())
+                    .await?;
                 let path = workflow_resource_path_for_version(version, &id);
                 let response = space_client.get_internal(&path).await?;
                 if !response.status().is_success() {
@@ -747,12 +744,6 @@ mod tests {
         let server = TestServer::new(vec![
             MockResponse {
                 method: "GET",
-                path: "/api/status",
-                status: 200,
-                body: json!({"version": {"number": "9.4.1"}}),
-            },
-            MockResponse {
-                method: "GET",
                 path: "/api/agent_builder/skills/skill-s",
                 status: 200,
                 body: json!({
@@ -760,6 +751,12 @@ mod tests {
                     "name": "Skill S",
                     "tool_ids": ["tool-t"]
                 }),
+            },
+            MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
                 method: "GET",
@@ -825,9 +822,9 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "/api/status",
                 "/api/agent_builder/skills/skill-s",
                 "/api/agent_builder/tools/tool-t",
+                "/api/status",
                 "/api/workflows/workflow/workflow-w"
             ]
         );
@@ -866,7 +863,7 @@ mod tests {
                 agents: true,
                 skills: true,
                 tools: true,
-                workflows: false,
+                workflows: true,
             },
         )
         .await

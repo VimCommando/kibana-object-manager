@@ -312,7 +312,7 @@ async fn resolve_export_ids(
         }
         ResourceFamily::Workflows => {
             WorkflowsExtractor::new(client.clone(), None)
-                .search_workflows(None, None)
+                .search_all_workflows(None)
                 .await?
         }
     };
