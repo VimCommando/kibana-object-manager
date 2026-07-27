@@ -428,10 +428,44 @@ fn required_export_name<'a>(value: &'a Value, label: &str) -> kibana_sync::Resul
 }
 
 fn validate_immediate_filename(name: &str, family: ResourceFamily) -> kibana_sync::Result<()> {
+    const PORTABLE_FORBIDDEN: [char; 10] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '&'];
+    let reserved_stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let is_windows_reserved = matches!(
+        reserved_stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+
     if name.trim().is_empty()
         || matches!(name, "." | "..")
-        || name.contains(['/', '\\'])
+        || name.ends_with(['.', ' '])
+        || name.contains(PORTABLE_FORBIDDEN)
         || name.chars().any(char::is_control)
+        || is_windows_reserved
     {
         return Err(kibana_sync::Error::message(format!(
             "{} name cannot be represented as an immediate JSON filename: {name:?}",
@@ -5637,6 +5671,37 @@ mod tests {
                 .to_string()
                 .contains("missing both 'name' and fallback 'id'")
         );
+    }
+
+    #[test]
+    fn immediate_export_filenames_reject_nonportable_names_for_every_json_family() {
+        for family in [
+            ResourceFamily::Tools,
+            ResourceFamily::Agents,
+            ResourceFamily::Workflows,
+        ] {
+            for name in [
+                "bad/name",
+                "bad\\name",
+                "bad:name",
+                "bad*name",
+                "bad?name",
+                "bad\"name",
+                "bad<name",
+                "bad>name",
+                "bad|name",
+                "bad&name",
+                "trailing.",
+                "trailing ",
+                "CON",
+                "lpt9.backup",
+            ] {
+                assert!(
+                    validate_immediate_filename(name, family).is_err(),
+                    "{family} accepted {name:?}"
+                );
+            }
+        }
     }
 
     #[test]
