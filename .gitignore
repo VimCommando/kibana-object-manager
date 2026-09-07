@@ -1,6 +1,5 @@
 # Rust build artifacts
 /target
-Cargo.lock
 node_modules/
 
 # Kibana Object Manager temporary files
@@ -25,3 +24,6 @@ manifest_patch.json
 test_output/
 temp_test_*
 .reference/
+
+# Python maintenance tools
+__pycache__/

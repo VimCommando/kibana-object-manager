@@ -1,7 +1,8 @@
 # push Specification
 
 ## Purpose
-TBD - created by archiving change complete-workflows-support. Update Purpose after archive.
+Apply locally managed Kibana resources to selected spaces while preserving dependency order and reporting failures.
+
 ## Requirements
 ### Requirement: Workflows Loader Payload Sanitization
 The `WorkflowsLoader` MUST sanitize workflow JSON payloads before sending them to the Kibana API. It MUST remove read-only system fields to prevent 400 Bad Request errors.

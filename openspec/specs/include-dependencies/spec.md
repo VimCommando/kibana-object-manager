@@ -1,7 +1,8 @@
 # include-dependencies Specification
 
 ## Purpose
-TBD - created by archiving change include-dependencies. Update Purpose after archive.
+Discover and include the resources required by workflows, agents, tools, and skills when tracking Kibana assets.
+
 ## Requirements
 ### Requirement: Automatic Dependency Inclusion
 When adding an object to a manifest via the `add` command, `kibob` MUST automatically identify and add all referenced dependencies to their respective manifests, unless the `--exclude-dependencies` flag is provided.

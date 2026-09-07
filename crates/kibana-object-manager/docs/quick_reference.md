@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - Quick Reference"
+description: Command and configuration reference for kibob.
+generated: { by: codex/gpt-6, at: 2026-09-07T06:16:17Z }
+---
+
 # Kibana Object Manager - Quick Reference
 
 Fast reference for `kibob` commands and options.
@@ -300,4 +307,4 @@ cargo install --force kibana-object-manager
 
 ---
 
-**Need more details?** See the full [User Guide](USER_GUIDE.md).
+**Need more details?** See the full [User Guide](user_guide.md).

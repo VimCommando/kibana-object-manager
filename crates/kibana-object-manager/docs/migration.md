@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Manifest Migration Guide"
+description: Migrate legacy projects into the multi-space layout.
+generated: { by: codex/gpt-6, at: 2026-09-07T05:36:37Z }
+---
+
 # Manifest Migration Guide
 
 ## Overview
@@ -448,6 +455,6 @@ If migration fails partway through:
 
 ## See Also
 
-- [Saved Objects API Documentation](../kibana/saved_objects/)
-- [Spaces API Documentation](../kibana/spaces/)
-- [CLI Reference](../cli/)
+- [Saved Objects API Documentation](../../kibana-sync/src/kibana/saved_objects/)
+- [Spaces API Documentation](../../kibana-sync/src/kibana/spaces/)
+- [CLI Reference](../src/cli.rs)

@@ -99,7 +99,21 @@ fn kibana_client_builder_from_env() -> Result<KibanaClientBuilder> {
 
     Ok(KibanaClient::builder(url)
         .auth(auth)
+        .request_timeout(timeout_from_env("KIBANA_REQUEST_TIMEOUT", 300)?)
+        .connect_timeout(timeout_from_env("KIBANA_CONNECT_TIMEOUT", 10)?)
         .max_concurrency(max_requests))
+}
+
+fn timeout_from_env(name: &str, default: u64) -> Result<std::time::Duration> {
+    let seconds = match std::env::var(name) {
+        Ok(value) => value
+            .parse::<std::num::NonZeroU64>()
+            .with_context(|| format!("{name} must be a positive integer in seconds"))?
+            .get(),
+        Err(std::env::VarError::NotPresent) => default,
+        Err(error) => return Err(error).with_context(|| format!("Invalid {name}")),
+    };
+    Ok(std::time::Duration::from_secs(seconds))
 }
 
 /// Build one space-scoped client without reading project manifests.

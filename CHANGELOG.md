@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bound each HTTP request to 300 seconds and connection establishment to 10 seconds by default. Set `KIBANA_REQUEST_TIMEOUT` and `KIBANA_CONNECT_TIMEOUT` to positive integer seconds, or use the library builder setters for longer operations. A timed-out remote write may already have succeeded; inspect remote state before retrying.
+
+### Fixed
+
+- Send CLI diagnostics to stderr and remove embedded ANSI color codes from redirected logs, respecting `NO_COLOR`.
+- Repair documentation links after the workspace layout change.
+
 ## [0.4.0] - 2026-07-26
 
 ### Added

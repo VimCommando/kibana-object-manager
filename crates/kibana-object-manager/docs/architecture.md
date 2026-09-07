@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - Architecture"
+description: CLI modules, library boundaries, and ETL data flow.
+generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+---
+
 # Kibana Object Manager - Architecture
 
 Technical deep-dive into the design and implementation of `kibob`.
@@ -840,7 +847,7 @@ kibob push ./test-project
 
 ## Contributing
 
-Want to extend kibob? See [CONTRIBUTING.md](../CONTRIBUTING.md) for:
+Want to extend kibob? See [Contributor guide](contributing.md) for:
 - Development setup
 - Code style guidelines
 - How to add new features

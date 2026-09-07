@@ -1,7 +1,8 @@
 # kibana-sync Specification
 
 ## Purpose
-TBD - created by archiving change refactor-space-into-kibana-sync. Update Purpose after archive.
+Provide a reusable, storage-neutral Rust library for authenticated Kibana API access and resource synchronization.
+
 ## Requirements
 ### Requirement: Space-Aware Client Architecture
 
@@ -232,3 +233,20 @@ The `kibana-sync` crate SHALL use `tracing` for diagnostic instrumentation and S
 - **WHEN** a consumer uses `kibana-sync`
 - **THEN** the consumer controls whether and how tracing events are recorded by installing its own subscriber
 - **AND** the library does not initialize or modify global subscriber state
+
+### Requirement: Configurable request deadlines
+The library SHALL bound HTTP requests with configurable, nonzero deadlines. The default request deadline SHALL be 300 seconds including response body reads, and the default connection deadline SHALL be 10 seconds. Waiting for a shared concurrency permit is outside the HTTP request deadline.
+
+#### Scenario: A server stalls
+- **GIVEN** a server accepts a request but does not respond within the configured request deadline
+- **WHEN** the client awaits its response
+- **THEN** the library returns a transport timeout error
+
+#### Scenario: Invalid deadline
+- **WHEN** a consumer configures a zero request or connection deadline
+- **THEN** client construction fails before connecting
+
+#### Scenario: CLI deadline configuration
+- **WHEN** the CLI reads KIBANA_REQUEST_TIMEOUT or KIBANA_CONNECT_TIMEOUT
+- **THEN** it requires a positive integer number of seconds
+- **AND** passes those values to the library without changing the package's default concurrency

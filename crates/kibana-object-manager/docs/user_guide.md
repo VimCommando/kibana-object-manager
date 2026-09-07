@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - User Guide"
+description: Install and use kibob to manage Kibana assets.
+generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+---
+
 # Kibana Object Manager - User Guide
 
 Complete guide to using `kibob` for managing Kibana saved objects with version control.
@@ -409,7 +416,7 @@ kibob migrate . --no-backup
 - Old: `manifest.json` (flat file)
 - New: `manifest/saved_objects.json` (directory structure)
 
-See [MIGRATION.md](MIGRATION.md) for detailed migration guide.
+See [migration.md](migration.md) for detailed migration guide.
 
 ## Common Workflows
 
@@ -695,7 +702,7 @@ kibob --debug pull .
 
 ## Next Steps
 
-- [Examples](EXAMPLES.md) - Real-world scenarios and recipes
-- [Architecture](ARCHITECTURE.md) - Technical deep-dive
-- [Contributing](../CONTRIBUTING.md) - Help improve kibob
-- [Quick Reference](QUICK_REFERENCE.md) - Command cheat sheet
+- [Examples](examples.md) - Real-world scenarios and recipes
+- [Architecture](architecture.md) - Technical deep-dive
+- [Contributing](contributing.md) - Help improve kibob
+- [Quick Reference](quick_reference.md) - Command cheat sheet

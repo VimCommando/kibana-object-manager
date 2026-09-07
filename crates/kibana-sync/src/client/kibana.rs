@@ -11,6 +11,7 @@ use semver::Version;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, trace};
 use url::Url;
@@ -138,6 +139,8 @@ pub struct KibanaClientBuilder {
     url: Url,
     auth: Auth,
     max_concurrency: usize,
+    request_timeout: Duration,
+    connect_timeout: Duration,
     spaces: SpaceRegistry,
 }
 
@@ -147,6 +150,8 @@ impl KibanaClientBuilder {
             url,
             auth: Auth::None,
             max_concurrency: 8,
+            request_timeout: Duration::from_secs(300),
+            connect_timeout: Duration::from_secs(10),
             spaces: default_spaces(),
         }
     }
@@ -163,6 +168,19 @@ impl KibanaClientBuilder {
         self
     }
 
+    /// Set the deadline for each HTTP request, including reading its response body.
+    /// Defaults to 300 seconds. Time waiting for a concurrency permit is separate.
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
+    /// Set the connection establishment timeout. Defaults to 10 seconds.
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
     /// Replace the space registry with caller-provided spaces.
     pub fn spaces(mut self, spaces: impl IntoIterator<Item = (String, String)>) -> Self {
         self.spaces = spaces.into_iter().collect();
@@ -174,6 +192,11 @@ impl KibanaClientBuilder {
 
     /// Build the root Kibana client.
     pub fn build(self) -> Result<KibanaClient> {
+        if self.request_timeout.is_zero() || self.connect_timeout.is_zero() {
+            return Err(Error::InvalidConfiguration(
+                "request and connection timeouts must be greater than zero".to_string(),
+            ));
+        }
         if self.max_concurrency == 0 {
             return Err(Error::InvalidConfiguration(
                 "max_concurrency must be greater than zero".to_string(),
@@ -201,7 +224,11 @@ impl KibanaClientBuilder {
                 // No authentication header.
             }
         }
-        let client = Client::builder().default_headers(headers).build()?;
+        let client = Client::builder()
+            .default_headers(headers)
+            .timeout(self.request_timeout)
+            .connect_timeout(self.connect_timeout)
+            .build()?;
         let semaphore = Arc::new(Semaphore::new(self.max_concurrency));
 
         Ok(KibanaClient {
