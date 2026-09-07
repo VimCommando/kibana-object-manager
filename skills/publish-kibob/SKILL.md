@@ -13,4 +13,4 @@ Read the [release checklist](../../crates/kibana-object-manager/docs/release.md)
 4. Use the exact reviewed revision for tags and the Homebrew source URL. Follow the checklist's recovery path after partial failure. Preserve published versions, tags, and archive bytes.
 5. Report package versions, tag and commit, checks performed, and incomplete registry or Homebrew steps.
 
-For CLI releases, the [formula updater](scripts/update_homebrew_formula.py) validates the source archive before editing the supplied formula. Run installation checks and open a reviewable tap PR. Creating a tap or publishing to a new owner is a separate task.
+For CLI releases, the [formula updater](scripts/update_homebrew_formula.sh) validates the source archive before editing the supplied formula. Run installation checks and open a reviewable tap PR. Creating a tap or publishing to a new owner is a separate task.

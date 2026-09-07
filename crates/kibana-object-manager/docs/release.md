@@ -2,7 +2,7 @@
 type: Guide
 title: Release checklist
 description: Prepare, verify, publish, and recover workspace releases.
-generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+generated: { by: codex/gpt-6, at: 2026-09-07T18:06:33Z }
 ---
 
 # Release checklist
@@ -40,7 +40,7 @@ Execute publication only within the user's authorization. Create the selected ta
 Update `Formula/kibob.rb` in `VimCommando/homebrew-tools`. The user-facing tap name is `VimCommando/tools`.
 
 ```sh
-python3 skills/publish-kibob/scripts/update_homebrew_formula.py \
+bash skills/publish-kibob/scripts/update_homebrew_formula.sh \
   --version <cli-version> --formula /path/to/homebrew-tools/Formula/kibob.rb
 ```
 

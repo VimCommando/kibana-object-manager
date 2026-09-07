@@ -24,6 +24,3 @@ manifest_patch.json
 test_output/
 temp_test_*
 .reference/
-
-# Python maintenance tools
-__pycache__/

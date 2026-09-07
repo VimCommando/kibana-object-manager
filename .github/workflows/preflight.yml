@@ -25,9 +25,10 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
           cargo +1.97.1 install okf --version 0.2.7 --locked
+          cargo +1.97.1 install tq-cli --version 0.3.0 --locked
           npm install --global @fission-ai/openspec@1.11.0
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes shellcheck ripgrep
       - name: Local preflight
         run: bash scripts/preflight.sh
       - name: Pull request contract
@@ -35,7 +36,7 @@ jobs:
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: python3 scripts/check_pr.py --base "$PR_BASE" --head "$PR_HEAD" --event "$GITHUB_EVENT_PATH"
+        run: bash scripts/check_pr.sh --base "$PR_BASE" --head "$PR_HEAD" --event "$GITHUB_EVENT_PATH"
   msrv:
     runs-on: ubuntu-24.04
     steps:

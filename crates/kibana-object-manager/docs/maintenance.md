@@ -2,7 +2,7 @@
 type: Policy
 title: Repository maintenance
 description: Local validation, documentation boundaries, compatibility, and release procedures.
-generated: { by: codex/gpt-6, at: 2026-09-07T06:27:13Z }
+generated: { by: codex/gpt-6, at: 2026-09-07T18:06:33Z }
 ---
 
 # Repository maintenance
@@ -16,10 +16,11 @@ bash scripts/preflight.sh
 bash scripts/preflight.sh msrv
 ```
 
-Install the compiler in `rust-toolchain.toml`, Rust 1.89.0 for the minimum-version check, ShellCheck, Python 3.11 or newer, OKF 0.2.7, and OpenSpec 1.11.0. Python handles Markdown, Git event JSON, and source archive parsing in maintenance tooling; the application remains Rust.
+Install the compiler in `rust-toolchain.toml`, Rust 1.89.0 for the minimum-version check, ShellCheck, ripgrep, tq-cli 0.3.0, OKF 0.2.7, and OpenSpec 1.11.0. Repository scripts use Bash 3.2 with composed utilities. Use tq for JSON queries, Cargo for manifest parsing, and standard text/archive utilities for the remaining work.
 
 ```sh
 cargo install okf --version 0.2.7 --locked
+cargo install tq-cli --version 0.3.0 --locked
 npm install --global @fission-ai/openspec@1.11.0
 ```
 
@@ -48,7 +49,7 @@ Contributors review the requirement correspondence, particularly when multiple c
 Repository maintainers should require `checks` and `msrv` before merge and require PR review. The workflow alone does not configure GitHub branch protection. Local gate testing uses a GitHub pull request event fixture:
 
 ```sh
-python3 scripts/check_pr.py --base origin/main --head HEAD --event /tmp/pr-event.json
+bash scripts/check_pr.sh --base origin/main --head HEAD --event /tmp/pr-event.json
 ```
 
 ## Changelog
