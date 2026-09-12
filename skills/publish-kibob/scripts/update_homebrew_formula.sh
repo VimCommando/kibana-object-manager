@@ -10,7 +10,10 @@ while (( $# )); do
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-printf '%s\n' "$version" | rg -q '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || {
+numeric_identifier='(0|[1-9][0-9]*)'
+prerelease_identifier='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+build_identifier='[0-9A-Za-z-]+'
+printf '%s\n' "$version" | rg -q "^$numeric_identifier\.$numeric_identifier\.$numeric_identifier(-$prerelease_identifier(\.$prerelease_identifier)*)?(\+$build_identifier(\.$build_identifier)*)?$" || {
   echo 'Use --version with a semantic version without a v prefix' >&2; exit 2;
 }
 [[ -n $check_archive || -f $formula ]] || { echo 'Use --formula with an existing formula' >&2; exit 2; }

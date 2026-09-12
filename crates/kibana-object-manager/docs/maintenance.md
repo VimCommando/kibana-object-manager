@@ -2,7 +2,7 @@
 type: Policy
 title: Repository maintenance
 description: Local validation, documentation boundaries, compatibility, and release procedures.
-generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
+generated: { by: codex/gpt-6, at: 2026-09-12T17:19:44Z }
 ---
 
 # Repository maintenance
@@ -45,6 +45,8 @@ Every documentation PR must pass the complete bundle check. Metadata changes rec
 Use a Conventional Commit PR title and squash merge so the resulting main-branch commit follows the same convention. Preserve existing commit history. The PR template requires `OpenSpec-Changes: none` or comma-separated IDs, including changes associated with implementation whose artifacts do not appear in the diff.
 
 The PR check compares committed head state against the target merge base. It selects added, edited, deleted, and renamed active change paths and archive paths, plus explicitly associated IDs. Associated changes must be archived with proposal and completed tasks. Requirement additions and modifications must match the main specs after whitespace normalization; removals and renames must appear in the final spec state. A change without deltas needs an archived `no-spec-deltas.md` explaining why, reviewed with the PR. Unrelated active changes do not block the gate.
+
+Direct changes under `openspec/specs/` require an associated change, either selected from the artifact diff or declared in `OpenSpec-Changes`. A PR that only edits main specs and declares `none` fails the gate.
 
 Contributors review the requirement correspondence, particularly when multiple changes modify the same requirement. The automated comparison is intentionally strict about wording and cannot judge semantic equivalence. Update the associated delta to the final reviewed contract when necessary.
 

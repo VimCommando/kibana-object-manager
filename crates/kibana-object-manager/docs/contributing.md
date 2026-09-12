@@ -2,7 +2,7 @@
 type: Guide
 title: Contributing to Kibana Object Manager
 description: Contributor setup, validation, testing, and review guidance.
-generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+generated: { by: codex/gpt-6, at: 2026-09-12T17:19:44Z }
 ---
 
 # Contributing to Kibana Object Manager
@@ -92,7 +92,7 @@ git remote add upstream https://github.com/VimCommando/kibana-object-manager.git
 # Install Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Update Rust to latest stable
+# Install the repository-pinned toolchain
 rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
 
 # Install development tools

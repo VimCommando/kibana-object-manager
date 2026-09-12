@@ -88,6 +88,9 @@ new_repo
 git mv openspec/changes/unrelated openspec/changes/renamed; commit
 reject 'rename checks both paths' 'unrelated: expected' gate
 new_repo
+mkdir -p openspec/specs/example; cp "$requirement" openspec/specs/example/spec.md; commit
+reject 'main spec edit requires a change association' 'Main spec changes require' gate
+new_repo
 archive_change example; commit
 reject 'skipped synchronization' 'not synchronized' gate
 mkdir -p openspec/specs/example; cp "$requirement" openspec/specs/example/spec.md; commit
@@ -138,6 +141,10 @@ sed 's/0.4.0/0.3.0/g' "$work/valid.lock" > source/Cargo.lock; pack
 reject 'lockfile disagreement' 'Lockfile version mismatch' check_archive
 cp "$work/valid.lock" source/Cargo.lock; pack
 reject 'invalid version' 'semantic version' bash "$updater" --version ../../main --check-archive "$work/source.tar.gz"
+for invalid_version in 1.2.3-foo..bar 1.2.3-01 1.2.3-alpha.01 1.2.3+build..meta; do
+  reject "invalid SemVer: $invalid_version" 'semantic version' bash "$updater" --version "$invalid_version" --check-archive "$work/source.tar.gz"
+done
+reject 'trailing prerelease hyphen is valid SemVer' 'selected release' bash "$updater" --version 0.4.0-foo- --check-archive "$work/source.tar.gz"
 printf 'server error' > "$work/source.tar.gz"
 reject 'not an archive' 'gzip|format|compressed' check_archive
 dd if=/dev/zero bs=1048576 count=257 2>/dev/null | gzip > "$work/source.tar.gz"

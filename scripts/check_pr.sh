@@ -37,6 +37,10 @@ git diff --name-only --no-renames "$merge_base" "$head" -- openspec/changes/ |
   awk -F / 'NF>=4 && $3!="archive" { print $3 }
     NF>=5 && $3=="archive" { sub(/^[0-9]+-[0-9]+-[0-9]+-/, "", $4); print $4 }' >> "$work/ids"
 sort -u "$work/ids" > "$work/selected"
+git diff --name-only "$merge_base" "$head" -- openspec/specs/ > "$work/main-spec-changes"
+if [[ -s $work/main-spec-changes && ! -s $work/selected ]]; then
+  fail 'Main spec changes require an associated OpenSpec change; declare its ID in OpenSpec-Changes'
+fi
 git ls-tree -r --name-only "$head" > "$work/files"
 while IFS= read -r change; do
   rg -q "^openspec/changes/$change/" "$work/files" && fail "$change: active change must be archived"
