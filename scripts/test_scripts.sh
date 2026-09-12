@@ -22,14 +22,19 @@ printf '[Guide](crates/kibana-object-manager/docs/guide.md)\n' > "$work/docs_rep
 : > "$work/docs_repo/AGENTS.md"
 printf '1. [Guide](guide.md)\n' > "$docs/index.md"
 printf '# Guide\n' > "$docs/guide.md"
-: > "$docs/images/example_image.svg"
+: > "$docs/images/example-image.svg"
 pass 'lowercase nested docs assets' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
-mv "$docs/images/example_image.svg" "$docs/images/Example.svg"
-reject 'uppercase nested asset' 'must be lowercase' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
+mv "$docs/images/example-image.svg" "$docs/images/Example.svg"
+reject 'uppercase nested asset' 'must be lower-kebab-case' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
 mv "$docs/images/Example.svg" "$docs/images/example.svg"
 mv "$docs/images" "$docs/Images"
-reject 'uppercase directory' 'must be lowercase' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
+reject 'uppercase directory' 'must be lower-kebab-case' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
 mv "$docs/Images" "$docs/images"
+for name in example_image.svg 'example image.svg'; do
+  mv "$docs/images/example.svg" "$docs/images/$name"
+  reject "non-kebab filename: $name" 'must be lower-kebab-case' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
+  mv "$docs/images/$name" "$docs/images/example.svg"
+done
 printf '[Guide](crates/kibana-object-manager/docs/GUIDE.md)\n' > "$work/docs_repo/README.md"
 reject 'wrong link case' 'incorrect case' bash "$repo/scripts/check_docs.sh" "$work/docs_repo"
 
@@ -135,6 +140,12 @@ cp "$work/valid.lock" source/Cargo.lock; pack
 reject 'invalid version' 'semantic version' bash "$updater" --version ../../main --check-archive "$work/source.tar.gz"
 printf 'server error' > "$work/source.tar.gz"
 reject 'not an archive' 'gzip|format|compressed' check_archive
+dd if=/dev/zero bs=1048576 count=257 2>/dev/null | gzip > "$work/source.tar.gz"
+reject 'oversized expansion has actionable error' 'Expanded archive exceeds 256 MiB' check_archive
+pack
+head -c "$(( $(wc -c < "$work/source.tar.gz") - 4 ))" "$work/source.tar.gz" > "$work/truncated.gz"
+mv "$work/truncated.gz" "$work/source.tar.gz"
+reject 'truncated gzip remains rejected' 'gzip|compressed|unexpected|invalid' check_archive
 pack
 mkdir "$work/bin"
 cat > "$work/bin/curl" <<'EOF'

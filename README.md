@@ -544,15 +544,15 @@ Automate dashboard and asset deployments in CI/CD pipelines. Keep environments c
 
 ## Documentation
 
-- [Documentation index](crates/kibana-object-manager/docs/index.md)
-- [Repository maintenance](crates/kibana-object-manager/docs/maintenance.md) - Validation, releases, and CLI output guarantees
+1. [Documentation index](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/index.md)
+2. [Repository maintenance](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/maintenance.md) - Validation, releases, and CLI output guarantees
 
-- [User Guide](crates/kibana-object-manager/docs/user_guide.md) - Comprehensive command reference and workflows
-- [Architecture](crates/kibana-object-manager/docs/architecture.md) - Technical deep-dive for contributors
-- [Examples](crates/kibana-object-manager/docs/examples.md) - Real-world usage scenarios
-- [Migration Guide](crates/kibana-object-manager/docs/migration.md) - Migrating from legacy format
-- [Quick Reference](crates/kibana-object-manager/docs/quick_reference.md) - Command cheat sheet
-- [Contributing](crates/kibana-object-manager/docs/contributing.md) - Development guidelines
+3. [User Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/user-guide.md) - Comprehensive command reference and workflows
+4. [Architecture](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/architecture.md) - Technical deep-dive for contributors
+5. [Examples](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/examples.md) - Real-world usage scenarios
+6. [Migration Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/migration.md) - Migrating from legacy format
+7. [Quick Reference](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/quick-reference.md) - Command cheat sheet
+8. [Contributing](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/contributing.md) - Development guidelines
 
 ## Agent Skill
 
@@ -704,7 +704,7 @@ Each space definition is stored in its own directory as `{space_id}/space.json`.
 - `marketing/space.json`
 - `engineering/space.json`
 
-See the [Spaces Guide](crates/kibana-object-manager/docs/spaces.md) for complete documentation.
+See the [Spaces Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/spaces.md) for complete documentation.
 
 ## Migrating from Bash Version
 
@@ -721,7 +721,7 @@ cat default/manifest/saved_objects.json
 kibob pull ./my-project
 ```
 
-See [Migration Guide](crates/kibana-object-manager/docs/migration.md) for details.
+See [Migration Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/migration.md) for details.
 
 ## Environment Variables Reference
 
@@ -743,7 +743,7 @@ See [Migration Guide](crates/kibana-object-manager/docs/migration.md) for detail
 
 ## Contributing
 
-Contributions are welcome. See [Contributor guide](crates/kibana-object-manager/docs/contributing.md) for development setup and guidelines.
+Contributions are welcome. See [Contributor guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/contributing.md) for development setup and guidelines.
 
 ## License
 

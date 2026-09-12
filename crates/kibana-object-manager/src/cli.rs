@@ -77,7 +77,7 @@ pub fn load_kibana_client(project_dir: impl AsRef<Path>) -> Result<KibanaClient>
         .context("Failed to create Kibana client")
 }
 
-fn kibana_client_builder_from_env() -> Result<KibanaClientBuilder> {
+pub(crate) fn kibana_client_builder_from_env() -> Result<KibanaClientBuilder> {
     let url_str = std::env::var("KIBANA_URL").context("KIBANA_URL environment variable not set")?;
     let url = Url::parse(&url_str).with_context(|| format!("Invalid KIBANA_URL: {}", url_str))?;
 

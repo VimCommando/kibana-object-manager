@@ -2,7 +2,7 @@
 type: Policy
 title: Repository maintenance
 description: Local validation, documentation boundaries, compatibility, and release procedures.
-generated: { by: codex/gpt-6, at: 2026-09-07T18:06:33Z }
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
 ---
 
 # Repository maintenance
@@ -24,7 +24,7 @@ cargo install tq-cli --version 0.3.0 --locked
 npm install --global @fission-ai/openspec@1.11.0
 ```
 
-The `rust` preflight mode runs formatting, Clippy, behavior tests, doctests, shell lint, and maintenance-tool tests. The `docs` mode validates the complete documentation bundle, local authored links, its index, and all current OpenSpec specs and active changes. `msrv` checks all workspace targets and features with the promised minimum compiler. CI calls the same entry point. Live Kibana tests remain a separate opt-in check described in [Live tests](live_tests.md).
+The `rust` preflight mode runs formatting, Clippy, behavior tests, doctests, shell lint, and maintenance-tool tests. The `docs` mode validates the complete documentation bundle, local authored links, its index, and all current OpenSpec specs and active changes. `msrv` checks all workspace targets and features with the promised minimum compiler. CI calls the same entry point. Live Kibana tests remain a separate opt-in check described in [Live tests](live-tests.md).
 
 The development/release compiler pin is separate from package `rust-version`. Application builds use the committed lockfile and `--locked`. Minimum-version checks cover the locked dependencies; release preparation must also test the library as a registry consumer with fresh dependency resolution.
 
@@ -34,7 +34,9 @@ Tests should cover behavior and failures, rather than a fixed coverage percentag
 
 This directory is the complete OKF bundle. Its [index](index.md) lists every concept. The repository root, OpenSpec, agent skills, scripts, caches, and temporary reports are outside the bundle. Validation does not scan those paths as OKF concepts. Authored local links from the README and contributor guide are checked separately.
 
-All filenames and directory names under this bundle use lowercase, including nested assets. Use lower_snake_case for new names. The shared validator checks naming and exact link case.
+All filenames and directory names under this bundle use lower-kebab-case, including nested assets. Separate words with hyphens, not underscores. Use numbered lists in indexes and authored reference lists. The shared validator checks naming and exact link case; review list style when editing documentation.
+
+Use native OKF validation and lint capabilities before adding custom checks. Supplemental scripts should cover only demonstrated repository-policy gaps, such as filename conventions and links originating outside the bundle. Documentation links in the root README must also work when Cargo packages that README at the crate root.
 
 Every documentation PR must pass the complete bundle check. Metadata changes record the actual actor and UTC time in `generated`. Preserve existing bodies and attribution when importing references. Format validation does not establish that the guidance is factually current.
 
@@ -45,6 +47,8 @@ Use a Conventional Commit PR title and squash merge so the resulting main-branch
 The PR check compares committed head state against the target merge base. It selects added, edited, deleted, and renamed active change paths and archive paths, plus explicitly associated IDs. Associated changes must be archived with proposal and completed tasks. Requirement additions and modifications must match the main specs after whitespace normalization; removals and renames must appear in the final spec state. A change without deltas needs an archived `no-spec-deltas.md` explaining why, reviewed with the PR. Unrelated active changes do not block the gate.
 
 Contributors review the requirement correspondence, particularly when multiple changes modify the same requirement. The automated comparison is intentionally strict about wording and cannot judge semantic equivalence. Update the associated delta to the final reviewed contract when necessary.
+
+OpenSpec's native `validate --archived` reports archived task completion. Accept its semantics rather than adding stricter task parsing. The historical findings in `2026-01-20-refactor-space-into-kibana-client` and `2026-01-21-add-spaces-list` were accepted as-is on 2026-09-07. Preserve their task records and report the CLI's result accurately. They do not block unrelated PRs.
 
 Repository maintainers should require `checks` and `msrv` before merge and require PR review. The workflow alone does not configure GitHub branch protection. Local gate testing uses a GitHub pull request event fixture:
 

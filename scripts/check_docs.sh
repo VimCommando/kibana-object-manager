@@ -3,6 +3,8 @@ set -euo pipefail
 cd "${1:-$(dirname "${BASH_SOURCE[0]}")/..}"
 bundle=crates/kibana-object-manager/docs
 errors=0
+entries=$(mktemp)
+trap 'rm -f "$entries"' EXIT
 fail() { printf '%s\n' "$*" >&2; errors=1; }
 
 # Walk each component using directory entries, so macOS cannot hide case errors.
@@ -22,10 +24,11 @@ exact_path() {
   done
 }
 
+find "$bundle" ! -path "$bundle" -print0 > "$entries"
 while IFS= read -r -d '' path; do
   name=${path##*/}
-  [[ $name != *[A-Z]* ]] || fail "$path: docs filenames and directories must be lowercase"
-done < <(find "$bundle" -mindepth 1 -print0)
+  [[ $name =~ ^[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*$ ]] || fail "$path: docs filenames and directories must be lower-kebab-case"
+done < "$entries"
 
 files=(README.md AGENTS.md)
 while IFS= read -r -d '' path; do files+=("$path"); done < <(find "$bundle" -type f -name '*.md' -print0)

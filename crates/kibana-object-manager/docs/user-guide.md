@@ -2,7 +2,7 @@
 type: Guide
 title: "Kibana Object Manager - User Guide"
 description: Install and use kibob to manage Kibana assets.
-generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
 ---
 
 # Kibana Object Manager - User Guide
@@ -698,11 +698,11 @@ kibob --debug pull .
 
 - **GitHub Issues:** https://github.com/VimCommando/kibana-object-manager/issues
 - **Discussions:** https://github.com/VimCommando/kibana-object-manager/discussions
-- **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/docs
+- **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/crates/kibana-object-manager/docs
 
 ## Next Steps
 
-- [Examples](examples.md) - Real-world scenarios and recipes
-- [Architecture](architecture.md) - Technical deep-dive
-- [Contributing](contributing.md) - Help improve kibob
-- [Quick Reference](quick_reference.md) - Command cheat sheet
+1. [Examples](examples.md) - Real-world scenarios and recipes
+2. [Architecture](architecture.md) - Technical deep-dive
+3. [Contributing](contributing.md) - Help improve kibob
+4. [Quick Reference](quick-reference.md) - Command cheat sheet

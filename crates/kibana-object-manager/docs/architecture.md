@@ -2,7 +2,7 @@
 type: Guide
 title: "Kibana Object Manager - Architecture"
 description: CLI modules, library boundaries, and ETL data flow.
-generated: { by: codex/gpt-6, at: 2026-09-07T06:25:53Z }
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
 ---
 
 # Kibana Object Manager - Architecture
@@ -857,10 +857,10 @@ Want to extend kibob? See [Contributor guide](contributing.md) for:
 
 ## Resources
 
-- **Kibana API Docs**: https://www.elastic.co/guide/en/kibana/current/api.html
-- **Tokio Docs**: https://tokio.rs/
-- **Async Trait**: https://docs.rs/async-trait/
-- **reqwest Docs**: https://docs.rs/reqwest/
+1. **Kibana API Docs**: https://www.elastic.co/guide/en/kibana/current/api.html
+2. **Tokio Docs**: https://tokio.rs/
+3. **Async Trait**: https://docs.rs/async-trait/
+4. **reqwest Docs**: https://docs.rs/reqwest/
 
 ---
 

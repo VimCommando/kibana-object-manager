@@ -24,8 +24,18 @@ else
 fi
 (( $(wc -c < "$work/source.tar.gz") <= 134217728 )) || { echo 'Archive exceeds 128 MiB' >&2; exit 1; }
 # Bound expansion before extraction. Only ordinary files and directories are allowed.
-expanded=$(gzip -dc "$work/source.tar.gz" | head -c 268435457 | wc -c)
+if gzip -dc "$work/source.tar.gz" | head -c 268435457 | wc -c > "$work/expanded"; then
+  expansion_status=(0 0 0)
+else
+  expansion_status=("${PIPESTATUS[@]}")
+fi
+read -r expanded < "$work/expanded"
+# A bounded read may terminate gzip with SIGPIPE. Report oversize first, while
+# still rejecting every decompression/read failure for streams below the limit.
 (( expanded <= 268435456 )) || { echo 'Expanded archive exceeds 256 MiB' >&2; exit 1; }
+(( expansion_status[0] == 0 && expansion_status[1] == 0 && expansion_status[2] == 0 )) || {
+  echo 'Invalid gzip archive or failed expansion check' >&2; exit 1;
+}
 tar -tzf "$work/source.tar.gz" > "$work/members"
 [[ -s $work/members ]] || { echo 'Empty archive' >&2; exit 1; }
 if rg -q '(^/|(^|/)\.\.(/|$))' "$work/members"; then echo 'Unsafe archive paths' >&2; exit 1; fi
