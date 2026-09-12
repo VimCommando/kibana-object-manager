@@ -30,6 +30,7 @@ fn init_logging(filter: &str) {
         .fmt_fields(AnsiPassthroughFields)
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
         .with_target(false)
+        .with_writer(std::io::stderr)
         .with_ansi(use_ansi)
         .try_init();
 }
@@ -74,7 +75,18 @@ impl AnsiPassthroughVisitor<'_> {
                 write!(self.writer, "{}=", field.name())?;
             }
 
-            value(&mut self.writer)?;
+            if self.writer.has_ansi_escapes() {
+                value(&mut self.writer)?;
+            } else {
+                // Color wrappers inside log fields bypass the subscriber's ANSI setting.
+                static ANSI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+                let ansi = ANSI.get_or_init(|| {
+                    regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").expect("valid ANSI pattern")
+                });
+                let mut rendered = String::new();
+                value(&mut Writer::new(&mut rendered))?;
+                write!(self.writer, "{}", ansi.replace_all(&rendered, ""))?;
+            }
             self.is_empty = false;
             Ok(())
         })();

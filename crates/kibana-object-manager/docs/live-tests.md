@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Live Kibana Tests"
+description: Run isolated integration tests against a live Kibana instance.
+generated: { by: codex/gpt-6, at: 2026-09-07T05:36:37Z }
+---
+
 # Live Kibana Tests
 
 The live integration suite runs against a containerized Elasticsearch and

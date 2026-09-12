@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Spaces Management"
+description: Track and synchronize Kibana spaces.
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
+---
+
 # Kibana Spaces Management
 
 This guide explains how to manage Kibana Spaces using `kibob`.
@@ -413,6 +420,6 @@ deploy-spaces:
 
 ## See Also
 
-- [User Guide](USER_GUIDE.md) - Complete command reference
-- [Examples](EXAMPLES.md) - Real-world usage scenarios
-- [Architecture](ARCHITECTURE.md) - Technical implementation details
+1. [User Guide](user-guide.md) - Complete command reference
+2. [Examples](examples.md) - Real-world usage scenarios
+3. [Architecture](architecture.md) - Technical implementation details

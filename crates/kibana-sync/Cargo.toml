@@ -6,6 +6,7 @@ rust-version = "1.89"
 authors = ["Ryan Eno"]
 description = "Reusable Kibana sync library for saved objects, spaces, agents, tools, skills, and workflows"
 license = "Apache-2.0"
+license-file = "../../LICENCE.md"
 repository = "https://github.com/VimCommando/kibana-object-manager"
 homepage = "https://github.com/VimCommando/kibana-object-manager"
 documentation = "https://docs.rs/kibana-sync"
@@ -16,7 +17,6 @@ include = [
     "src/**",
     "Cargo.toml",
     "README.md",
-    "../../LICENSE",
 ]
 
 [features]

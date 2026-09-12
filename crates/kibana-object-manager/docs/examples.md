@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - Real-World Examples"
+description: Examples for managing Kibana assets across environments.
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
+---
+
 # Kibana Object Manager - Real-World Examples
 
 Practical examples and recipes for common use cases.
@@ -964,6 +971,7 @@ kibob pull my-project  # Only pulls 'default' space
 ---
 
 Need more help? Check out:
-- [User Guide](USER_GUIDE.md) - Complete command reference
-- [Architecture](ARCHITECTURE.md) - How kibob works internally
-- [Contributing](../CONTRIBUTING.md) - Help improve kibob
+
+1. [User Guide](user-guide.md) - Complete command reference
+2. [Architecture](architecture.md) - How kibob works internally
+3. [Contributing](contributing.md) - Help improve kibob

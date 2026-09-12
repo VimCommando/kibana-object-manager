@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - Quick Reference"
+description: Command and configuration reference for kibob.
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
+---
+
 # Kibana Object Manager - Quick Reference
 
 Fast reference for `kibob` commands and options.
@@ -282,9 +289,9 @@ alias kdiff='kibob pull . && git diff objects/'
 
 ## Resources
 
-- **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/docs
-- **Issues:** https://github.com/VimCommando/kibana-object-manager/issues
-- **Discussions:** https://github.com/VimCommando/kibana-object-manager/discussions
+1. **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/crates/kibana-object-manager/docs
+2. **Issues:** https://github.com/VimCommando/kibana-object-manager/issues
+3. **Discussions:** https://github.com/VimCommando/kibana-object-manager/discussions
 
 ## Version Information
 
@@ -300,4 +307,4 @@ cargo install --force kibana-object-manager
 
 ---
 
-**Need more details?** See the full [User Guide](USER_GUIDE.md).
+**Need more details?** See the full [User Guide](user-guide.md).
