@@ -544,12 +544,15 @@ Automate dashboard and asset deployments in CI/CD pipelines. Keep environments c
 
 ## Documentation
 
-- [User Guide](docs/USER_GUIDE.md) - Comprehensive command reference and workflows
-- [Architecture](docs/ARCHITECTURE.md) - Technical deep-dive for contributors
-- [Examples](docs/EXAMPLES.md) - Real-world usage scenarios
-- [Migration Guide](docs/MIGRATION.md) - Migrating from legacy format
-- [Quick Reference](docs/QUICK_REFERENCE.md) - Command cheat sheet
-- [Contributing](CONTRIBUTING.md) - Development guidelines
+1. [Documentation index](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/index.md)
+2. [Repository maintenance](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/maintenance.md) - Validation, releases, and CLI output guarantees
+
+3. [User Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/user-guide.md) - Comprehensive command reference and workflows
+4. [Architecture](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/architecture.md) - Technical deep-dive for contributors
+5. [Examples](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/examples.md) - Real-world usage scenarios
+6. [Migration Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/migration.md) - Migrating from legacy format
+7. [Quick Reference](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/quick-reference.md) - Command cheat sheet
+8. [Contributing](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/contributing.md) - Development guidelines
 
 ## Agent Skill
 
@@ -701,7 +704,7 @@ Each space definition is stored in its own directory as `{space_id}/space.json`.
 - `marketing/space.json`
 - `engineering/space.json`
 
-See the [Spaces Guide](docs/SPACES.md) for complete documentation.
+See the [Spaces Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/spaces.md) for complete documentation.
 
 ## Migrating from Bash Version
 
@@ -718,7 +721,7 @@ cat default/manifest/saved_objects.json
 kibob pull ./my-project
 ```
 
-See [Migration Guide](docs/MIGRATION.md) for details.
+See [Migration Guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/migration.md) for details.
 
 ## Environment Variables Reference
 
@@ -730,6 +733,8 @@ See [Migration Guide](docs/MIGRATION.md) for details.
 | `KIBANA_APIKEY` | API key authentication | Optional |
 | `KIBANA_SPACE` | Default target space used by some workflows | `default` |
 | `KIBANA_MAX_REQUESTS` | Maximum number of concurrent requests | `8` |
+| `KIBANA_REQUEST_TIMEOUT` | HTTP request deadline in positive integer seconds, including response body reads | `300` |
+| `KIBANA_CONNECT_TIMEOUT` | Connection timeout in positive integer seconds | `10` |
 
 ## Support
 
@@ -738,8 +743,8 @@ See [Migration Guide](docs/MIGRATION.md) for details.
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+Contributions are welcome. See [Contributor guide](https://github.com/VimCommando/kibana-object-manager/blob/main/crates/kibana-object-manager/docs/contributing.md) for development setup and guidelines.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Licensed under the Apache License, Version 2.0. See [LICENCE.md](LICENCE.md) for details.

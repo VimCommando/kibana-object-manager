@@ -7,6 +7,7 @@ rust-version = "1.89"
 authors = ["Ryan Eno"]
 description = "A Git-inspired CLI tool for managing Kibana saved objects in version control"
 license = "Apache-2.0"
+license-file = "../../LICENCE.md"
 repository = "https://github.com/VimCommando/kibana-object-manager"
 homepage = "https://github.com/VimCommando/kibana-object-manager"
 documentation = "https://docs.rs/kibana-object-manager"
@@ -19,7 +20,6 @@ include = [
     "Cargo.toml",
     "../../README.md",
     "../../CHANGELOG.md",
-    "../../LICENSE",
 ]
 
 [[bin]]

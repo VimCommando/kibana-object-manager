@@ -1,7 +1,8 @@
 # agents Specification
 
 ## Purpose
-TBD - created by archiving change agent-api-support. Update Purpose after archive.
+Manage Agent Builder agents as version-controlled resources, including their manifests, API operations, and dependencies.
+
 ## Requirements
 ### Requirement: Agent API Compliance
 The system SHALL interact with the Kibana Agents API using the correct conventions for creation and updates.

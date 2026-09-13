@@ -1,4 +1,13 @@
+---
+type: Guide
+title: Contributing to Kibana Object Manager
+description: Contributor setup, validation, testing, and review guidance.
+generated: { by: codex/gpt-6, at: 2026-09-12T17:19:44Z }
+---
+
 # Contributing to Kibana Object Manager
+
+Run shell commands from the repository root unless a step explicitly selects another checkout.
 
 Thank you for your interest in contributing to `kibob`! This document provides guidelines and instructions for contributing.
 
@@ -83,8 +92,8 @@ git remote add upstream https://github.com/VimCommando/kibana-object-manager.git
 # Install Rust (if not already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Update Rust to latest stable
-rustup update stable
+# Install the repository-pinned toolchain
+rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
 
 # Install development tools
 rustup component add rustfmt clippy
@@ -125,7 +134,7 @@ For integration testing with real Kibana:
 
 ```bash
 # Start Kibana with Docker Compose
-docker-compose up -d
+bash crates/kibana-object-manager/scripts/live-kibana-tests.sh up
 
 # Wait for Kibana to be ready
 until curl -s http://localhost:5601/api/status | grep -q "available"; do
@@ -138,7 +147,7 @@ export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD=changeme
 
 # Run integration tests
-cargo test --test saved_objects_integration -- --ignored
+bash crates/kibana-object-manager/scripts/live-kibana-tests.sh test
 ```
 
 ---
@@ -412,7 +421,7 @@ cargo tarpaulin --out Html --output-dir coverage
 open coverage/index.html
 ```
 
-**Target: 85%+ code coverage**
+Select tests by behavior and failure risk. Coverage reports can identify gaps; there is no fixed percentage gate.
 
 ---
 
@@ -422,10 +431,9 @@ open coverage/index.html
 
 1. **Run all checks:**
    ```bash
-   cargo fmt --check
-   cargo clippy --all-targets -- -D warnings
-   cargo test --all
-   cargo build --release
+   bash scripts/preflight.sh
+   bash scripts/preflight.sh msrv
+   rustup run 1.97.1 cargo build --workspace --release --locked
    ```
 
 2. **Update documentation:**
@@ -498,63 +506,9 @@ open coverage/index.html
 
 ## Release Process
 
-*For maintainers*
+The workspace publishes the independently versioned `kibana-sync` library and `kibana-object-manager` CLI. Follow the [release checklist](release.md) for version selection, dependency-first publication, Homebrew verification, and recovery.
 
-### Version Numbering
-
-We follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR** (1.0.0) - Breaking changes
-- **MINOR** (0.1.0) - New features, backwards compatible
-- **PATCH** (0.0.1) - Bug fixes, backwards compatible
-
-### Release Steps
-
-1. **Update version in Cargo.toml:**
-   ```toml
-   [package]
-   version = "0.2.0"
-   ```
-
-2. **Update CHANGELOG.md:**
-   ```markdown
-   ## [0.2.0] - 2026-01-XX
-   
-   ### Added
-   - New validate command
-   - Support for Canvas workpads
-   
-   ### Changed
-   - Improved error messages
-   
-   ### Fixed
-   - Handle null values in transformers
-   ```
-
-3. **Commit and tag:**
-   ```bash
-   git add Cargo.toml CHANGELOG.md
-   git commit -m "chore: bump version to 0.2.0"
-   git tag -a v0.2.0 -m "Release version 0.2.0"
-   git push origin main --tags
-   ```
-
-4. **Publish to crates.io:**
-   ```bash
-   cargo publish --dry-run
-   cargo publish
-   ```
-
-5. **Create GitHub release:**
-   - Go to GitHub → Releases → Draft new release
-   - Select tag v0.2.0
-   - Copy CHANGELOG entry as release notes
-   - Publish release
-
-6. **Announce:**
-   - Update README with new version
-   - Post in discussions
-   - Share on social media (if applicable)
+See [repository maintenance](maintenance.md) for pinned validation tools, the documentation bundle boundary, PR/OpenSpec checks, changelog policy, and compatibility rules.
 
 ---
 

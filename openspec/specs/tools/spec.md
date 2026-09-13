@@ -1,7 +1,8 @@
 # tools Specification
 
 ## Purpose
-TBD - created by archiving change tools-api-support. Update Purpose after archive.
+Manage Agent Builder tools through local manifests and authenticated Kibana API operations.
+
 ## Requirements
 ### Requirement: Tools Push Support
 The system SHALL support pushing tool definitions to Kibana via the `/api/agent_builder/tools` API, correctly handling JSON5 files with multiline strings.

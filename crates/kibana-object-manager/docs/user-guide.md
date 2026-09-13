@@ -1,3 +1,10 @@
+---
+type: Guide
+title: "Kibana Object Manager - User Guide"
+description: Install and use kibob to manage Kibana assets.
+generated: { by: codex/gpt-6, at: 2026-09-12T17:06:13Z }
+---
+
 # Kibana Object Manager - User Guide
 
 Complete guide to using `kibob` for managing Kibana saved objects with version control.
@@ -409,7 +416,7 @@ kibob migrate . --no-backup
 - Old: `manifest.json` (flat file)
 - New: `manifest/saved_objects.json` (directory structure)
 
-See [MIGRATION.md](MIGRATION.md) for detailed migration guide.
+See [migration.md](migration.md) for detailed migration guide.
 
 ## Common Workflows
 
@@ -691,11 +698,11 @@ kibob --debug pull .
 
 - **GitHub Issues:** https://github.com/VimCommando/kibana-object-manager/issues
 - **Discussions:** https://github.com/VimCommando/kibana-object-manager/discussions
-- **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/docs
+- **Documentation:** https://github.com/VimCommando/kibana-object-manager/tree/main/crates/kibana-object-manager/docs
 
 ## Next Steps
 
-- [Examples](EXAMPLES.md) - Real-world scenarios and recipes
-- [Architecture](ARCHITECTURE.md) - Technical deep-dive
-- [Contributing](../CONTRIBUTING.md) - Help improve kibob
-- [Quick Reference](QUICK_REFERENCE.md) - Command cheat sheet
+1. [Examples](examples.md) - Real-world scenarios and recipes
+2. [Architecture](architecture.md) - Technical deep-dive
+3. [Contributing](contributing.md) - Help improve kibob
+4. [Quick Reference](quick-reference.md) - Command cheat sheet
