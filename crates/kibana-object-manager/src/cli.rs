@@ -4958,7 +4958,7 @@ mod tests {
                 "workflow-a",
                 vec![
                     MockResponse {
-                        method: "HEAD",
+                        method: "GET",
                         path: "/s/esdiag/api/workflows/workflow/workflow-a",
                         status: 404,
                         body: json!({}),
