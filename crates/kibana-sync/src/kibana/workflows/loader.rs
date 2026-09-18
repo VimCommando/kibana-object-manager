@@ -303,6 +303,11 @@ async fn writable_workflow_exists(client: &KibanaClient, path: &str) -> Result<b
         .json::<Value>()
         .await
         .map_err(|error| Error::message(format!("Failed to parse existing Workflow: {error}")))?;
+    if !existing.is_object() {
+        return Err(Error::message(
+            "Failed to parse existing Workflow: expected a JSON object",
+        ));
+    }
     if existing.get("readonly").and_then(Value::as_bool) == Some(true) {
         return Err(Error::message("server-side Workflow is readonly"));
     }
@@ -445,7 +450,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_sync_updates_existing_workflow_when_head_returns_404() {
+    async fn repeated_sync_updates_existing_workflow_without_head_request() {
         let existing = json!({
             "id": "workflow-123",
             "name": "old-workflow",
@@ -460,10 +465,7 @@ mod tests {
             "definition": {"name": "desired"}
         });
         for api in WORKFLOW_APIS {
-            let mut responses = vec![
-                api.response("HEAD", 404, json!({})),
-                api.response("POST", 409, json!({"message": "Workflow already exists"})),
-            ];
+            let mut responses = Vec::new();
             for workflow in [existing.clone(), desired.clone()] {
                 responses.extend([
                     api.response("GET", 200, workflow),
@@ -669,12 +671,22 @@ mod tests {
     #[tokio::test]
     async fn workflow_lookup_errors_do_not_trigger_mutation() {
         for api in WORKFLOW_APIS {
-            for (status, detail) in [
-                (403, "403 Forbidden"),
-                (500, "500 Internal Server Error"),
-                (204, "Failed to parse existing Workflow"),
+            for (status, body, detail) in [
+                (
+                    200,
+                    json!(null),
+                    "Failed to parse existing Workflow: expected a JSON object",
+                ),
+                (
+                    200,
+                    json!(["workflow-123"]),
+                    "Failed to parse existing Workflow: expected a JSON object",
+                ),
+                (403, json!({}), "403 Forbidden"),
+                (500, json!({}), "500 Internal Server Error"),
+                (204, json!({}), "Failed to parse existing Workflow"),
             ] {
-                let server = api.server(vec![api.response("GET", status, json!({}))]);
+                let server = api.server(vec![api.response("GET", status, body)]);
 
                 let report = api
                     .loader(&server)
