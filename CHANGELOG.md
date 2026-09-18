@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make repeated workflow synchronization in `kibana-sync` update existing definitions when Kibana returns an unreliable HEAD 404, and recover from create conflicts only after confirming a writable workflow and successfully updating it.
 - Send CLI diagnostics to stderr and remove embedded ANSI color codes from redirected logs, respecting `NO_COLOR`.
 - Repair documentation links after the workspace layout change.
 
