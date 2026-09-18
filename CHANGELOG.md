@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bound each HTTP request to 300 seconds and connection establishment to 10 seconds by default. Set `KIBANA_REQUEST_TIMEOUT` and `KIBANA_CONNECT_TIMEOUT` to positive integer seconds, or use the library builder setters for longer operations. A timed-out remote write may already have succeeded; inspect remote state before retrying.
+
+### Fixed
+
+- Make repeated workflow synchronization in `kibana-sync` update existing definitions when Kibana returns an unreliable HEAD 404, and recover from create conflicts only after confirming a writable workflow and successfully updating it.
+- Send CLI diagnostics to stderr and remove embedded ANSI color codes from redirected logs, respecting `NO_COLOR`.
+- Repair documentation links after the workspace layout change.
+
+## [0.4.0] - 2026-07-26
+
+### Added
+
+- Added manifest-free standalone import and export for Skills, Tools, Agents, and Workflows, with explicit export selection, per-resource outcomes, and license-aware live validation (#30).
+
+### Fixed
+
+- Accept JSON5 syntax and triple-quoted multiline strings consistently in project-managed JSON resources (#24).
+- Report redacted unauthenticated Kibana `/api/status` responses as authentication failures instead of a missing `version.number` field.
+- Use the documented `/api/workflows/workflow` endpoint when pulling, pushing, and resolving dependent workflows.
+- Normalize workflow JSON filenames by sanitizing names, lowercasing them, and replacing spaces with underscores.
+
 ## [0.2.0] - 2026-02-27
 
 ### Added
@@ -110,7 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The original Kibana Object Manager was implemented as a Bash script with dependencies on external command-line tools. This version was superseded by the Rust rewrite for improved reliability, performance, and user experience.
 
-[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/VimCommando/kibana-object-manager/compare/v0.2.0...v0.4.0
 [0.2.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.2.0
 [0.1.2]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.2
 [0.1.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.1.0

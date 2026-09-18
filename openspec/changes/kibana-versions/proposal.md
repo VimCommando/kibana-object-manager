@@ -22,7 +22,7 @@ Kibana APIs in scope do not exist uniformly across supported versions, but the C
 - `workflows`: Define version-aware behavior for workflows APIs (introduced as tech preview in 9.3) so unsupported versions are skipped cleanly.
 
 ### Modified Capabilities
-- `kibana-client`: Add server version discovery and reusable API support checks.
+- `kibana-sync`: Add server version discovery and reusable API support checks.
 - `agents`: Require version-gated access to `agent_builder/agents` (tech preview in 9.2, GA in 9.3).
 - `tools`: Require version-gated access to `agent_builder/tools` (tech preview in 9.2, GA in 9.3).
 - `cli`: Require command preflight gating, warning exit behavior for unsupported requests, and `spaces.yml` Kibana version provenance/push guardrails.

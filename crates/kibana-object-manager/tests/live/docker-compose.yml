@@ -1,0 +1,95 @@
+name: kibob-live-tests
+
+services:
+  elasticsearch:
+    image: ${ELASTIC_CONTAINER_REGISTRY:-docker.elastic.co}/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.3.3}
+    container_name: kibob-live-tests-elasticsearch
+    environment:
+      - cluster.name=kibob-live-tests
+      - node.name=kibob-live-tests-node
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-kibob-live-elastic-password}
+      - xpack.security.http.ssl.enabled=false
+      - xpack.ml.use_auto_machine_memory_percent=true
+      - ES_JAVA_OPTS=-Xms${ELASTICSEARCH_HEAP_INIT:-2g} -Xmx${ELASTICSEARCH_HEAP_MAX:-2g}
+      - "_JAVA_OPTIONS=-XX:UseSVE=0"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data:/usr/share/elasticsearch/data
+    networks:
+      - net
+    ports:
+      - "${KIBANA_TEST_ES_PORT:-19200}:9200"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl --output /dev/null --silent --head --fail -u elastic:${ELASTIC_PASSWORD:-kibob-live-elastic-password} http://elasticsearch:9200",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  kibana-setup:
+    image: ${ELASTIC_CONTAINER_REGISTRY:-docker.elastic.co}/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.3.3}
+    container_name: kibob-live-tests-kibana-setup
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - net
+    command: >
+      bash -c '
+        echo "Setting kibana_system password";
+        start_time=$$(date +%s);
+        timeout=90;
+        until curl -s -u "elastic:${ELASTIC_PASSWORD:-kibob-live-elastic-password}" -X POST http://elasticsearch:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD:-kibob-live-kibana-system-password}\"}" -H "Content-Type: application/json" | grep -q "^{}"; do
+          if [ $$(($$(date +%s) - $$start_time)) -ge $$timeout ]; then
+            echo "Error: Elasticsearch timeout while setting kibana_system password";
+            exit 1;
+          fi;
+          sleep 2;
+        done;
+      '
+
+  kibana:
+    image: ${ELASTIC_CONTAINER_REGISTRY:-docker.elastic.co}/kibana/kibana:${ELASTIC_VERSION:-9.3.3}
+    container_name: kibob-live-tests-kibana
+    depends_on:
+      kibana-setup:
+        condition: service_completed_successfully
+    environment:
+      - SERVER_NAME=kibana
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD:-kibob-live-kibana-system-password}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:-kibob_live_tests_encryption_key_32}
+      - ELASTICSEARCH_PUBLICBASEURL=http://localhost:${KIBANA_TEST_ES_PORT:-19200}
+    volumes:
+      - data:/usr/share/kibana/data
+    networks:
+      - net
+    ports:
+      - "${KIBANA_TEST_KIBANA_PORT:-15601}:5601"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -I http://kibana:5601 | grep -q 'HTTP/1.1 302 Found'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+volumes:
+  data:
+    driver: local
+
+networks:
+  net:
+    driver: bridge

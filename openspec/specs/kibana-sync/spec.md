@@ -1,0 +1,265 @@
+# kibana-sync Specification
+
+## Purpose
+Provide a reusable, storage-neutral Rust library for authenticated Kibana API access and resource synchronization.
+
+## Requirements
+
+### Requirement: Space-Aware Client Architecture
+
+The Kibana client SHALL expose:
+- `KibanaClient`: Root client that holds shared HTTP client state, base URL, space registry, concurrency limit, and cached server version information
+- `SpaceClient` or an equivalent space-bound client view that automatically prefixes API paths with a non-default space
+
+#### Scenario: Create space-bound client
+- **WHEN** calling `kibana.space("marketing")`
+- **THEN** return `Ok(SpaceClient)` if "marketing" exists in the caller-provided space registry
+- **THEN** return `Err` if "marketing" is not in the caller-provided space registry
+
+#### Scenario: Default space handling
+- **WHEN** calling `kibana.space("default")`
+- **THEN** return a space-bound client with no `/s/default/` path prefix
+- **THEN** API paths SHALL NOT be prefixed with `/s/default/`
+
+#### Scenario: Non-default space path prefixing
+- **WHEN** a space-bound client for "marketing" calls `get("/api/saved_objects")`
+- **THEN** the actual request path SHALL be `/s/marketing/api/saved_objects`
+
+### Requirement: Explicit Client Configuration
+
+The `kibana-sync` crate SHALL construct clients from explicit configuration values rather than CLI project directories.
+
+#### Scenario: Construct client with default space
+- **WHEN** a consumer builds a client with a Kibana URL, auth configuration, and no explicit spaces
+- **THEN** the client is created with the `default` space available
+- **AND** no filesystem reads are performed during construction
+
+#### Scenario: Construct client with caller-provided spaces
+- **WHEN** a consumer builds a client with a caller-provided list or map of spaces
+- **THEN** the client validates space-bound clients against that registry
+- **AND** it does not read `spaces.yml`
+
+#### Scenario: Construct client with concurrency limit
+- **WHEN** a consumer configures a maximum concurrent request count
+- **THEN** all cloned root and space-bound clients share that request limit
+
+### Requirement: Reusable Kibana API Modules
+The `kibana-sync` crate SHALL expose reusable API modules for saved objects, spaces, agents, tools, skills, and workflows.
+
+#### Scenario: Saved object import and export
+- **WHEN** a consumer exports saved objects
+- **THEN** the library sends `POST /api/saved_objects/_export` with a JSON export payload
+- **AND** parses the NDJSON response into JSON values
+- **WHEN** a consumer imports saved objects
+- **THEN** the library sends `POST /api/saved_objects/_import?overwrite=<value>` as multipart form data with `Content-Type: multipart/form-data`
+
+#### Scenario: Space management
+- **WHEN** a consumer lists spaces
+- **THEN** the library sends `GET /api/spaces/space`
+- **WHEN** a consumer fetches a specific space
+- **THEN** the library sends `GET /api/spaces/space/{id}`
+- **WHEN** a consumer creates or updates a space
+- **THEN** the library sends `POST /api/spaces/space` for create operations
+- **AND** sends `PUT /api/spaces/space/{id}` for update operations
+
+#### Scenario: Agent management
+- **WHEN** a consumer lists agents
+- **THEN** the library sends `GET /api/agent_builder/agents`
+- **WHEN** a consumer fetches or checks an agent
+- **THEN** the library sends `GET /api/agent_builder/agents/{id}` or `HEAD /api/agent_builder/agents/{id}`
+- **WHEN** a consumer creates or updates an agent
+- **THEN** the library sends `POST /api/agent_builder/agents` for create operations
+- **AND** sends `PUT /api/agent_builder/agents/{id}` for update operations
+
+#### Scenario: Tool management
+- **WHEN** a consumer lists tools
+- **THEN** the library sends `GET /api/agent_builder/tools`
+- **WHEN** a consumer fetches or checks a tool
+- **THEN** the library sends `GET /api/agent_builder/tools/{id}` or `HEAD /api/agent_builder/tools/{id}`
+- **WHEN** a consumer creates or updates a tool
+- **THEN** the library sends `POST /api/agent_builder/tools` for create operations
+- **AND** sends `PUT /api/agent_builder/tools/{id}` for update operations
+
+#### Scenario: Skill management
+- **WHEN** a consumer lists skills
+- **THEN** the library sends `GET /api/agent_builder/skills`
+- **WHEN** a consumer fetches a skill
+- **THEN** the library sends `GET /api/agent_builder/skills/{id}`
+- **WHEN** a consumer creates or updates a skill
+- **THEN** the library sends `POST /api/agent_builder/skills` for create operations
+- **AND** sends `PUT /api/agent_builder/skills/{id}` for update operations
+- **WHEN** a consumer deletes a skill
+- **THEN** the library sends `DELETE /api/agent_builder/skills/{id}`
+
+#### Scenario: Workflow management uses internal-origin header
+- **WHEN** a consumer searches workflows
+- **THEN** on Kibana 9.3 the library sends `POST /api/workflows/search`
+- **THEN** on Kibana 9.4 or later the library sends `GET /api/workflows`
+- **AND** includes `X-Elastic-Internal-Origin: Kibana`
+- **WHEN** a consumer checks a workflow before synchronization
+- **THEN** on Kibana 9.3 the library sends `GET /api/workflows/{id}`
+- **THEN** on Kibana 9.4 or later the library sends `GET /api/workflows/workflow/{id}`
+- **AND** includes `X-Elastic-Internal-Origin: Kibana`
+- **WHEN** a consumer creates or updates a workflow
+- **THEN** on Kibana 9.3 the library sends `POST /api/workflows` for create operations and `PUT /api/workflows/{id}` for writable existing workflows
+- **THEN** on Kibana 9.4 or later the library sends `POST /api/workflows/workflow` for create operations and `PUT /api/workflows/workflow/{id}` for writable existing workflows
+- **AND** includes `X-Elastic-Internal-Origin: Kibana`
+
+#### Scenario: Readonly Workflow protection
+- **WHEN** a workflow lookup returns a Workflow with `readonly: true`
+- **THEN** the library reports failure without sending a PUT request
+
+#### Scenario: Workflow create conflict recovery
+- **WHEN** a Workflow lookup returns not found and its create request returns 409 Conflict
+- **THEN** the library rechecks the Workflow with its version-aware GET item route
+- **AND** updates it only when the response is a readable, writable Workflow document
+- **AND** reports a failed Create when confirmation fails or the Workflow is readonly
+
+### Requirement: Space Query Methods
+
+`KibanaClient` SHALL provide methods to query available spaces.
+
+#### Scenario: List space IDs
+- **WHEN** calling `kibana.space_ids()`
+- **THEN** return `Vec<&str>` of all space IDs from the registry
+
+#### Scenario: Get space name
+- **WHEN** calling `kibana.space_name("marketing")`
+- **THEN** return `Some("Marketing")` if space exists
+- **THEN** return `None` if space does not exist
+
+### Requirement: Storage-Neutral Sync Support
+The `kibana-sync` crate SHALL support syncing all supported API families without requiring a `kibob` filesystem project.
+
+#### Scenario: Pull sync returns bundle
+- **WHEN** a consumer requests a pull sync for selected spaces and API families
+- **THEN** the library returns a bundle containing the fetched spaces, saved objects, workflows, agents, tools, and skills grouped by space where applicable
+- **AND** it does not write local files
+
+#### Scenario: Push sync accepts bundle
+- **WHEN** a consumer requests a push sync with a bundle of spaces, saved objects, workflows, agents, tools, and skills
+- **THEN** the library applies the resources to Kibana using the appropriate API module for each resource family
+- **AND** it returns a summary of attempted and applied resources
+
+#### Scenario: Dependency expansion is resource based
+- **WHEN** a consumer enables dependency expansion for agents, tools, skills, or workflows
+- **THEN** the library discovers dependent agents, tools, skills, and workflows from JSON resource definitions
+- **AND** fetches missing dependencies through Kibana APIs
+- **AND** returns the expanded resources in the sync bundle rather than writing them to files
+
+### Requirement: Storage-Neutral Skills Sync Support
+The `kibana-sync` crate SHALL support Skills in storage-neutral sync bundles.
+
+#### Scenario: Pull sync returns skills
+- **WHEN** a consumer requests pull sync with Skills enabled
+- **THEN** the returned space bundle includes the fetched Skill definitions for each selected space
+- **AND** it can write those Skill definitions as skill directories through filesystem sync
+
+#### Scenario: Push sync applies skills
+- **WHEN** a consumer requests push sync with Skills in a space bundle
+- **THEN** the library projects Skill directories or bundle records to Kibana JSON
+- **AND** applies the projected Skill definitions through the Skills loader
+- **AND** the returned summary includes attempted and applied Skill counts
+
+#### Scenario: Dependency expansion can fetch skills
+- **WHEN** dependency expansion discovers a missing Skill reference and Skills are enabled
+- **THEN** the library fetches the Skill through `GET /api/agent_builder/skills/{skillId}`
+- **AND** inserts it into the space bundle Skills collection
+
+### Requirement: Explicit Filesystem Manifest and Bundle Sync
+
+The `kibana-sync` crate SHALL support reusable filesystem-backed sync for Kibana manifests and file-backed assets using caller-provided paths.
+
+#### Scenario: Read filesystem bundle from explicit path
+- **WHEN** a consumer asks the library to read a Kibana asset bundle from a provided path
+- **THEN** the library reads supported manifest files and file-backed saved objects, workflows, agents, tools, and skills from that path
+- **AND** returns a `SyncBundle` or equivalent resource collection that can be pushed to Kibana
+- **AND** it does not infer the path from environment variables, process working directory, or CLI command state
+
+#### Scenario: Write filesystem bundle to explicit path
+- **WHEN** a consumer asks the library to write a pulled sync bundle to a provided path
+- **THEN** the library writes supported manifests and file-backed resources in a stable bundle layout
+- **AND** the written bundle can be read back by the library and pushed to another Kibana instance
+
+#### Scenario: CLI project policy remains outside filesystem sync
+- **WHEN** `kibob` uses the library filesystem sync APIs
+- **THEN** the CLI crate chooses default paths, command behavior, terminal output, gitignore behavior, and migration policy
+- **AND** the library only receives explicit paths, sync options, and resource data
+
+### Requirement: Reusable Capability Gates
+The `kibana-sync` crate SHALL expose Kibana version detection and API capability support checks for all supported API families.
+
+#### Scenario: Server version detection
+- **WHEN** a consumer requests server version information
+- **THEN** the library sends `GET /api/status`
+- **AND** parses `version.number` into a normalized semantic version value
+- **AND** caches the result for cloned clients
+
+#### Scenario: Capability matrix
+- **WHEN** a consumer checks supported capabilities for a detected version
+- **THEN** `spaces` and `saved_objects` require Kibana `8.0.0` or newer
+- **AND** `agents` and `tools` require Kibana `9.2.0` or newer
+- **AND** `skills` requires Kibana `9.4.0` or newer
+- **AND** `workflows` requires Kibana `9.3.0` or newer
+
+### Requirement: Skills API Capability Gate
+The `kibana-sync` crate SHALL expose Skills as a version-gated API capability.
+
+#### Scenario: Capability matrix includes skills
+- **WHEN** a consumer checks supported capabilities for a detected Kibana version
+- **THEN** `skills` is evaluated independently from `agents`, `tools`, and `workflows`
+- **AND** `skills` requires Kibana `9.4.0` or newer
+- **AND** `skills` is labeled experimental as of Kibana `9.4`
+- **AND** unsupported Skills requests produce the same skip, warning, or force behavior as other version-gated API families
+
+#### Scenario: Sync planning includes skills
+- **WHEN** a consumer plans pull or push sync for Skills
+- **THEN** the returned capability plan includes Skills in either supported or unsupported capabilities
+- **AND** the unsupported message names the `skills` API and Kibana `9.4.0` as the minimum required version
+
+### Requirement: Public Error Model
+The `kibana-sync` crate SHALL expose a dedicated public error enum and crate-local `Result<T>` alias instead of exposing `eyre::Report` in public APIs.
+
+#### Scenario: Consumer matches error variants
+- **WHEN** a library operation fails due to invalid configuration, an unknown space, unsupported capability, transport failure, serialization failure, version parsing failure, API response failure, or missing resource identifier
+- **THEN** the returned error identifies the failure category with a documented enum variant
+- **AND** consumers can match on the error without parsing display strings
+
+#### Scenario: API response failure preserves status and body
+- **WHEN** Kibana returns a non-success HTTP response for a library API operation
+- **THEN** the error includes the HTTP status code
+- **AND** includes the response body or a lossless body excerpt suitable for diagnostics
+
+#### Scenario: CLI converts library errors at boundary
+- **WHEN** the `kibob` CLI calls `kibana-sync`
+- **THEN** it can convert library errors into CLI error reports and warning exit behavior without requiring the library to depend on `eyre`
+
+### Requirement: Tracing Instrumentation
+The `kibana-sync` crate SHALL use `tracing` for diagnostic instrumentation and SHALL NOT initialize global logging or tracing subscribers.
+
+#### Scenario: Library emits tracing events
+- **WHEN** the library sends requests, performs sync operations, applies capability gates, or skips resources
+- **THEN** it emits diagnostic events through `tracing`
+- **AND** does not emit those events through `log` macros
+
+#### Scenario: Application owns subscriber configuration
+- **WHEN** a consumer uses `kibana-sync`
+- **THEN** the consumer controls whether and how tracing events are recorded by installing its own subscriber
+- **AND** the library does not initialize or modify global subscriber state
+
+### Requirement: Configurable request deadlines
+The library SHALL bound HTTP requests with configurable, nonzero deadlines. The default request deadline SHALL be 300 seconds including response body reads, and the default connection deadline SHALL be 10 seconds. Waiting for a shared concurrency permit is outside the HTTP request deadline.
+
+#### Scenario: A server stalls
+- **GIVEN** a server accepts a request but does not respond within the configured request deadline
+- **WHEN** the client awaits its response
+- **THEN** the library returns a transport timeout error
+
+#### Scenario: Invalid deadline
+- **WHEN** a consumer configures a zero request or connection deadline
+- **THEN** client construction fails before connecting
+
+#### Scenario: CLI deadline configuration
+- **WHEN** the CLI reads KIBANA_REQUEST_TIMEOUT or KIBANA_CONNECT_TIMEOUT
+- **THEN** it requires a positive integer number of seconds
+- **AND** passes those values to the library without changing the package's default concurrency

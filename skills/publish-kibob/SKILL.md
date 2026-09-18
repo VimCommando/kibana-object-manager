@@ -1,95 +1,16 @@
 ---
 name: publish-kibob
-description: Publish a new kibob release to crates.io and the VimCommando/homebrew-tools tap. Use when preparing or executing a versioned release, including version bumps, changelog updates, cargo publish, Git tag/release creation, and Homebrew formula url/sha256 updates.
+description: Prepare or publish kibob CLI and kibana-sync library releases, including package versions, registry publication, tags, and the Homebrew source formula.
 ---
 
 # Publish Kibob
 
-## Overview
+Read the [release checklist](../../crates/kibana-object-manager/docs/release.md) before preparing or publishing a release. It owns package order, version policy, validation, and recovery.
 
-Use this skill to run the full release pipeline for `kibana-object-manager`/`kibob`: crate publish, GitHub release/tag, and Homebrew tap update.
+1. Identify whether the request covers the CLI, library, or both. Package versions are independent. The root workspace has no package version to bump.
+2. Prepare the selected manifests, CLI dependency requirement when needed, lockfile, and changelog. Run the checklist's local checks and present the release commit for review.
+3. Within the user's publication authorization, publish a changed library before a dependent CLI. Verify each published package before continuing.
+4. Use the exact reviewed revision for tags and the Homebrew source URL. Follow the checklist's recovery path after partial failure. Preserve published versions, tags, and archive bytes.
+5. Report package versions, tag and commit, checks performed, and incomplete registry or Homebrew steps.
 
-Read [references/release-checklist.md](references/release-checklist.md) at the start of the run, then execute each stage in order.
-
-## Workflow
-
-1. Validate release inputs.
-2. Prepare and verify the repository release commit.
-3. Publish to crates.io.
-4. Push git commit/tag.
-5. Update Homebrew formula in `VimCommando/homebrew-tools`.
-6. Run post-release verification checks.
-
-## Stage 1: Validate Inputs
-
-- Confirm target version (semver) and expected tag (`v<version>`).
-- Ensure working tree is clean before release edits.
-- Confirm required credentials are available:
-  - crates.io token for `cargo publish`
-  - GitHub auth for pushing tags and opening release/tap PRs
-
-## Stage 2: Prepare Release Commit
-
-- Update version in `Cargo.toml`.
-- Update `Cargo.lock` package version entry if needed by tooling.
-- Update `CHANGELOG.md` with a dated section for the new version.
-- Run verification before committing:
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo test --all-targets`
-- Commit release prep changes.
-
-## Stage 3: Publish Crate
-
-- Run dry run first:
-  - `cargo publish --dry-run`
-- Publish:
-  - `cargo publish`
-- If publish fails due to duplicate version, stop and choose a new version.
-
-## Stage 4: Push Git Updates
-
-- Create and push release tag:
-  - `git tag v<version>`
-  - `git push origin main`
-  - `git push origin v<version>`
-- If push is rejected, rebase `main` on `origin/main` and retry.
-- Homebrew source URL used by formula should be:
-  - `https://github.com/VimCommando/kibana-object-manager/archive/refs/tags/v<version>.tar.gz`
-- Optional: create a GitHub release using changelog notes.
-
-## Stage 5: Update Homebrew Tap
-
-- In `VimCommando/homebrew-tools`, edit `Formula/kibob.rb`:
-  - Update `url` to new tag tarball URL.
-  - Update `sha256` to tarball hash.
-- If tap repo does not exist yet:
-  - `brew tap-new VimCommando/homebrew-tools`
-  - `gh repo create VimCommando/homebrew-tools --public --source="$(brew --repository VimCommando/homebrew-tools)" --push`
-- Preferred automation:
-  - `python skills/publish-kibob/scripts/update_homebrew_formula.py --version <version> --formula /path/to/homebrew-tools/Formula/kibob.rb`
-- Manual fallback hash command:
-  - `curl -L "https://github.com/VimCommando/kibana-object-manager/archive/refs/tags/v<version>.tar.gz" | shasum -a 256`
-- Validate formula locally if possible:
-  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew audit --strict --tap VimCommando/tools kibob`
-  - `HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source VimCommando/tools/kibob`
-  - `brew test VimCommando/tools/kibob`
-- Commit and push tap update (or open PR per maintainer workflow).
-
-## Stage 6: Verify
-
-- Confirm crate version appears on crates.io.
-- Confirm git tag exists on origin for `v<version>`.
-- Optional: confirm GitHub release exists for `v<version>`.
-- Confirm Homebrew tap has updated formula and checksum.
-- Optionally test install path:
-  - `brew tap VimCommando/tools`
-  - `brew install kibob`
-  - `kibob --version`
-- Note: a tap formula does not automatically appear on `https://formulae.brew.sh/formula/<name>`. That page is for formulas indexed in Homebrew's main catalogs (for example `homebrew/core`).
-
-## Guardrails
-
-- Do not publish until clippy/tests pass.
-- Do not reuse an already-published crate version.
-- Keep crate version, git tag, and Homebrew formula URL on the same version.
-- Update `sha256` only from the final tag tarball.
+For CLI releases, the [formula updater](scripts/update_homebrew_formula.sh) validates the source archive before editing the supplied formula. Run installation checks and open a reviewable tap PR. Creating a tap or publishing to a new owner is a separate task.
