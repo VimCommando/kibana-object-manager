@@ -50,15 +50,21 @@ The `kibana-sync` crate SHALL expose reusable API modules for saved objects, spa
 
 #### Scenario: Workflow management uses internal-origin header
 - **WHEN** a consumer searches workflows
-- **THEN** the library sends `POST /api/workflows/search`
+- **THEN** on Kibana 9.3 the library sends `POST /api/workflows/search`
+- **THEN** on Kibana 9.4 or later the library sends `GET /api/workflows`
 - **AND** includes `X-Elastic-Internal-Origin: Kibana`
 - **WHEN** a consumer checks a workflow before synchronization
-- **THEN** the library sends `GET /api/workflows/{id}`
+- **THEN** on Kibana 9.3 the library sends `GET /api/workflows/{id}`
+- **THEN** on Kibana 9.4 or later the library sends `GET /api/workflows/workflow/{id}`
 - **AND** includes `X-Elastic-Internal-Origin: Kibana`
 - **WHEN** a consumer creates or updates a workflow
-- **THEN** the library sends `POST /api/workflows` for create operations
-- **AND** sends `PUT /api/workflows/{id}` for update operations
+- **THEN** on Kibana 9.3 the library sends `POST /api/workflows` for create operations and `PUT /api/workflows/{id}` for writable existing workflows
+- **THEN** on Kibana 9.4 or later the library sends `POST /api/workflows/workflow` for create operations and `PUT /api/workflows/workflow/{id}` for writable existing workflows
 - **AND** includes `X-Elastic-Internal-Origin: Kibana`
+
+#### Scenario: Readonly Workflow protection
+- **WHEN** a workflow lookup returns a Workflow with `readonly: true`
+- **THEN** the library reports failure without sending a PUT request
 
 #### Scenario: Workflow create conflict recovery
 - **WHEN** a Workflow lookup returns not found and its create request returns 409 Conflict
