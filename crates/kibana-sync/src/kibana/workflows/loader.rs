@@ -1,13 +1,12 @@
 //! Workflows API loader
 //!
-//! Loads workflow definitions to Kibana via POST /api/workflows/workflow
+//! Creates or updates workflow definitions using version-aware GET/POST/PUT routes.
 
 use crate::client::KibanaClient;
 use crate::etl::Loader;
 use crate::kibana::workflows::workflow_create_path_for_version;
 use crate::standalone::{
     ResourceBatchReport, ResourceFamily, ResourceOperation, ResourceOutcome, ResourceOutcomeStatus,
-    server_resource_is_readonly,
 };
 
 use crate::{Error, Result};
@@ -186,19 +185,8 @@ async fn upsert_workflow(
         .unwrap_or("unknown")
         .to_string();
     let path = format!("{create_path}/{workflow_id}");
-    let exists = match client.head_internal(&path).await {
-        Ok(response) => match response.status().as_u16() {
-            200 => true,
-            404 => false,
-            status => {
-                return ResourceOutcome::failed(
-                    ResourceFamily::Workflows,
-                    workflow_id,
-                    None,
-                    format!("Failed to check workflow existence: {status}"),
-                );
-            }
-        },
+    let exists = match writable_workflow_exists(&client, &path).await {
+        Ok(exists) => exists,
         Err(error) => {
             return ResourceOutcome::failed(
                 ResourceFamily::Workflows,
@@ -210,55 +198,7 @@ async fn upsert_workflow(
     };
 
     let sanitized = WorkflowsLoader::sanitize_workflow(&workflow);
-    if exists {
-        match server_resource_is_readonly(&client, &path, true, "Workflow").await {
-            Ok(true) => {
-                return ResourceOutcome::failed(
-                    ResourceFamily::Workflows,
-                    workflow_id,
-                    None,
-                    "server-side Workflow is readonly",
-                );
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return ResourceOutcome::failed(
-                    ResourceFamily::Workflows,
-                    workflow_id,
-                    None,
-                    error.to_string(),
-                );
-            }
-        }
-
-        let response = match client.put_json_value_internal(&path, &sanitized).await {
-            Ok(response) => response,
-            Err(error) => {
-                return ResourceOutcome::failed(
-                    ResourceFamily::Workflows,
-                    workflow_id,
-                    Some(ResourceOperation::Update),
-                    error.to_string(),
-                );
-            }
-        };
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return ResourceOutcome::failed(
-                ResourceFamily::Workflows,
-                workflow_id,
-                Some(ResourceOperation::Update),
-                Error::api_response(status, body).to_string(),
-            );
-        }
-        tracing::info!("Updated workflow: {} (id: {})", workflow_name, workflow_id);
-        ResourceOutcome::applied(
-            ResourceFamily::Workflows,
-            workflow_id,
-            ResourceOperation::Update,
-        )
-    } else {
+    if !exists {
         let response = match client
             .post_json_value_internal(create_path, &sanitized)
             .await
@@ -273,23 +213,105 @@ async fn upsert_workflow(
                 );
             }
         };
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        if response.status().is_success() {
+            tracing::info!("Created workflow: {} (id: {})", workflow_name, workflow_id);
+            return ResourceOutcome::applied(
+                ResourceFamily::Workflows,
+                workflow_id,
+                ResourceOperation::Create,
+            );
+        }
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("Failed to read response body: {error}"));
+        let create_error = Error::api_response(status, body);
+        if status != reqwest::StatusCode::CONFLICT {
             return ResourceOutcome::failed(
                 ResourceFamily::Workflows,
                 workflow_id,
                 Some(ResourceOperation::Create),
-                Error::api_response(status, body).to_string(),
+                create_error.to_string(),
             );
         }
-        tracing::info!("Created workflow: {} (id: {})", workflow_name, workflow_id);
-        ResourceOutcome::applied(
+        // Another writer may have created the workflow after our initial GET.
+        match writable_workflow_exists(&client, &path).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Workflows,
+                    workflow_id,
+                    Some(ResourceOperation::Create),
+                    create_error.to_string(),
+                );
+            }
+            Err(error) => {
+                return ResourceOutcome::failed(
+                    ResourceFamily::Workflows,
+                    workflow_id,
+                    Some(ResourceOperation::Create),
+                    format!("{create_error}; failed to confirm writable Workflow: {error}"),
+                );
+            }
+        }
+    }
+
+    let response = match client.put_json_value_internal(&path, &sanitized).await {
+        Ok(response) => response,
+        Err(error) => {
+            return ResourceOutcome::failed(
+                ResourceFamily::Workflows,
+                workflow_id,
+                Some(ResourceOperation::Update),
+                error.to_string(),
+            );
+        }
+    };
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|error| format!("Failed to read response body: {error}"));
+        return ResourceOutcome::failed(
             ResourceFamily::Workflows,
             workflow_id,
-            ResourceOperation::Create,
-        )
+            Some(ResourceOperation::Update),
+            Error::api_response(status, body).to_string(),
+        );
     }
+    tracing::info!("Updated workflow: {} (id: {})", workflow_name, workflow_id);
+    ResourceOutcome::applied(
+        ResourceFamily::Workflows,
+        workflow_id,
+        ResourceOperation::Update,
+    )
+}
+
+async fn writable_workflow_exists(client: &KibanaClient, path: &str) -> Result<bool> {
+    let response = client.get_internal(path).await?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await?;
+        return Err(Error::api_response(status, body));
+    }
+    let existing = response
+        .json::<Value>()
+        .await
+        .map_err(|error| Error::message(format!("Failed to parse existing Workflow: {error}")))?;
+    if !existing.is_object() {
+        return Err(Error::message(
+            "Failed to parse existing Workflow: expected a JSON object",
+        ));
+    }
+    if existing.get("readonly").and_then(Value::as_bool) == Some(true) {
+        return Err(Error::message("server-side Workflow is readonly"));
+    }
+    Ok(true)
 }
 
 fn resource_id(resource: &Value) -> &str {
@@ -306,6 +328,70 @@ mod tests {
     use crate::test_support::{MockResponse, TestServer};
     use serde_json::json;
     use url::Url;
+
+    struct WorkflowApi {
+        version: &'static str,
+        space: &'static str,
+        collection: &'static str,
+        item: &'static str,
+    }
+
+    const WORKFLOW_APIS: [WorkflowApi; 4] = [
+        WorkflowApi {
+            version: "9.3.3",
+            space: "default",
+            collection: "/api/workflows",
+            item: "/api/workflows/workflow-123",
+        },
+        WorkflowApi {
+            version: "9.3.3",
+            space: "esdiag",
+            collection: "/s/esdiag/api/workflows",
+            item: "/s/esdiag/api/workflows/workflow-123",
+        },
+        WorkflowApi {
+            version: "9.4.1",
+            space: "default",
+            collection: "/api/workflows/workflow",
+            item: "/api/workflows/workflow/workflow-123",
+        },
+        WorkflowApi {
+            version: "9.4.1",
+            space: "esdiag",
+            collection: "/s/esdiag/api/workflows/workflow",
+            item: "/s/esdiag/api/workflows/workflow/workflow-123",
+        },
+    ];
+
+    impl WorkflowApi {
+        fn response(&self, method: &'static str, status: u16, body: Value) -> MockResponse {
+            MockResponse {
+                method,
+                path: if method == "POST" {
+                    self.collection
+                } else {
+                    self.item
+                },
+                status,
+                body,
+            }
+        }
+
+        fn server(&self, responses: Vec<MockResponse>) -> TestServer {
+            let mut all = vec![MockResponse {
+                method: "GET",
+                path: "/api/status",
+                status: 200,
+                body: json!({"version": {"number": self.version}}),
+            }];
+            all.extend(responses);
+            TestServer::new(all)
+        }
+
+        fn loader(&self, server: &TestServer) -> WorkflowsLoader {
+            WorkflowsLoader::new(server.client().unwrap().space(self.space).unwrap())
+        }
+    }
 
     #[test]
     fn test_loader_creation() {
@@ -364,6 +450,324 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_sync_updates_existing_workflow_without_head_request() {
+        let existing = json!({
+            "id": "workflow-123",
+            "name": "old-workflow",
+            "yaml": "name: old",
+            "definition": {"name": "old"},
+            "readonly": false
+        });
+        let desired = json!({
+            "id": "workflow-123",
+            "name": "desired-workflow",
+            "yaml": "name: desired",
+            "definition": {"name": "desired"}
+        });
+        for api in WORKFLOW_APIS {
+            let mut responses = Vec::new();
+            for workflow in [existing.clone(), desired.clone()] {
+                responses.extend([
+                    api.response("GET", 200, workflow),
+                    api.response("PUT", 200, desired.clone()),
+                ]);
+            }
+            let server = api.server(responses);
+            let loader = api.loader(&server);
+
+            for _ in 0..2 {
+                let report = loader.load_report(vec![desired.clone()]).await;
+                assert_eq!(report.counts().applied, 1, "{report:?}");
+                assert_eq!(report.counts().failed, 0);
+                assert_eq!(report.outcomes()[0].id(), "workflow-123");
+                assert_eq!(report.outcomes()[0].family(), ResourceFamily::Workflows);
+                assert_eq!(
+                    report.outcomes()[0].operation(),
+                    Some(ResourceOperation::Update)
+                );
+            }
+
+            let requests = server.requests();
+            assert!(requests.iter().all(|request| request.method != "HEAD"));
+            assert!(requests.iter().all(|request| request.method != "POST"));
+            let updates = requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .collect::<Vec<_>>();
+            assert_eq!(updates.len(), 2);
+            for update in updates {
+                assert_eq!(update.path, api.item);
+                assert_eq!(
+                    serde_json::from_str::<Value>(&update.body).unwrap(),
+                    desired
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn create_conflict_converges_by_updating_confirmed_workflow() {
+        let desired = json!({
+            "id": "workflow-123",
+            "name": "desired-workflow",
+            "yaml": "name: desired",
+            "definition": {"name": "desired"}
+        });
+        for api in WORKFLOW_APIS {
+            let server = api.server(vec![
+                api.response("GET", 404, json!({})),
+                api.response("POST", 409, json!({"message": "Workflow already exists"})),
+                api.response(
+                    "GET",
+                    200,
+                    json!({
+                        "id": "workflow-123",
+                        "readonly": false,
+                        "definition": {"name": "created by another client"}
+                    }),
+                ),
+                api.response("PUT", 200, desired.clone()),
+            ]);
+            let loader = api.loader(&server);
+
+            let report = loader.load_report(vec![desired.clone()]).await;
+
+            assert_eq!(report.counts().applied, 1, "{report:?}");
+            assert_eq!(report.counts().failed, 0);
+            assert_eq!(
+                report.outcomes()[0].status(),
+                ResourceOutcomeStatus::Applied
+            );
+            assert_eq!(
+                report.outcomes()[0].operation(),
+                Some(ResourceOperation::Update)
+            );
+            let requests = server.requests();
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|request| request.method.as_str())
+                    .collect::<Vec<_>>(),
+                ["GET", "GET", "POST", "GET", "PUT"]
+            );
+            assert_eq!(requests[4].path, api.item);
+            assert_eq!(
+                serde_json::from_str::<Value>(&requests[4].body).unwrap(),
+                desired
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn creates_missing_workflow_across_versions_and_spaces() {
+        let desired = json!({
+            "id": "workflow-123",
+            "name": "desired-workflow",
+            "yaml": "name: desired",
+            "definition": {"name": "desired"}
+        });
+        for api in WORKFLOW_APIS {
+            let server = api.server(vec![
+                api.response("GET", 404, json!({})),
+                api.response("POST", 201, desired.clone()),
+            ]);
+
+            let report = api.loader(&server).load_report(vec![desired.clone()]).await;
+
+            assert_eq!(report.counts().applied, 1, "{report:?}");
+            assert_eq!(report.counts().failed, 0);
+            assert_eq!(
+                report.outcomes()[0].operation(),
+                Some(ResourceOperation::Create)
+            );
+            let requests = server.requests();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[2].method, "POST");
+            assert_eq!(requests[2].path, api.collection);
+            assert_eq!(
+                serde_json::from_str::<Value>(&requests[2].body).unwrap(),
+                desired
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_readonly_workflow_across_versions_and_spaces() {
+        for api in WORKFLOW_APIS {
+            let server = api.server(vec![api.response(
+                "GET",
+                200,
+                json!({"id": "workflow-123", "readonly": true}),
+            )]);
+
+            let report = api
+                .loader(&server)
+                .load_report(vec![json!({"id": "workflow-123", "readonly": false})])
+                .await;
+
+            assert_eq!(report.counts().applied, 0);
+            assert_eq!(report.counts().failed, 1);
+            assert_eq!(report.outcomes()[0].operation(), None);
+            assert_eq!(
+                report.outcomes()[0].detail(),
+                Some("server-side Workflow is readonly")
+            );
+            assert_eq!(server.requests().len(), 2);
+            assert!(
+                server
+                    .requests()
+                    .iter()
+                    .all(|request| request.method == "GET")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_conflict_fails_without_confirmed_writable_workflow() {
+        for api in WORKFLOW_APIS {
+            for (status, body, detail) in [
+                (404, json!({}), "409 Conflict"),
+                (403, json!({"message": "Forbidden"}), "403 Forbidden"),
+                (
+                    500,
+                    json!({"message": "Unavailable"}),
+                    "500 Internal Server Error",
+                ),
+                (204, json!({}), "Failed to parse existing Workflow"),
+                (
+                    200,
+                    json!({"id": "workflow-123", "readonly": true}),
+                    "server-side Workflow is readonly",
+                ),
+            ] {
+                let server = api.server(vec![
+                    api.response("GET", 404, json!({})),
+                    api.response("POST", 409, json!({"message": "Workflow already exists"})),
+                    api.response("GET", status, body),
+                ]);
+
+                let report = api
+                    .loader(&server)
+                    .load_report(vec![json!({"id": "workflow-123", "readonly": false})])
+                    .await;
+
+                assert_eq!(report.counts().applied, 0, "{report:?}");
+                assert_eq!(report.counts().failed, 1);
+                assert_eq!(report.outcomes()[0].status(), ResourceOutcomeStatus::Failed);
+                assert_eq!(
+                    report.outcomes()[0].operation(),
+                    Some(ResourceOperation::Create)
+                );
+                let actual = report.outcomes()[0].detail().unwrap();
+                assert!(actual.contains("409 Conflict"), "{actual}");
+                assert!(actual.contains(detail), "{actual}");
+                let requests = server.requests();
+                assert_eq!(requests.len(), 4);
+                assert!(requests.iter().all(|request| request.method != "PUT"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_lookup_errors_do_not_trigger_mutation() {
+        for api in WORKFLOW_APIS {
+            for (status, body, detail) in [
+                (
+                    200,
+                    json!(null),
+                    "Failed to parse existing Workflow: expected a JSON object",
+                ),
+                (
+                    200,
+                    json!(["workflow-123"]),
+                    "Failed to parse existing Workflow: expected a JSON object",
+                ),
+                (403, json!({}), "403 Forbidden"),
+                (500, json!({}), "500 Internal Server Error"),
+                (204, json!({}), "Failed to parse existing Workflow"),
+            ] {
+                let server = api.server(vec![api.response("GET", status, body)]);
+
+                let report = api
+                    .loader(&server)
+                    .load_report(vec![json!({"id": "workflow-123"})])
+                    .await;
+
+                assert_eq!(report.counts().applied, 0);
+                assert_eq!(report.counts().failed, 1);
+                assert_eq!(report.outcomes()[0].operation(), None);
+                assert!(report.outcomes()[0].detail().unwrap().contains(detail));
+                assert_eq!(server.requests().len(), 2);
+                assert!(
+                    server
+                        .requests()
+                        .iter()
+                        .all(|request| request.method == "GET")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_updates_remain_failed_after_create_conflict() {
+        for api in WORKFLOW_APIS {
+            for status in [403, 404, 409, 500] {
+                let server = api.server(vec![
+                    api.response("GET", 404, json!({})),
+                    api.response("POST", 409, json!({"message": "Workflow already exists"})),
+                    api.response("GET", 200, json!({"id": "workflow-123", "readonly": false})),
+                    api.response("PUT", status, json!({"message": "Update rejected"})),
+                ]);
+
+                let report = api
+                    .loader(&server)
+                    .load_report(vec![json!({"id": "workflow-123"})])
+                    .await;
+
+                assert_eq!(report.counts().applied, 0);
+                assert_eq!(report.counts().failed, 1);
+                assert_eq!(
+                    report.outcomes()[0].operation(),
+                    Some(ResourceOperation::Update)
+                );
+                let detail = report.outcomes()[0].detail().unwrap();
+                assert!(detail.contains(&status.to_string()), "{detail}");
+                assert!(detail.contains("Update rejected"), "{detail}");
+                assert_eq!(server.requests().len(), 5);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn non_conflict_create_errors_are_not_retried() {
+        for api in WORKFLOW_APIS {
+            let server = api.server(vec![
+                api.response("GET", 404, json!({})),
+                api.response("POST", 500, json!({"message": "Create failed"})),
+            ]);
+
+            let report = api
+                .loader(&server)
+                .load_report(vec![json!({"id": "workflow-123"})])
+                .await;
+
+            assert_eq!(report.counts().applied, 0);
+            assert_eq!(report.counts().failed, 1);
+            assert_eq!(
+                report.outcomes()[0].operation(),
+                Some(ResourceOperation::Create)
+            );
+            assert!(
+                report.outcomes()[0]
+                    .detail()
+                    .unwrap()
+                    .contains("Create failed")
+            );
+            assert_eq!(server.requests().len(), 3);
+        }
+    }
+
+    #[tokio::test]
     async fn creates_workflow_with_documented_endpoint() {
         let server = TestServer::new(vec![
             MockResponse {
@@ -373,7 +777,7 @@ mod tests {
                 body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
-                method: "HEAD",
+                method: "GET",
                 path: "/s/esdiag/api/workflows/workflow/workflow-123",
                 status: 404,
                 body: json!({}),
@@ -401,7 +805,7 @@ mod tests {
             Some(ResourceOperation::Create)
         );
         let requests = server.requests();
-        assert_eq!(requests[1].method, "HEAD");
+        assert_eq!(requests[1].method, "GET");
         assert_eq!(
             requests[1].path,
             "/s/esdiag/api/workflows/workflow/workflow-123"
@@ -434,12 +838,6 @@ mod tests {
                 body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
-                method: "HEAD",
-                path: "/api/workflows/workflow/workflow-123",
-                status: 200,
-                body: json!({}),
-            },
-            MockResponse {
                 method: "GET",
                 path: "/api/workflows/workflow/workflow-123",
                 status: 200,
@@ -461,6 +859,7 @@ mod tests {
 
         let report = loader.load_report(vec![workflow]).await;
 
+        assert_eq!(report.counts().applied, 1);
         assert_eq!(
             report.outcomes()[0].operation(),
             Some(ResourceOperation::Update)
@@ -482,10 +881,6 @@ mod tests {
             paths,
             vec![
                 (
-                    "HEAD".to_string(),
-                    "/api/workflows/workflow/workflow-123".to_string()
-                ),
-                (
                     "GET".to_string(),
                     "/api/workflows/workflow/workflow-123".to_string()
                 ),
@@ -505,12 +900,6 @@ mod tests {
                 path: "/api/status",
                 status: 200,
                 body: json!({"version": {"number": "9.4.1"}}),
-            },
-            MockResponse {
-                method: "HEAD",
-                path: "/api/workflows/workflow/system-workflow",
-                status: 200,
-                body: json!({}),
             },
             MockResponse {
                 method: "GET",
@@ -536,10 +925,9 @@ mod tests {
             Some("server-side Workflow is readonly")
         );
         let requests = server.requests();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].method, "GET");
-        assert_eq!(requests[1].method, "HEAD");
-        assert_eq!(requests[2].method, "GET");
+        assert_eq!(requests[1].method, "GET");
     }
 
     #[tokio::test]
@@ -552,7 +940,7 @@ mod tests {
                 body: json!({"version": {"number": "9.3.3"}}),
             },
             MockResponse {
-                method: "HEAD",
+                method: "GET",
                 path: "/api/workflows/workflow-123",
                 status: 404,
                 body: json!({}),
@@ -584,10 +972,7 @@ mod tests {
             paths,
             vec![
                 ("GET".to_string(), "/api/status".to_string()),
-                (
-                    "HEAD".to_string(),
-                    "/api/workflows/workflow-123".to_string()
-                ),
+                ("GET".to_string(), "/api/workflows/workflow-123".to_string()),
                 ("POST".to_string(), "/api/workflows".to_string())
             ]
         );

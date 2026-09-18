@@ -638,7 +638,7 @@ mod tests {
                 body: json!({"version": {"number": "9.4.1"}}),
             },
             MockResponse {
-                method: "HEAD",
+                method: "GET",
                 path: "/api/workflows/workflow/workflow-w",
                 status: 404,
                 body: json!({}),
