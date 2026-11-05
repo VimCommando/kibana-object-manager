@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Update HTTP, async runtime, serialization, and platform dependencies while retaining Rust 1.89 support.
-- Bump `kibana-sync` to 0.5.0 for the reqwest 0.13 public response and transport-error types. Consumers naming reqwest types must also upgrade their direct reqwest dependency to 0.13; see the library README for migration guidance. The HTTP client now uses Rustls with platform certificate verification by default.
+- Bump `kibana-sync` to 0.5.0 for the reqwest 0.13 public response and transport-error types. Consumers naming reqwest types must also upgrade their direct reqwest dependency to 0.13. The HTTP client now uses Rustls with platform certificate verification by default.
 
 ## [0.4.1] - 2026-09-17
 

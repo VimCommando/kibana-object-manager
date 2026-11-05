@@ -4,22 +4,6 @@ Reusable Kibana sync library for Rust applications.
 
 The crate provides explicit client configuration, authentication helpers, space-aware request routing, endpoint modules for saved objects, spaces, agents, tools, and workflows, capability gates, dependency discovery, and storage-neutral sync models.
 
-## Upgrading from 0.4
-
-Set your `kibana-sync` dependency to `"0.5"`. Client methods now return
-`reqwest` 0.13 responses, and `Error::Transport` wraps a `reqwest` 0.13 error.
-If your application names these types, update its direct `reqwest` dependency to
-`"0.13"` as well.
-Enable the `json`, `multipart`, or `query` features if your application uses those
-request helpers directly.
-
-The HTTP client now uses reqwest's default Rustls TLS backend with platform
-certificate verification. Verify HTTPS connectivity with any private certificate
-authorities or proxy configuration used by your deployment. Rust 1.89 remains
-the minimum supported compiler.
-
-## Client configuration
-
 ```rust,no_run
 use kibana_sync::{Auth, KibanaClient};
 use url::Url;
