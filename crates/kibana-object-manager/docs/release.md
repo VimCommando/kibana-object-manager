@@ -2,7 +2,7 @@
 type: Guide
 title: Release checklist
 description: Prepare, verify, publish, and recover workspace releases.
-generated: { by: codex/gpt-6, at: 2026-09-07T18:06:33Z }
+generated: { by: codex/gpt-6.1-sol, at: 2026-11-06T00:05:22Z }
 ---
 
 # Release checklist
@@ -29,7 +29,7 @@ Skip the library publication dry run if the unchanged version is already publish
 
 Execute publication only within the user's authorization. Create the selected tag on the reviewed revision and verify it matches the manifests and changelog.
 
-1. For a changed library, run `rustup run 1.97.1 cargo publish -p kibana-sync --locked`. Wait for that exact registry version. Verify its metadata and build a temporary consumer outside the workspace with fresh dependency resolution on both Rust 1.89.0 and the pinned compiler.
+1. For a changed library, run `rustup run 1.97.1 cargo publish -p kibana-sync --locked`. Wait for that exact registry version. Verify its metadata and build a temporary consumer outside the workspace with fresh dependency resolution on both Rust 1.93.1 and the pinned compiler.
 2. For a CLI release, run `rustup run 1.97.1 cargo publish -p kibana-object-manager --dry-run --locked` after its required library version is available. Then run `rustup run 1.97.1 cargo publish -p kibana-object-manager --locked` and verify the published version.
 3. Push the reviewed commit and exact tag to origin. CLI tags use `v<cli-version>`; library-only tags use `kibana-sync-v<library-version>`. Preserve existing historical tags. Do not rebase already-published source to work around a rejected push.
 4. Create the GitHub release from the curated changelog. Include validation results and mark prereleases explicitly.

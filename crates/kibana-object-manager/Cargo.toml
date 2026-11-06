@@ -1,9 +1,9 @@
 [package]
 name = "kibana-object-manager"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 default-run = "kibob"
-rust-version = "1.89"
+rust-version = "1.93.1"
 authors = ["Ryan Eno"]
 description = "A Git-inspired CLI tool for managing Kibana saved objects in version control"
 license = "Apache-2.0"
@@ -46,5 +46,5 @@ url = "^2.5.0"
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = "3"
+serial_test = "4"
 kibana-sync = { path = "../kibana-sync", features = ["test-support"] }

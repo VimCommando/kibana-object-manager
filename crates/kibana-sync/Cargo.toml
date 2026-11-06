@@ -2,7 +2,7 @@
 name = "kibana-sync"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.93.1"
 authors = ["Ryan Eno"]
 description = "Reusable Kibana sync library for saved objects, spaces, agents, tools, skills, and workflows"
 license = "Apache-2.0"

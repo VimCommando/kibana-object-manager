@@ -26,6 +26,6 @@ case "${1:-all}" in
   all) rust_checks; docs_checks ;;
   rust) rust_checks ;;
   docs) docs_checks ;;
-  msrv) rustup run 1.89.0 cargo check --workspace --all-targets --all-features --locked ;;
+  msrv) rustup run 1.93.1 cargo check --workspace --all-targets --all-features --locked ;;
   *) echo "Usage: $0 [all|rust|docs|msrv]" >&2; exit 2 ;;
 esac

@@ -2,7 +2,7 @@
 type: Policy
 title: Repository maintenance
 description: Local validation, documentation boundaries, compatibility, and release procedures.
-generated: { by: codex/gpt-6, at: 2026-09-12T17:19:44Z }
+generated: { by: codex/gpt-6.1-sol, at: 2026-11-06T00:05:22Z }
 ---
 
 # Repository maintenance
@@ -16,7 +16,7 @@ bash scripts/preflight.sh
 bash scripts/preflight.sh msrv
 ```
 
-Install the compiler in `rust-toolchain.toml`, Rust 1.89.0 for the minimum-version check, ShellCheck, ripgrep, tq-cli 0.3.0, OKF 0.2.7, and OpenSpec 1.11.0. Repository scripts use Bash 3.2 with composed utilities. Use tq for JSON queries, Cargo for manifest parsing, and standard text/archive utilities for the remaining work.
+Install the compiler in `rust-toolchain.toml`, Rust 1.93.1 for the minimum-version check, ShellCheck, ripgrep, tq-cli 0.3.0, OKF 0.2.7, and OpenSpec 1.11.0. Repository scripts use Bash 3.2 with composed utilities. Use tq for JSON queries, Cargo for manifest parsing, and standard text/archive utilities for the remaining work.
 
 ```sh
 cargo install okf --version 0.2.7 --locked
