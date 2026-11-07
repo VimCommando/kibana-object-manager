@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-07
+
 ### Changed
 
 - Raise the minimum supported Rust version from 1.89 to 1.93.1 for both packages. Upgrade the compiler before building version 0.5.0 or later.
@@ -141,7 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The original Kibana Object Manager was implemented as a Bash script with dependencies on external command-line tools. This version was superseded by the Rust rewrite for improved reliability, performance, and user experience.
 
-[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/VimCommando/kibana-object-manager/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/VimCommando/kibana-object-manager/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/VimCommando/kibana-object-manager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/VimCommando/kibana-object-manager/compare/v0.2.0...v0.4.0
 [0.2.0]: https://github.com/VimCommando/kibana-object-manager/releases/tag/v0.2.0
