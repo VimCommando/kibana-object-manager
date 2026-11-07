@@ -2,7 +2,7 @@
 type: Guide
 title: Contributing to Kibana Object Manager
 description: Contributor setup, validation, testing, and review guidance.
-generated: { by: codex/gpt-6, at: 2026-09-12T17:19:44Z }
+generated: { by: codex/gpt-6.1-sol, at: 2026-11-06T00:05:22Z }
 ---
 
 # Contributing to Kibana Object Manager
@@ -55,7 +55,7 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 
 ### Prerequisites
 
-- **Rust** 1.89 or higher
+- **Rust** 1.93.1 or higher
 - **Git** for version control
 - **Kibana** 8.x for integration testing (optional)
 - **Docker** for running test Kibana instance (optional)
